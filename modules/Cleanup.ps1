@@ -62,6 +62,58 @@ function Clear-TempFiles {
     }
 }
 
+function Get-CleanupPreview {
+    <#
+    .SYNOPSIS
+        Escanea las rutas de limpieza y calcula el espacio que se liberaría
+        sin borrar nada. Retorna una lista de objetos por carpeta y el total.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $paths = @(
+        [PSCustomObject]@{ Label = 'Windows Temp';            Path = "$env:SystemRoot\Temp" }
+        [PSCustomObject]@{ Label = 'Windows Prefetch';        Path = "$env:SystemRoot\Prefetch" }
+        [PSCustomObject]@{ Label = 'Windows Update Cache';    Path = "$env:SystemRoot\SoftwareDistribution\Download" }
+        [PSCustomObject]@{ Label = 'Usuario Temp';            Path = "$env:TEMP" }
+        [PSCustomObject]@{ Label = 'LocalAppData Temp';       Path = "$env:LOCALAPPDATA\Temp" }
+        [PSCustomObject]@{ Label = 'Chrome Cache';            Path = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache" }
+        [PSCustomObject]@{ Label = 'Edge Cache';              Path = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache" }
+        [PSCustomObject]@{ Label = 'Firefox Profiles';        Path = "$env:LOCALAPPDATA\Mozilla\Firefox\Profiles" }
+        [PSCustomObject]@{ Label = 'Brave Cache';             Path = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cache" }
+        [PSCustomObject]@{ Label = 'Opera Cache';             Path = "$env:LOCALAPPDATA\Opera Software\Opera Stable\Cache" }
+        [PSCustomObject]@{ Label = 'Opera GX Cache';          Path = "$env:LOCALAPPDATA\Opera Software\Opera GX Stable\Cache" }
+        [PSCustomObject]@{ Label = 'Windows Logs';            Path = "$env:SystemRoot\Logs" }
+    )
+
+    [System.Collections.Generic.List[PSCustomObject]] $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
+    [long] $totalBytes = 0
+
+    foreach ($entry in $paths) {
+        if (-not (Test-Path -Path $entry.Path -PathType Container)) { continue }
+
+        $files = Get-ChildItem -Path $entry.Path -Recurse -Force -File -ErrorAction SilentlyContinue
+        [long] $bytes = if ($files) { ($files | Measure-Object -Property Length -Sum).Sum } else { 0 }
+
+        if ($bytes -gt 0) {
+            $rows.Add([PSCustomObject]@{
+                Label     = $entry.Label
+                Path      = $entry.Path
+                SizeBytes = $bytes
+                SizeMB    = [math]::Round($bytes / 1MB, 2)
+            })
+            $totalBytes += $bytes
+        }
+    }
+
+    return [PSCustomObject]@{
+        Folders    = $rows.ToArray()
+        TotalBytes = $totalBytes
+        TotalMB    = [math]::Round($totalBytes / 1MB, 2)
+        TotalGB    = [math]::Round($totalBytes / 1GB, 2)
+    }
+}
+
 function Start-CleanupProcess {
     <#
     .SYNOPSIS
