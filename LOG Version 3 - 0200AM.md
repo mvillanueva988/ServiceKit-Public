@@ -37,9 +37,19 @@ Retorna `Success`, `Applied[]` y `Errors[]`.
 - Fallback a **High Performance** si no está disponible en la edición de Windows.
 - Retorna `Success`, `PlanName` y `PlanGuid`.
 
-#### `Start-PerformanceProcess`
+#### Tres perfiles de efectos visuales
 
-Serializa ambas funciones al contexto de `Start-Job` y retorna un objeto con campos `Visuals` y `PowerPlan`.
+| Perfil | `VisualFXSetting` | ClearType | Thumbnails | Drag content | Animaciones | Transparencia |
+|--------|:-----------------:|:---------:|:----------:|:------------:|:-----------:|:-------------:|
+| `Set-BalancedVisuals` | 3 Custom | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `Set-FullOptimizedVisuals` | 2 Best Perf | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `Restore-DefaultVisuals` | 1 Best Appearance | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+Claves de registro compartidas refactorizadas a variables `$script:` para evitar repetición.
+
+#### `Start-PerformanceProcess -VisualProfile 'Balanced'|'Full'|'Restore'`
+
+Serializa el perfil elegido + `Set-UltimatePowerPlan` al contexto del job. Retorna `Visuals` y `PowerPlan`.
 
 ---
 
@@ -58,7 +68,63 @@ Sirve como paso de preview antes de confirmar la limpieza real.
 
 ---
 
-### `main.ps1` — MODIFICADO
+### `modules/Diagnostics.ps1` — NUEVO
+
+Módulo de diagnóstico de hardware y estado del sistema. Dos features independientes en un mismo archivo.
+
+#### `Get-BsodHistory -Days 90`
+
+Lee el Event Log (`System`) para los últimos 90 días filtrando tres EventIDs críticos:
+
+| EventID | Fuente | Significado |
+|---------|--------|-------------|
+| 41 | Kernel-Power | Reinicio sin apagado limpio (crash, corte de luz) |
+| 1001 | BugCheck | BSOD confirmado — intenta extraer el Stop Code del mensaje |
+| 6008 | EventLog | Apagado abrupto detectado al arrancar |
+
+- Ordena eventos cronológico descendente
+- Lista los archivos `.dmp` presentes en `C:\Windows\Minidump` con fecha y tamaño
+- Retorna `TotalCrashes`, `Events[]` y `Minidumps[]`
+
+#### `Show-BsodHistory -Data`
+
+Visualización coloreada: rojo para BSODs (1001), amarillo para Kernel-Power (41), naranja oscuro para apagados abruptos (6008). El contador de total se colorea según severidad (verde < 2, amarillo < 5, rojo ≥ 5).
+
+#### `Start-BsodHistoryJob -Days 90`
+
+Wrapper asíncrono sobre `Get-BsodHistory`.
+
+---
+
+#### `Backup-Drivers -OutputRoot`
+
+Exporta drivers al directorio `output\driver_backup\<timestamp>\`. Criterio de selección:
+
+- **Drivers de terceros:** `ProviderName` no coincide con `Microsoft`
+- **Drivers de red:** clase `Net`, siempre incluidos independientemente del proveedor
+
+Estrategia de exportación en dos pasos:
+1. Intenta `Export-WindowsDriver -Online -Destination` (exportación masiva, más rápida)
+2. Si falla, cae a `pnputil /export-driver` driver a driver
+
+Retorna `Success`, `Destination`, `Exported`, `Total` y `Message`.
+
+#### `Start-DriverBackupJob -OutputRoot`
+
+Wrapper asíncrono sobre `Backup-Drivers`.
+
+---
+
+### `main.ps1` — MODIFICADO (opciones 10 y 11)
+
+| Opción | Acción |
+|--------|--------|
+| `[10]` Historial de BSOD / Crashes | `Start-BsodHistoryJob` + `Show-BsodHistory` |
+| `[11]` Backup de Drivers | Preview de criterios → confirmar → `Start-DriverBackupJob` |
+
+Opción 11 muestra destino y criterios antes de pedir confirmación (mismo patrón que opción 2).
+
+---
 
 #### Reordenamiento del menú
 
@@ -86,9 +152,9 @@ Flujo rediseñado:
 3. Pide `[s]` para confirmar → lanza `Start-CleanupProcess` asíncrono.
 4. Pide `[q]` para cancelar sin tocar nada.
 
-#### Opción 6 — Confirmación con preview estático
+#### Opción 6 — Sub-menú de tres perfiles
 
-Muestra la lista completa de qué se activa y qué se desactiva antes de ejecutar. Pide `[s]` para confirmar.
+Reemplaza el confirm estático. Muestra un sub-menú `[1] Balanceado  [2] Máximo  [3] Restaurar` con descripción de cada perfil. Ejecuta sin confirmación adicional tras elegir.
 
 ---
 
@@ -97,7 +163,8 @@ Muestra la lista completa de qué se activa y qué se desactiva antes de ejecuta
 | Decisión | Justificación |
 |----------|---------------|
 | `Get-CleanupPreview` síncrono | Es solo `Measure-Object` sobre archivos existentes. Sin writes, sin riesgo. Job overhead innecesario. |
-| Preview estático en opción 6 | Los cambios de visual effects son siempre los mismos. No requiere scan previo. |
+| Preview estático en opción 6 reemplazado por sub-menú | Tres perfiles requieren selección explícita; el preview estático ya no aplica. |
+| Claves de registro en variables `$script:` | Evita repetir 5 strings de ruta idénticos en las tres funciones del módulo. |
 | `UserPreferencesMask` hardcodeado en lugar de bit manipulation | La máscara `0x90,0x12,0x01,0x80...` es el valor documentado de "Best Performance" con font smoothing preservado. Modificarla por bits en PowerShell requeriría leer el valor actual y hacer AND/OR, añadiendo complejidad sin beneficio. |
 | `-WhatIf` descartado por ahora | `SupportsShouldProcess` no funciona en `Start-Job` (runspace aislado). Requeriría agregar un parámetro `[bool]$DryRun` a ~20 puntos de cambio en 5 módulos. El patrón preview→confirm logra el mismo objetivo sin esa complejidad. |
 
