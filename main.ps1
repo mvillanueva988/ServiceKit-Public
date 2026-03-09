@@ -5,16 +5,12 @@ function Invoke-ToolkitLoader {
     [CmdletBinding()]
     param()
 
-    $modulesPath = Join-Path $PSScriptRoot 'modules'
-
-    if (-not (Test-Path -Path $modulesPath -PathType Container)) {
-        return
-    }
-
-    $scripts = Get-ChildItem -Path $modulesPath -Filter '*.ps1' -File -ErrorAction SilentlyContinue
-
-    foreach ($script in $scripts) {
-        . $script.FullName
+    foreach ($folder in @('core', 'modules')) {
+        $folderPath = Join-Path $PSScriptRoot $folder
+        $scripts = Get-ChildItem -Path $folderPath -Filter '*.ps1' -File -ErrorAction SilentlyContinue
+        foreach ($script in $scripts) {
+            . $script.FullName
+        }
     }
 }
 
