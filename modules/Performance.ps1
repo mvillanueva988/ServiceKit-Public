@@ -174,12 +174,108 @@ function Restore-DefaultVisuals {
     return [PSCustomObject]@{ Success = ($errors.Count -eq 0); Applied = $applied.ToArray(); Errors = $errors.ToArray() }
 }
 
-function Set-UltimatePowerPlan {
+function Set-SystemTweaks {
     <#
     .SYNOPSIS
-        Activa el plan Ultimate Performance. Si no existe en esta edicion de Windows,
-        lo duplica desde su GUID conocido. Cae a High Performance como fallback.
+        Aplica tweaks de rendimiento del sistema operativo:
+        hibernacion, SvcHost threshold, shutdown timeout, Game DVR.
+        Retorna Success, Applied[] y Errors[].
     #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [bool] $DisableHibernation = $true,
+
+        [Parameter()]
+        [bool] $DisableGameDvr = $true,
+
+        [Parameter()]
+        [bool] $OptimizeSvcHost = $true,
+
+        [Parameter()]
+        [bool] $ReduceShutdownTimeout = $true
+    )
+
+    [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
+
+    # ── Hibernacion ───────────────────────────────────────────────────────────
+    # hiberfil.sys ocupa ~75% de la RAM (ej: 12GB en 16GB). En PCs de servicio
+    # tecnico conviene liberarlo; el cliente puede reactivarlo si usa hibernate.
+    if ($DisableHibernation) {
+        try {
+            & powercfg /h off 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $applied.Add('[OFF] Hibernacion — libera hiberfil.sys (75% de RAM en disco)')
+            } else {
+                $errors.Add('powercfg /h off retorno codigo ' + $LASTEXITCODE)
+            }
+        }
+        catch { $errors.Add("Hibernacion: $($_.Exception.Message)") }
+    }
+
+    # ── SvcHostSplitThreshold ─────────────────────────────────────────────────
+    # Por defecto en PCs con >3.5GB RAM, Windows separa cada servicio en su propio
+    # svchost.exe. En PCs con poca RAM (4-8GB), consolidarlos reduce overhead.
+    # Usamos 4MB como umbral: por encima de eso, Windows no separa automaticamente.
+    if ($OptimizeSvcHost) {
+        try {
+            [int] $ramMb = [int]([math]::Round(
+                (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory / 1MB
+            ))
+            # Solo aplicar si tiene 8GB o menos
+            if ($ramMb -le 8192) {
+                [string] $svcPath = 'HKLM:\SYSTEM\CurrentControlSet\Control'
+                Set-ItemProperty -Path $svcPath -Name 'SvcHostSplitThresholdInKB' -Value ($ramMb * 1024) -Type DWord
+                $applied.Add("[SET] SvcHostSplitThreshold = ${ramMb}MB (RAM del sistema — reduce procesos svchost.exe)")
+            } else {
+                $applied.Add("[SKIP] SvcHostSplitThreshold — no necesario con ${ramMb}MB de RAM")
+            }
+        }
+        catch { $errors.Add("SvcHostSplitThreshold: $($_.Exception.Message)") }
+    }
+
+    # ── Timeout de shutdown ───────────────────────────────────────────────────
+    # Por defecto Windows espera 5000ms (5s) para matar procesos al apagar.
+    # Reducirlo a 2000ms hace los apagados mas rapidos sin riesgo de corrupcion.
+    if ($ReduceShutdownTimeout) {
+        try {
+            [string] $desktopPath = 'HKCU:\Control Panel\Desktop'
+            Set-ItemProperty -Path $desktopPath -Name 'WaitToKillAppTimeout'     -Value '2000'
+            Set-ItemProperty -Path $desktopPath -Name 'HungAppTimeout'           -Value '2000'
+            Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' `
+                             -Name 'WaitToKillServiceTimeout' -Value '2000'
+            $applied.Add('[SET] Shutdown timeout = 2000ms (era 5000ms)')
+        }
+        catch { $errors.Add("ShutdownTimeout: $($_.Exception.Message)") }
+    }
+
+    # ── Game DVR / Game Bar ───────────────────────────────────────────────────
+    # Xbox Game DVR mantiene un buffer de grabacion en background constantemente.
+    # En PCs que no son para gaming es overhead puro.
+    if ($DisableGameDvr) {
+        try {
+            [string] $gameDvrPath = 'HKCU:\System\GameConfigStore'
+            if (-not (Test-Path $gameDvrPath)) { New-Item -Path $gameDvrPath -Force | Out-Null }
+            Set-ItemProperty -Path $gameDvrPath -Name 'GameDVR_Enabled' -Value 0 -Type DWord
+
+            [string] $gameBarPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR'
+            if (-not (Test-Path $gameBarPath)) { New-Item -Path $gameBarPath -Force | Out-Null }
+            Set-ItemProperty -Path $gameBarPath -Name 'AppCaptureEnabled' -Value 0 -Type DWord
+
+            $applied.Add('[OFF] Game DVR / Game Bar (buffer de grabacion en background)')
+        }
+        catch { $errors.Add("GameDVR: $($_.Exception.Message)") }
+    }
+
+    return [PSCustomObject]@{
+        Success = ($errors.Count -eq 0)
+        Applied = $applied.ToArray()
+        Errors  = $errors.ToArray()
+    }
+}
+
+function Set-UltimatePowerPlan {
     [CmdletBinding()]
     param()
 
@@ -225,20 +321,22 @@ function Set-UltimatePowerPlan {
 function Start-PerformanceProcess {
     <#
     .SYNOPSIS
-        Empaqueta el perfil visual elegido + Set-UltimatePowerPlan en un job asincrono.
-        VisualProfile: 'Balanced' | 'Full' | 'Restore'
+        Empaqueta el perfil visual elegido + Set-UltimatePowerPlan + Set-SystemTweaks
+        en un job asincrono.
+        VisualProfile: 'Balanced' | 'Full' | 'Restore' | 'TweaksOnly'
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Balanced', 'Full', 'Restore')]
+        [ValidateSet('Balanced', 'Full', 'Restore', 'TweaksOnly')]
         [string] $VisualProfile
     )
 
-    [string] $fnBalanced  = ${Function:Set-BalancedVisuals}.ToString()
-    [string] $fnFull      = ${Function:Set-FullOptimizedVisuals}.ToString()
-    [string] $fnRestore   = ${Function:Restore-DefaultVisuals}.ToString()
-    [string] $fnPowerPlan = ${Function:Set-UltimatePowerPlan}.ToString()
+    [string] $fnBalanced   = ${Function:Set-BalancedVisuals}.ToString()
+    [string] $fnFull       = ${Function:Set-FullOptimizedVisuals}.ToString()
+    [string] $fnRestore    = ${Function:Restore-DefaultVisuals}.ToString()
+    [string] $fnPowerPlan  = ${Function:Set-UltimatePowerPlan}.ToString()
+    [string] $fnTweaks     = ${Function:Set-SystemTweaks}.ToString()
 
     [scriptblock] $jobBlock = [scriptblock]::Create(@"
 `$script:DesktopPath = 'HKCU:\Control Panel\Desktop'
@@ -250,13 +348,16 @@ function Set-BalancedVisuals      { $fnBalanced  }
 function Set-FullOptimizedVisuals { $fnFull      }
 function Restore-DefaultVisuals   { $fnRestore   }
 function Set-UltimatePowerPlan    { $fnPowerPlan }
+function Set-SystemTweaks         { $fnTweaks    }
 `$v = switch ('$VisualProfile') {
-    'Balanced' { Set-BalancedVisuals      }
-    'Full'     { Set-FullOptimizedVisuals }
-    'Restore'  { Restore-DefaultVisuals   }
+    'Balanced'   { Set-BalancedVisuals      }
+    'Full'       { Set-FullOptimizedVisuals }
+    'Restore'    { Restore-DefaultVisuals   }
+    'TweaksOnly' { `$null }
 }
 `$pp = Set-UltimatePowerPlan
-[PSCustomObject]@{ Visuals = `$v; PowerPlan = `$pp }
+`$tw = Set-SystemTweaks
+[PSCustomObject]@{ Visuals = `$v; PowerPlan = `$pp; Tweaks = `$tw }
 "@)
 
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName "Performance_$VisualProfile"
