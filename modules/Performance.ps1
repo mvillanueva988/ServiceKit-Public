@@ -1,5 +1,14 @@
 Set-StrictMode -Version Latest
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Claves compartidas usadas por los tres perfiles
+# ─────────────────────────────────────────────────────────────────────────────
+$script:DesktopPath  = 'HKCU:\Control Panel\Desktop'
+$script:MetricsPath  = 'HKCU:\Control Panel\Desktop\WindowMetrics'
+$script:AdvPath      = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+$script:VfxPath      = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+$script:ThemePath    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+
 function Set-BalancedVisuals {
     <#
     .SYNOPSIS
@@ -14,68 +23,155 @@ function Set-BalancedVisuals {
     [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
 
     try {
-        # Modo Visual FX: Custom (3) — requerido para que los valores individuales tengan efecto
-        [string] $vePath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
-        if (-not (Test-Path $vePath)) { New-Item -Path $vePath -Force | Out-Null }
-        Set-ItemProperty -Path $vePath -Name 'VisualFXSetting' -Value 3 -Type DWord
-        $applied.Add('VisualFXSetting = Custom (3)')
+        if (-not (Test-Path $script:VfxPath))   { New-Item -Path $script:VfxPath   -Force | Out-Null }
+        if (-not (Test-Path $script:ThemePath))  { New-Item -Path $script:ThemePath -Force | Out-Null }
 
-        # ── MANTENER ────────────────────────────────────────────────────────────────
+        # Custom (3): Windows respeta los valores individuales
+        Set-ItemProperty -Path $script:VfxPath    -Name 'VisualFXSetting'     -Value 3   -Type DWord
 
-        # Font Smoothing (ClearType): texto legible
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'FontSmoothing'     -Value '2'
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'FontSmoothingType' -Value 2 -Type DWord
+        # ── MANTENER ──────────────────────────────────────────────────────────────
+        Set-ItemProperty -Path $script:DesktopPath -Name 'FontSmoothing'      -Value '2'
+        Set-ItemProperty -Path $script:DesktopPath -Name 'FontSmoothingType'  -Value 2   -Type DWord
         $applied.Add('[ON]  Smooth edges of screen fonts (ClearType)')
 
-        # Show window contents while dragging: evita sensacion de lag al mover ventanas
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'DragFullWindows' -Value '1'
+        Set-ItemProperty -Path $script:DesktopPath -Name 'DragFullWindows'    -Value '1'
         $applied.Add('[ON]  Show window contents while dragging')
 
-        # Show thumbnails instead of icons: imprescindible para fotos/videos
-        [string] $advPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
-        Set-ItemProperty -Path $advPath -Name 'IconsOnly' -Value 0 -Type DWord
+        Set-ItemProperty -Path $script:AdvPath     -Name 'IconsOnly'          -Value 0   -Type DWord
         $applied.Add('[ON]  Show thumbnails instead of icons')
 
-        # ── DESHABILITAR ─────────────────────────────────────────────────────────────
-
-        # Animaciones de la barra de tareas y el boton de inicio
-        Set-ItemProperty -Path $advPath -Name 'TaskbarAnimations' -Value 0 -Type DWord
+        # ── DESHABILITAR ──────────────────────────────────────────────────────────
+        Set-ItemProperty -Path $script:AdvPath     -Name 'TaskbarAnimations'  -Value 0   -Type DWord
         $applied.Add('[OFF] Taskbar animations')
 
-        # Animacion de minimizar/maximizar ventanas
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
+        Set-ItemProperty -Path $script:MetricsPath -Name 'MinAnimate'         -Value '0'
         $applied.Add('[OFF] Animate windows when minimizing/maximizing')
 
-        # Sombras debajo de los iconos del escritorio
-        Set-ItemProperty -Path $advPath -Name 'ListviewShadow' -Value 0 -Type DWord
+        Set-ItemProperty -Path $script:AdvPath     -Name 'ListviewShadow'     -Value 0   -Type DWord
         $applied.Add('[OFF] Drop shadows under desktop icons')
 
-        # Transparencia Glass/Acrylic (Fluent Design)
-        [string] $themePath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-        if (-not (Test-Path $themePath)) { New-Item -Path $themePath -Force | Out-Null }
-        Set-ItemProperty -Path $themePath -Name 'EnableTransparency' -Value 0 -Type DWord
+        Set-ItemProperty -Path $script:ThemePath   -Name 'EnableTransparency' -Value 0   -Type DWord
         $applied.Add('[OFF] Glass/Acrylic transparency')
 
-        # Fades y slides de menus via UserPreferencesMask.
-        # Valor = "Best Performance" de sysdm.cpl. FontSmoothing y DragFullWindows
-        # se gestionan por claves independientes y no son afectados por esta mascara.
+        # UserPreferencesMask: Best Performance con FontSmoothing/DragFullWindows preservados
         [byte[]] $mask = 0x90, 0x12, 0x01, 0x80, 0x10, 0x00, 0x00, 0x00
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value $mask -Type Binary
+        Set-ItemProperty -Path $script:DesktopPath -Name 'UserPreferencesMask' -Value $mask -Type Binary
         $applied.Add('[OFF] Fade/slide menus and tooltips')
 
-        # Delay de apertura de menus: 0ms — instantaneo
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'MenuShowDelay' -Value '0'
+        Set-ItemProperty -Path $script:DesktopPath -Name 'MenuShowDelay'      -Value '0'
         $applied.Add('[OFF] Menu show delay (0 ms)')
     }
-    catch {
-        $errors.Add($_.Exception.Message)
-    }
+    catch { $errors.Add($_.Exception.Message) }
 
-    return [PSCustomObject]@{
-        Success = ($errors.Count -eq 0)
-        Applied = $applied.ToArray()
-        Errors  = $errors.ToArray()
+    return [PSCustomObject]@{ Success = ($errors.Count -eq 0); Applied = $applied.ToArray(); Errors = $errors.ToArray() }
+}
+
+function Set-FullOptimizedVisuals {
+    <#
+    .SYNOPSIS
+        Perfil "Maximo Rendimiento": todos los efectos deshabilitados.
+        Equivalente a sysdm.cpl > "Adjust for best performance".
+    #>
+    [CmdletBinding()]
+    param()
+
+    [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        if (-not (Test-Path $script:VfxPath))  { New-Item -Path $script:VfxPath  -Force | Out-Null }
+        if (-not (Test-Path $script:ThemePath)) { New-Item -Path $script:ThemePath -Force | Out-Null }
+
+        # Best Performance (2): Windows deshabilita todo automaticamente
+        Set-ItemProperty -Path $script:VfxPath    -Name 'VisualFXSetting'     -Value 2   -Type DWord
+
+        Set-ItemProperty -Path $script:DesktopPath -Name 'FontSmoothing'      -Value '0'
+        Set-ItemProperty -Path $script:DesktopPath -Name 'FontSmoothingType'  -Value 0   -Type DWord
+        $applied.Add('[OFF] Smooth edges of screen fonts')
+
+        Set-ItemProperty -Path $script:DesktopPath -Name 'DragFullWindows'    -Value '0'
+        $applied.Add('[OFF] Show window contents while dragging')
+
+        Set-ItemProperty -Path $script:AdvPath     -Name 'IconsOnly'          -Value 1   -Type DWord
+        $applied.Add('[OFF] Show thumbnails (muestra iconos simples)')
+
+        Set-ItemProperty -Path $script:AdvPath     -Name 'TaskbarAnimations'  -Value 0   -Type DWord
+        $applied.Add('[OFF] Taskbar animations')
+
+        Set-ItemProperty -Path $script:MetricsPath -Name 'MinAnimate'         -Value '0'
+        $applied.Add('[OFF] Animate windows when minimizing/maximizing')
+
+        Set-ItemProperty -Path $script:AdvPath     -Name 'ListviewShadow'     -Value 0   -Type DWord
+        $applied.Add('[OFF] Drop shadows under desktop icons')
+
+        Set-ItemProperty -Path $script:ThemePath   -Name 'EnableTransparency' -Value 0   -Type DWord
+        $applied.Add('[OFF] Glass/Acrylic transparency')
+
+        # Mascara "Best Performance" completa
+        [byte[]] $mask = 0x90, 0x02, 0x01, 0x80, 0x10, 0x00, 0x00, 0x00
+        Set-ItemProperty -Path $script:DesktopPath -Name 'UserPreferencesMask' -Value $mask -Type Binary
+        $applied.Add('[OFF] Todas las animaciones y fades')
+
+        Set-ItemProperty -Path $script:DesktopPath -Name 'MenuShowDelay'      -Value '0'
+        $applied.Add('[OFF] Menu show delay (0 ms)')
     }
+    catch { $errors.Add($_.Exception.Message) }
+
+    return [PSCustomObject]@{ Success = ($errors.Count -eq 0); Applied = $applied.ToArray(); Errors = $errors.ToArray() }
+}
+
+function Restore-DefaultVisuals {
+    <#
+    .SYNOPSIS
+        Restaura todos los efectos visuales a los valores por defecto de Windows.
+        Equivalente a sysdm.cpl > "Adjust for best appearance".
+    #>
+    [CmdletBinding()]
+    param()
+
+    [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        if (-not (Test-Path $script:VfxPath))  { New-Item -Path $script:VfxPath  -Force | Out-Null }
+        if (-not (Test-Path $script:ThemePath)) { New-Item -Path $script:ThemePath -Force | Out-Null }
+
+        # Best Appearance (1): Windows activa todo
+        Set-ItemProperty -Path $script:VfxPath    -Name 'VisualFXSetting'     -Value 1   -Type DWord
+
+        Set-ItemProperty -Path $script:DesktopPath -Name 'FontSmoothing'      -Value '2'
+        Set-ItemProperty -Path $script:DesktopPath -Name 'FontSmoothingType'  -Value 2   -Type DWord
+        $applied.Add('[ON]  Smooth edges of screen fonts (ClearType)')
+
+        Set-ItemProperty -Path $script:DesktopPath -Name 'DragFullWindows'    -Value '1'
+        $applied.Add('[ON]  Show window contents while dragging')
+
+        Set-ItemProperty -Path $script:AdvPath     -Name 'IconsOnly'          -Value 0   -Type DWord
+        $applied.Add('[ON]  Show thumbnails instead of icons')
+
+        Set-ItemProperty -Path $script:AdvPath     -Name 'TaskbarAnimations'  -Value 1   -Type DWord
+        $applied.Add('[ON]  Taskbar animations')
+
+        Set-ItemProperty -Path $script:MetricsPath -Name 'MinAnimate'         -Value '1'
+        $applied.Add('[ON]  Animate windows when minimizing/maximizing')
+
+        Set-ItemProperty -Path $script:AdvPath     -Name 'ListviewShadow'     -Value 1   -Type DWord
+        $applied.Add('[ON]  Drop shadows under desktop icons')
+
+        Set-ItemProperty -Path $script:ThemePath   -Name 'EnableTransparency' -Value 1   -Type DWord
+        $applied.Add('[ON]  Glass/Acrylic transparency')
+
+        # Mascara "Best Appearance" con todas las animaciones activas
+        [byte[]] $mask = 0x9E, 0x1E, 0x07, 0x80, 0x12, 0x00, 0x00, 0x00
+        Set-ItemProperty -Path $script:DesktopPath -Name 'UserPreferencesMask' -Value $mask -Type Binary
+        $applied.Add('[ON]  Todas las animaciones y fades')
+
+        Set-ItemProperty -Path $script:DesktopPath -Name 'MenuShowDelay'      -Value '400'
+        $applied.Add('[ON]  Menu show delay (400 ms, valor Windows)')
+    }
+    catch { $errors.Add($_.Exception.Message) }
+
+    return [PSCustomObject]@{ Success = ($errors.Count -eq 0); Applied = $applied.ToArray(); Errors = $errors.ToArray() }
 }
 
 function Set-UltimatePowerPlan {
@@ -129,29 +225,39 @@ function Set-UltimatePowerPlan {
 function Start-PerformanceProcess {
     <#
     .SYNOPSIS
-        Empaqueta Set-BalancedVisuals y Set-UltimatePowerPlan en un job asincrono
-        y retorna el objeto de trabajo para su seguimiento con Wait-ToolkitJobs.
+        Empaqueta el perfil visual elegido + Set-UltimatePowerPlan en un job asincrono.
+        VisualProfile: 'Balanced' | 'Full' | 'Restore'
     #>
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Balanced', 'Full', 'Restore')]
+        [string] $VisualProfile
+    )
 
-    [string] $fnVisualsBody   = ${Function:Set-BalancedVisuals}.ToString()
-    [string] $fnPowerPlanBody = ${Function:Set-UltimatePowerPlan}.ToString()
+    [string] $fnBalanced  = ${Function:Set-BalancedVisuals}.ToString()
+    [string] $fnFull      = ${Function:Set-FullOptimizedVisuals}.ToString()
+    [string] $fnRestore   = ${Function:Restore-DefaultVisuals}.ToString()
+    [string] $fnPowerPlan = ${Function:Set-UltimatePowerPlan}.ToString()
 
     [scriptblock] $jobBlock = [scriptblock]::Create(@"
-function Set-BalancedVisuals {
-$fnVisualsBody
+`$script:DesktopPath = 'HKCU:\Control Panel\Desktop'
+`$script:MetricsPath = 'HKCU:\Control Panel\Desktop\WindowMetrics'
+`$script:AdvPath     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+`$script:VfxPath     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+`$script:ThemePath   = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+function Set-BalancedVisuals      { $fnBalanced  }
+function Set-FullOptimizedVisuals { $fnFull      }
+function Restore-DefaultVisuals   { $fnRestore   }
+function Set-UltimatePowerPlan    { $fnPowerPlan }
+`$v = switch ('$VisualProfile') {
+    'Balanced' { Set-BalancedVisuals      }
+    'Full'     { Set-FullOptimizedVisuals }
+    'Restore'  { Restore-DefaultVisuals   }
 }
-function Set-UltimatePowerPlan {
-$fnPowerPlanBody
-}
-`$v  = Set-BalancedVisuals
 `$pp = Set-UltimatePowerPlan
-[PSCustomObject]@{
-    Visuals   = `$v
-    PowerPlan = `$pp
-}
+[PSCustomObject]@{ Visuals = `$v; PowerPlan = `$pp }
 "@)
 
-    return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'Performance'
+    return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName "Performance_$VisualProfile"
 }

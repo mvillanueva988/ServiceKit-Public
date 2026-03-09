@@ -287,53 +287,76 @@ function Show-MainMenu {
                 }
             }
             '6' {
-                Write-Host ''
-                Write-Host '  Se van a aplicar los siguientes cambios:' -ForegroundColor DarkCyan
-                Write-Host ''
-                Write-Host '  Efectos Visuales (perfil balanceado):' -ForegroundColor DarkCyan
-                Write-Host '    [ON]  Smooth edges of screen fonts (ClearType)' -ForegroundColor Green
-                Write-Host '    [ON]  Show thumbnails instead of icons'          -ForegroundColor Green
-                Write-Host '    [ON]  Show window contents while dragging'        -ForegroundColor Green
-                Write-Host '    [OFF] Taskbar animations'                          -ForegroundColor DarkGray
-                Write-Host '    [OFF] Animate minimize / maximize'                 -ForegroundColor DarkGray
-                Write-Host '    [OFF] Drop shadows under icons'                    -ForegroundColor DarkGray
-                Write-Host '    [OFF] Glass / Acrylic transparency'                -ForegroundColor DarkGray
-                Write-Host '    [OFF] Fade / slide menus  |  Menu delay = 0 ms'   -ForegroundColor DarkGray
-                Write-Host ''
-                Write-Host '  Plan de Energia:' -ForegroundColor DarkCyan
-                Write-Host '    Activa Ultimate Performance (o High Performance si no esta disponible)'
-                Write-Host ''
-                Write-Host '  Nota: Los cambios de efectos visuales requieren cerrar sesion para verse.' -ForegroundColor DarkGray
-                Write-Host ''
+                :perfLoop while ($true) {
+                    Clear-Host
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+                    Write-Host '      RENDIMIENTO — EFECTOS VISUALES            ' -ForegroundColor Cyan
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+                    Write-Host ''
+                    Write-Host '  Selecciona un perfil de efectos visuales:' -ForegroundColor DarkCyan
+                    Write-Host ''
+                    Write-Host '  [1]  Balanceado        ' -NoNewline; Write-Host '(recomendado)' -ForegroundColor Green
+                    Write-Host '       Desactiva animaciones y transparencias.'
+                    Write-Host '       Preserva: ClearType, thumbnails, contenido al arrastrar.'
+                    Write-Host ''
+                    Write-Host '  [2]  Maximo Rendimiento' -NoNewline; Write-Host ' (agresivo)' -ForegroundColor Yellow
+                    Write-Host '       Todo apagado. Igual a sysdm.cpl > Best Performance.'
+                    Write-Host '       El sistema se ve basico pero es el mas rapido.'
+                    Write-Host ''
+                    Write-Host '  [3]  Restaurar Windows ' -NoNewline; Write-Host ' (deshacer)' -ForegroundColor DarkGray
+                    Write-Host '       Reactiva todos los efectos. Igual a Best Appearance.'
+                    Write-Host ''
+                    Write-Host '  Todos los perfiles activan Ultimate Performance (o High Performance).' -ForegroundColor DarkGray
+                    Write-Host ''
+                    Write-Host '  [q]  Cancelar'
+                    Write-Host ''
+                    Write-Host '================================================' -ForegroundColor DarkCyan
 
-                [string] $confirm = (Read-Host '  Confirmar? [s] Aplicar  [q] Cancelar').Trim().ToLower()
-                if ($confirm -ne 's') { break }
+                    [string] $perfChoice = (Read-Host '  Selecciona una opcion').Trim().ToLower()
 
-                Write-Host "`n  Aplicando..." -ForegroundColor Cyan
-                $job    = Start-PerformanceProcess
-                $result = Wait-ToolkitJobs -Jobs @($job)
+                    if ($perfChoice -eq 'q' -or [string]::IsNullOrWhiteSpace($perfChoice)) { break perfLoop }
 
-                Write-Host ''
-                Write-Host '  Efectos Visuales:' -ForegroundColor DarkCyan
-                foreach ($item in $result.Visuals.Applied) {
-                    [string] $itemColor = if     ($item -match '^\[ON\]' ) { 'Green'    }
-                                          elseif ($item -match '^\[OFF\]') { 'DarkGray' }
-                                          else                              { 'White'    }
-                    Write-Host ("    {0}" -f $item) -ForegroundColor $itemColor
-                }
-                if (-not $result.Visuals.Success) {
-                    foreach ($err in $result.Visuals.Errors) {
-                        Write-Host ("    [!] {0}" -f $err) -ForegroundColor Red
+                    [string] $visualProfile = switch ($perfChoice) {
+                        '1' { 'Balanced' }
+                        '2' { 'Full'     }
+                        '3' { 'Restore'  }
+                        default { '' }
                     }
+
+                    if ([string]::IsNullOrEmpty($visualProfile)) {
+                        Write-Host "`n  Opcion no valida." -ForegroundColor Red
+                        Start-Sleep -Milliseconds 800
+                        continue perfLoop
+                    }
+
+                    Write-Host "`n  Aplicando perfil '$visualProfile'..." -ForegroundColor Cyan
+                    $job    = Start-PerformanceProcess -VisualProfile $visualProfile
+                    $result = Wait-ToolkitJobs -Jobs @($job)
+
+                    Write-Host ''
+                    Write-Host '  Efectos Visuales:' -ForegroundColor DarkCyan
+                    foreach ($item in $result.Visuals.Applied) {
+                        [string] $itemColor = if     ($item -match '^\[ON\]' ) { 'Green'    }
+                                              elseif ($item -match '^\[OFF\]') { 'DarkGray' }
+                                              else                              { 'White'    }
+                        Write-Host ("    {0}" -f $item) -ForegroundColor $itemColor
+                    }
+                    if (-not $result.Visuals.Success) {
+                        foreach ($err in $result.Visuals.Errors) {
+                            Write-Host ("    [!] {0}" -f $err) -ForegroundColor Red
+                        }
+                    }
+
+                    Write-Host ''
+                    Write-Host '  Plan de Energia:' -ForegroundColor DarkCyan
+                    [string] $ppColor = if ($result.PowerPlan.Success) { 'Green' } else { 'Red' }
+                    Write-Host ("    Activo : {0}" -f $result.PowerPlan.PlanName) -ForegroundColor $ppColor
+
+                    Write-Host ''
+                    Write-Host '  Nota: Cierra sesion o reinicia el Explorer para ver los cambios.' -ForegroundColor DarkGray
+
+                    break perfLoop
                 }
-
-                Write-Host ''
-                Write-Host '  Plan de Energia:' -ForegroundColor DarkCyan
-                [string] $ppColor = if ($result.PowerPlan.Success) { 'Green' } else { 'Red' }
-                Write-Host ("    Activo : {0}" -f $result.PowerPlan.PlanName) -ForegroundColor $ppColor
-
-                Write-Host ''
-                Write-Host '  Nota: Para que los efectos visuales sean visibles, cierra sesion o reinicia el Explorer.' -ForegroundColor DarkGray
             }
             '7' {
                 Write-Host "`n  Recopilando estado PRE-service (puede tardar un momento)..." -ForegroundColor Cyan
