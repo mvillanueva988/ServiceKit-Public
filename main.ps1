@@ -308,7 +308,11 @@ function Show-MainMenu {
                     Write-Host '  [3]  Restaurar Windows ' -NoNewline; Write-Host ' (deshacer)' -ForegroundColor DarkGray
                     Write-Host '       Reactiva todos los efectos. Igual a Best Appearance.'
                     Write-Host ''
-                    Write-Host '  Todos los perfiles activan Ultimate Performance (o High Performance).' -ForegroundColor DarkGray
+                    Write-Host '  [4]  Tweaks del sistema  ' -NoNewline; Write-Host ' (sin tocar visuales)' -ForegroundColor Cyan
+                    Write-Host '       Deshabilita hibernacion y Game DVR.'
+                    Write-Host '       Reduce shutdown timeout. Ajusta SvcHost threshold segun RAM.'
+                    Write-Host ''
+                    Write-Host '  Los perfiles 1-3 incluyen tambien: Power Plan + Tweaks del sistema.' -ForegroundColor DarkGray
                     Write-Host ''
                     Write-Host '  [q]  Cancelar'
                     Write-Host ''
@@ -319,9 +323,10 @@ function Show-MainMenu {
                     if ($perfChoice -eq 'q' -or [string]::IsNullOrWhiteSpace($perfChoice)) { break perfLoop }
 
                     [string] $visualProfile = switch ($perfChoice) {
-                        '1' { 'Balanced' }
-                        '2' { 'Full'     }
-                        '3' { 'Restore'  }
+                        '1' { 'Balanced'   }
+                        '2' { 'Full'       }
+                        '3' { 'Restore'    }
+                        '4' { 'TweaksOnly' }
                         default { '' }
                     }
 
@@ -336,23 +341,38 @@ function Show-MainMenu {
                     $result = Wait-ToolkitJobs -Jobs @($job)
 
                     Write-Host ''
-                    Write-Host '  Efectos Visuales:' -ForegroundColor DarkCyan
-                    foreach ($item in $result.Visuals.Applied) {
-                        [string] $itemColor = if     ($item -match '^\[ON\]' ) { 'Green'    }
-                                              elseif ($item -match '^\[OFF\]') { 'DarkGray' }
-                                              else                              { 'White'    }
-                        Write-Host ("    {0}" -f $item) -ForegroundColor $itemColor
+                    if ($null -ne $result.Visuals) {
+                        Write-Host '  Efectos Visuales:' -ForegroundColor DarkCyan
+                        foreach ($item in $result.Visuals.Applied) {
+                            [string] $itemColor = if     ($item -match '^\[ON\]' ) { 'Green'    }
+                                                  elseif ($item -match '^\[OFF\]') { 'DarkGray' }
+                                                  else                              { 'White'    }
+                            Write-Host ("    {0}" -f $item) -ForegroundColor $itemColor
+                        }
+                        if (-not $result.Visuals.Success) {
+                            foreach ($err in $result.Visuals.Errors) {
+                                Write-Host ("    [!] {0}" -f $err) -ForegroundColor Red
+                            }
+                        }
+                        Write-Host ''
                     }
-                    if (-not $result.Visuals.Success) {
-                        foreach ($err in $result.Visuals.Errors) {
+
+                    Write-Host '  Tweaks del Sistema:' -ForegroundColor DarkCyan
+                    foreach ($item in $result.Tweaks.Applied) {
+                        Write-Host ("    [OK] {0}" -f $item) -ForegroundColor Green
+                    }
+                    if (-not $result.Tweaks.Success) {
+                        foreach ($err in $result.Tweaks.Errors) {
                             Write-Host ("    [!] {0}" -f $err) -ForegroundColor Red
                         }
                     }
 
-                    Write-Host ''
-                    Write-Host '  Plan de Energia:' -ForegroundColor DarkCyan
-                    [string] $ppColor = if ($result.PowerPlan.Success) { 'Green' } else { 'Red' }
-                    Write-Host ("    Activo : {0}" -f $result.PowerPlan.PlanName) -ForegroundColor $ppColor
+                    if ($null -ne $result.PowerPlan) {
+                        Write-Host ''
+                        Write-Host '  Plan de Energia:' -ForegroundColor DarkCyan
+                        [string] $ppColor = if ($result.PowerPlan.Success) { 'Green' } else { 'Red' }
+                        Write-Host ("    Activo : {0}" -f $result.PowerPlan.PlanName) -ForegroundColor $ppColor
+                    }
 
                     Write-Host ''
                     Write-Host '  Nota: Cierra sesion o reinicia el Explorer para ver los cambios.' -ForegroundColor DarkGray

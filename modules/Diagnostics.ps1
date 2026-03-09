@@ -139,6 +139,88 @@ function Show-BsodHistory {
                 $d.SizeMB)
         }
     }
+
+    # ── Guia de diagnostico ───────────────────────────────────────────────────
+    if ($Data.TotalCrashes -gt 0) {
+        Write-Host ''
+        Write-Host '  Diagnostico sugerido:' -ForegroundColor DarkCyan
+        Write-Host ('  {0}' -f ('-' * 60)) -ForegroundColor DarkCyan
+
+        # Recopilar todos los Stop Codes presentes
+        [string[]] $stopCodes = @(
+            $Data.Events |
+                Where-Object { $_.EventId -eq 1001 -and $_.Detalle -match '0x[0-9A-Fa-f]+' } |
+                ForEach-Object { ($_.Detalle | Select-String -Pattern '0x[0-9A-Fa-f]+' -AllMatches).Matches.Value } |
+                Sort-Object -Unique
+        )
+
+        # Tabla de lookup: Stop Code → causa + acciones
+        $guidance = @(
+            [PSCustomObject]@{
+                Codes   = @('0x0000001A', '0x0000003B', '0x00000050', '0xC0000005')
+                Causa   = 'RAM defectuosa o incompatible'
+                Accion  = 'Correr MemTest86 (booteable). Si falla, retirar un modulo a la vez para aislar el defectuoso.'
+            }
+            [PSCustomObject]@{
+                Codes   = @('0x0000009F', '0x000000FE', '0x0000004E')
+                Causa   = 'Driver de energia o USB defectuoso'
+                Accion  = 'Verificar fecha de los crashes vs actualizaciones recientes. Revertir drivers de chipset/USB.'
+            }
+            [PSCustomObject]@{
+                Codes   = @('0x0000007E', '0x1000007E', '0x0000008E')
+                Causa   = 'Driver de tercero bugueado'
+                Accion  = 'Revisar minidump con WinDbg o subir a https://www.osronline.com para identificar el modulo culpable.'
+            }
+            [PSCustomObject]@{
+                Codes   = @('0x00000124', '0x00000101', '0x00000117')
+                Causa   = 'Hardware inestable (CPU/GPU/chipset)'
+                Accion  = 'Verificar temperaturas con HWMonitor. Si hay OC, revertirlo. Puede indicar falla de PSU.'
+            }
+            [PSCustomObject]@{
+                Codes   = @('0x0000007A', '0x00000024', '0x0000002E')
+                Causa   = 'Disco con errores'
+                Accion  = 'Correr chkdsk /r /f en la unidad de sistema. Verificar SMART con CrystalDiskInfo.'
+            }
+        )
+
+        [bool] $matchFound = $false
+        foreach ($entry in $guidance) {
+            [bool] $hit = $false
+            foreach ($code in $stopCodes) {
+                if ($entry.Codes -contains $code.ToUpper()) { $hit = $true; break }
+            }
+            if ($hit) {
+                $matchFound = $true
+                Write-Host ("  [!] {0}" -f $entry.Causa) -ForegroundColor Yellow
+                Write-Host ("      {0}" -f $entry.Accion) -ForegroundColor Gray
+                Write-Host ''
+            }
+        }
+
+        # Heurísticas por patrón de eventos cuando no hay Stop Code identificable
+        [int] $kernelPowerCount = @($Data.Events | Where-Object { $_.EventId -eq 41 }).Count
+        [int] $bsodCount        = @($Data.Events | Where-Object { $_.EventId -eq 1001 }).Count
+
+        if (-not $matchFound -and $bsodCount -gt 0) {
+            Write-Host '  [!] Stop Code no identificado automaticamente.' -ForegroundColor Yellow
+            Write-Host '      Subir el .dmp mas reciente a https://www.osronline.com' -ForegroundColor Gray
+            Write-Host '      o analizarlo con: windbg -z "C:\Windows\Minidump\<archivo>.dmp"' -ForegroundColor Gray
+            Write-Host ''
+        }
+
+        if ($kernelPowerCount -ge 3 -and $bsodCount -eq 0) {
+            Write-Host '  [!] Multiples Kernel-Power 41 sin BSOD asociado.' -ForegroundColor Yellow
+            Write-Host '      Causas comunes: PSU deteriorada, cortes de luz, overheating.' -ForegroundColor Gray
+            Write-Host '      Verificar temperaturas en carga y revisar fuente de alimentacion.' -ForegroundColor Gray
+            Write-Host ''
+        }
+
+        if ($kernelPowerCount -eq 0 -and @($Data.Events | Where-Object { $_.EventId -eq 6008 }).Count -ge 3) {
+            Write-Host '  [i] Multiples apagados abruptos (6008) sin crash de kernel.' -ForegroundColor DarkYellow
+            Write-Host '      Probablemente cortes de luz o apagados forzados. No indica falla de hardware.' -ForegroundColor Gray
+            Write-Host ''
+        }
+    }
 }
 
 function Start-BsodHistoryJob {

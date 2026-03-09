@@ -1,0 +1,34 @@
+{
+    "version": 1,
+    "comment": "Cada herramienta define su URL oficial de descarga y SHA-256 esperado. Ejecutar Bootstrap-Tools.ps1 para descargar y verificar.",
+    "tools": [
+        {
+            "name": "autoruns",
+            "description": "Sysinternals Autoruns - muestra todos los programas configurados para arranque automatico",
+            "filename": "Autoruns.exe",
+            "url": "https://live.sysinternals.com/Autoruns.exe",
+            "sha256": ""
+        },
+        {
+            "name": "procmon",
+            "description": "Sysinternals Process Monitor - monitoreo de actividad del sistema en tiempo real",
+            "filename": "Procmon.exe",
+            "url": "https://live.sysinternals.com/Procmon.exe",
+            "sha256": ""
+        },
+        {
+            "name": "procexp",
+            "description": "Sysinternals Process Explorer - administrador de tareas avanzado",
+            "filename": "procexp.exe",
+            "url": "https://live.sysinternals.com/procexp.exe",
+            "sha256": ""
+        },
+        {
+            "name": "tcpview",
+            "description": "Sysinternals TCPView - conexiones de red activas con detalle de proceso",
+            "filename": "Tcpview.exe",
+            "url": "https://live.sysinternals.com/Tcpview.exe",
+            "sha256": ""
+        }
+    ]
+}
