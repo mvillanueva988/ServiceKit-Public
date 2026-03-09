@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 
-foreach ($folder in @('core', 'modules')) {
+foreach ($folder in @('core', 'utils', 'modules')) {
     $folderPath = Join-Path $PSScriptRoot $folder
     $scripts = Get-ChildItem -Path $folderPath -Filter '*.ps1' -File -ErrorAction SilentlyContinue
     foreach ($script in $scripts) {
@@ -30,6 +30,12 @@ function Show-MainMenu {
         Write-Host '  [2]  Limpieza de Temporales'
         Write-Host '  [3]  Mantenimiento del Sistema (DISM/SFC)'
         Write-Host '  [4]  Crear Punto de Restauracion'
+        Write-Host '  [5]  Optimizar Red (Adaptadores + TCP/DNS)'
+        Write-Host ''
+        Write-Host '  [DIAGNOSTICO Y AUDITORIA]' -ForegroundColor DarkCyan
+        Write-Host '  [6]  Snapshot PRE-service'
+        Write-Host '  [7]  Snapshot POST-service'
+        Write-Host '  [8]  Comparar PRE vs POST'
         Write-Host '  [q]  Salir'
         Write-Host ''
         Write-Host '================================================' -ForegroundColor DarkCyan
@@ -166,36 +172,110 @@ function Show-MainMenu {
                 }
             }
             '5' {
-                Clear-Host
-                Write-Host '================================================' -ForegroundColor DarkCyan
-                Write-Host '               GUIA TECNICA DE RED              ' -ForegroundColor Cyan
-                Write-Host '================================================' -ForegroundColor DarkCyan
-                Write-Host ''
-                Write-Host ' 1. Ahorro de Energia: SIEMPRE APAGAR.' -ForegroundColor White
-                Write-Host '    Evita micro-cortes y latencia en Wi-Fi/Ethernet.' -ForegroundColor Gray
-                Write-Host ''
-                Write-Host ' 2. TCP Auto-Tuning (Normal): RECOMENDADO.' -ForegroundColor White
-                Write-Host '    Mantiene el ancho de banda maximo en planes de 300MB+.' -ForegroundColor Gray
-                Write-Host ''
-                Write-Host ' 3. DNS Flush: UTIL.' -ForegroundColor White
-                Write-Host '    Limpia rutas viejas o errores de "Sin Internet".' -ForegroundColor Gray
-                Write-Host ''
-                Write-Host ' 4. Interrupt Moderation: SOLO GAMING EXTREMO.' -ForegroundColor White
-                Write-Host '    Baja el ping pero sube el uso de CPU. (No incluido en Auto).' -ForegroundColor Gray
-                Write-Host ''
-                Write-Host '================================================' -ForegroundColor DarkCyan
-                
-                $confirm = Read-Host '  ¿Aplicar optimizacion estandar? (s/n)'
-                if ($confirm.ToLower() -eq 's') {
-                    Write-Host "`n  Optimizando stack de red..." -ForegroundColor Cyan
-                    $job    = Start-NetworkProcess
-                    $result = Wait-ToolkitJobs -Jobs @($job)
-                    
-                    Write-Host "`n  Resultado:" -ForegroundColor Green
-                    foreach ($adapter in $result.AdaptersOptimized) {
-                        Write-Host "    [OK] $adapter" -ForegroundColor Gray
+                # Sub-loop para poder volver al menu de red luego de leer la info
+                :networkLoop while ($true) {
+                    Clear-Host
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+                    Write-Host '          OPTIMIZACION DE RED                   ' -ForegroundColor Cyan
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+                    Write-Host ''
+                    Write-Host '  Que se aplica a cada adaptador:' -ForegroundColor DarkCyan
+                    Write-Host '    - Deshabilita EEE / Green Ethernet / Power Saving Mode (Registro NIC)'
+                    Write-Host '  Que se aplica globalmente (siempre):' -ForegroundColor DarkCyan
+                    Write-Host '    - TCP Auto-Tuning = Normal  (ancho de banda maximo en planes 300MB+)'
+                    Write-Host '    - TCP Fast Open   = Enabled (reduce latencia de handshake)'
+                    Write-Host '    - ipconfig /flushdns        (limpia cache DNS obsoleta)'
+                    Write-Host ''
+
+                    # Detectar adaptadores fisicos activos
+                    [object[]] $netAdapters = @(
+                        Get-NetAdapter -ErrorAction SilentlyContinue |
+                            Where-Object { $_.Status -eq 'Up' -and $_.PhysicalMediaType -in @('802.3', 'Native 802.11') } |
+                            Select-Object -Property Name, InterfaceDescription, PhysicalMediaType
+                    )
+
+                    if ($netAdapters.Count -eq 0) {
+                        Write-Host '  No se detectaron adaptadores Ethernet/Wi-Fi activos.' -ForegroundColor DarkYellow
+                        break networkLoop
                     }
-                    Write-Host "  TCP Global Settings y DNS: OK" -ForegroundColor Gray
+
+                    # Tabla de adaptadores
+                    Write-Host ('  {0,-4} {1,-28} {2}' -f '#', 'Nombre', 'Descripcion') -ForegroundColor DarkCyan
+                    Write-Host ('  {0}' -f ('-' * 66)) -ForegroundColor DarkCyan
+                    [int] $adIdx = 0
+                    foreach ($ad in $netAdapters) {
+                        $adIdx++
+                        [string] $mediaLabel = if ($ad.PhysicalMediaType -eq '802.3') { 'Ethernet' } else { 'Wi-Fi' }
+                        Write-Host ('  {0,-4} {1,-28} {2} [{3}]' -f $adIdx, $ad.Name, $ad.InterfaceDescription, $mediaLabel)
+                    }
+                    Write-Host ''
+
+                    [string] $selection = (Read-Host '  Numeros a optimizar (ej: 1,2), [all] para todos, [i] mas info, [q] cancelar').Trim().ToLower()
+
+                    if ($selection -eq 'q' -or [string]::IsNullOrWhiteSpace($selection)) { break networkLoop }
+
+                    if ($selection -eq 'i') {
+                        Clear-Host
+                        Get-ToolkitHelp -Topic 'Network'
+                        Write-Host ''
+                        Read-Host '  Presione Enter para volver'
+                        continue networkLoop
+                    }
+
+                    [string[]] $chosenAdapters = if ($selection -eq 'all') {
+                        $netAdapters | ForEach-Object { $_.Name }
+                    } else {
+                        $parsed = $selection -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' }
+                        @($parsed | ForEach-Object {
+                            [int] $i = [int]$_
+                            if ($i -ge 1 -and $i -le $netAdapters.Count) { $netAdapters[$i - 1].Name }
+                        })
+                    }
+
+                    if ($chosenAdapters.Count -eq 0) {
+                        Write-Host "`n  Seleccion invalida. Volviendo al menu." -ForegroundColor Red
+                        break networkLoop
+                    }
+
+                    Write-Host ("`n  Optimizando {0} adaptador(es) + configuracion global TCP/DNS..." -f $chosenAdapters.Count) -ForegroundColor Cyan
+                    $job    = Start-NetworkProcess -AdapterNames $chosenAdapters
+                    $result = Wait-ToolkitJobs -Jobs @($job)
+
+                    Write-Host ''
+                    foreach ($ad in $result.AdaptersOptimized) {
+                        Write-Host ("  [OK] Adaptador : {0}" -f $ad) -ForegroundColor Green
+                    }
+                    Write-Host '  [OK] TCP Global Settings + DNS Flush' -ForegroundColor Green
+
+                    if (-not $result.Success) {
+                        Write-Host '  [!] Alguno de los comandos globales requirio privilegios de administrador.' -ForegroundColor Yellow
+                    }
+
+                    break networkLoop
+                }
+            }
+            '6' {
+                Write-Host "`n  Recopilando estado PRE-service (puede tardar un momento)..." -ForegroundColor Cyan
+                $job    = Start-TelemetryJob -Phase 'Pre'
+                $result = Wait-ToolkitJobs -Jobs @($job)
+
+                Write-Host ("  Snapshot guardado : {0}" -f $result.FileName) -ForegroundColor Green
+                Write-Host "  Realiza el service y luego ejecuta [7] para capturar el estado POST." -ForegroundColor DarkGray
+            }
+            '7' {
+                Write-Host "`n  Recopilando estado POST-service (puede tardar un momento)..." -ForegroundColor Cyan
+                $job    = Start-TelemetryJob -Phase 'Post'
+                $result = Wait-ToolkitJobs -Jobs @($job)
+
+                Write-Host ("  Snapshot guardado : {0}" -f $result.FileName) -ForegroundColor Green
+                Write-Host "  Usa la opcion [8] para comparar PRE vs POST." -ForegroundColor DarkGray
+            }
+            '8' {
+                try {
+                    [PSCustomObject] $diff = Compare-Snapshot
+                    Show-SnapshotComparison -Diff $diff
+                } catch {
+                    Write-Host ("`n  Error: {0}" -f $_.Exception.Message) -ForegroundColor Red
                 }
             }
             'q' {
