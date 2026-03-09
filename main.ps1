@@ -165,6 +165,39 @@ function Show-MainMenu {
                     Write-Host "  (Nota: Windows por defecto permite crear solo 1 punto cada 24 horas)" -ForegroundColor DarkGray
                 }
             }
+            '5' {
+                Clear-Host
+                Write-Host '================================================' -ForegroundColor DarkCyan
+                Write-Host '               GUIA TECNICA DE RED              ' -ForegroundColor Cyan
+                Write-Host '================================================' -ForegroundColor DarkCyan
+                Write-Host ''
+                Write-Host ' 1. Ahorro de Energia: SIEMPRE APAGAR.' -ForegroundColor White
+                Write-Host '    Evita micro-cortes y latencia en Wi-Fi/Ethernet.' -ForegroundColor Gray
+                Write-Host ''
+                Write-Host ' 2. TCP Auto-Tuning (Normal): RECOMENDADO.' -ForegroundColor White
+                Write-Host '    Mantiene el ancho de banda maximo en planes de 300MB+.' -ForegroundColor Gray
+                Write-Host ''
+                Write-Host ' 3. DNS Flush: UTIL.' -ForegroundColor White
+                Write-Host '    Limpia rutas viejas o errores de "Sin Internet".' -ForegroundColor Gray
+                Write-Host ''
+                Write-Host ' 4. Interrupt Moderation: SOLO GAMING EXTREMO.' -ForegroundColor White
+                Write-Host '    Baja el ping pero sube el uso de CPU. (No incluido en Auto).' -ForegroundColor Gray
+                Write-Host ''
+                Write-Host '================================================' -ForegroundColor DarkCyan
+                
+                $confirm = Read-Host '  ¿Aplicar optimizacion estandar? (s/n)'
+                if ($confirm.ToLower() -eq 's') {
+                    Write-Host "`n  Optimizando stack de red..." -ForegroundColor Cyan
+                    $job    = Start-NetworkProcess
+                    $result = Wait-ToolkitJobs -Jobs @($job)
+                    
+                    Write-Host "`n  Resultado:" -ForegroundColor Green
+                    foreach ($adapter in $result.AdaptersOptimized) {
+                        Write-Host "    [OK] $adapter" -ForegroundColor Gray
+                    }
+                    Write-Host "  TCP Global Settings y DNS: OK" -ForegroundColor Gray
+                }
+            }
             'q' {
                 Write-Host "`n  Hasta luego." -ForegroundColor Gray
                 break mainLoop
