@@ -37,6 +37,8 @@ function Show-MainMenu {
         Write-Host '  [7]  Snapshot PRE-service'
         Write-Host '  [8]  Snapshot POST-service'
         Write-Host '  [9]  Comparar PRE vs POST'
+        Write-Host '  [10] Historial de BSOD / Crashes'
+        Write-Host '  [11] Backup de Drivers'
         Write-Host '  [q]  Salir'
         Write-Host ''
         Write-Host '================================================' -ForegroundColor DarkCyan
@@ -380,6 +382,35 @@ function Show-MainMenu {
                     Show-SnapshotComparison -Diff $diff
                 } catch {
                     Write-Host ("`n  Error: {0}" -f $_.Exception.Message) -ForegroundColor Red
+                }
+            }
+            '10' {
+                Write-Host "`n  Leyendo Event Log (ultimos 90 dias)..." -ForegroundColor Cyan
+                $job    = Start-BsodHistoryJob -Days 90
+                $result = Wait-ToolkitJobs -Jobs @($job)
+                Show-BsodHistory -Data $result
+            }
+            '11' {
+                [string] $backupRoot = Join-Path $PSScriptRoot 'output\driver_backup'
+                Write-Host ''
+                Write-Host '  Se exportaran los siguientes drivers:' -ForegroundColor DarkCyan
+                Write-Host '    - Todos los drivers de terceros (ProviderName != Microsoft)'
+                Write-Host '    - Drivers de red (clase Net) independientemente del proveedor'
+                Write-Host ('    Destino: {0}\<timestamp>' -f $backupRoot) -ForegroundColor DarkGray
+                Write-Host ''
+
+                [string] $confirm = (Read-Host '  Confirmar? [s] Exportar  [q] Cancelar').Trim().ToLower()
+                if ($confirm -ne 's') { break }
+
+                Write-Host "`n  Exportando drivers..." -ForegroundColor Cyan
+                $job    = Start-DriverBackupJob -OutputRoot $backupRoot
+                $result = Wait-ToolkitJobs -Jobs @($job)
+
+                if ($result.Success) {
+                    Write-Host ("  Drivers exportados : {0} / {1}" -f $result.Exported, $result.Total) -ForegroundColor Green
+                    Write-Host ("  Destino            : {0}" -f $result.Destination) -ForegroundColor Green
+                } else {
+                    Write-Host ("  Error: {0}" -f $result.Message) -ForegroundColor Red
                 }
             }
             'q' {
