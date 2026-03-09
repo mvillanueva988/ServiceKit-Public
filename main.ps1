@@ -31,11 +31,12 @@ function Show-MainMenu {
         Write-Host '  [3]  Mantenimiento del Sistema (DISM/SFC)'
         Write-Host '  [4]  Crear Punto de Restauracion'
         Write-Host '  [5]  Optimizar Red (Adaptadores + TCP/DNS)'
+        Write-Host '  [6]  Rendimiento (Efectos Visuales + Plan de Energia)'
         Write-Host ''
         Write-Host '  [DIAGNOSTICO Y AUDITORIA]' -ForegroundColor DarkCyan
-        Write-Host '  [6]  Snapshot PRE-service'
-        Write-Host '  [7]  Snapshot POST-service'
-        Write-Host '  [8]  Comparar PRE vs POST'
+        Write-Host '  [7]  Snapshot PRE-service'
+        Write-Host '  [8]  Snapshot POST-service'
+        Write-Host '  [9]  Comparar PRE vs POST'
         Write-Host '  [q]  Salir'
         Write-Host ''
         Write-Host '================================================' -ForegroundColor DarkCyan
@@ -132,11 +133,42 @@ function Show-MainMenu {
                 }
             }
             '2' {
-                Write-Host "`n  Iniciando limpieza de temporales..." -ForegroundColor Cyan
+                Write-Host "`n  Escaneando carpetas temporales..." -ForegroundColor Cyan
+                [PSCustomObject] $preview = Get-CleanupPreview
+
+                if ($preview.Folders.Count -eq 0) {
+                    Write-Host '  No se encontro basura que limpiar.' -ForegroundColor DarkYellow
+                    break
+                }
+
+                Write-Host ''
+                Write-Host ('  {0,-30} {1,10}' -f 'Carpeta', 'Tamanio') -ForegroundColor DarkCyan
+                Write-Host ('  {0}' -f ('-' * 43)) -ForegroundColor DarkCyan
+                foreach ($row in $preview.Folders) {
+                    [string] $sizeLabel = if ($row.SizeMB -ge 1024) {
+                        '{0:N2} GB' -f ($row.SizeBytes / 1GB)
+                    } else {
+                        '{0:N1} MB' -f $row.SizeMB
+                    }
+                    Write-Host ('  {0,-30} {1,10}' -f $row.Label, $sizeLabel)
+                }
+                Write-Host ('  {0}' -f ('-' * 43)) -ForegroundColor DarkCyan
+                [string] $totalLabel = if ($preview.TotalGB -ge 1) {
+                    '{0:N2} GB' -f $preview.TotalGB
+                } else {
+                    '{0:N1} MB' -f $preview.TotalMB
+                }
+                Write-Host ('  {0,-30} {1,10}' -f 'TOTAL estimado', $totalLabel) -ForegroundColor Yellow
+                Write-Host ''
+
+                [string] $confirm = (Read-Host '  Confirmar limpieza? [s] Si  [q] Cancelar').Trim().ToLower()
+                if ($confirm -ne 's') { break }
+
+                Write-Host "`n  Borrando archivos..." -ForegroundColor Cyan
                 $job    = Start-CleanupProcess
                 $result = Wait-ToolkitJobs -Jobs @($job)
 
-                [string]$freed = if ($result.FreedGB -ge 1) {
+                [string] $freed = if ($result.FreedGB -ge 1) {
                     '{0:N2} GB' -f $result.FreedGB
                 } else {
                     '{0:N2} MB' -f $result.FreedMB
@@ -255,22 +287,71 @@ function Show-MainMenu {
                 }
             }
             '6' {
+                Write-Host ''
+                Write-Host '  Se van a aplicar los siguientes cambios:' -ForegroundColor DarkCyan
+                Write-Host ''
+                Write-Host '  Efectos Visuales (perfil balanceado):' -ForegroundColor DarkCyan
+                Write-Host '    [ON]  Smooth edges of screen fonts (ClearType)' -ForegroundColor Green
+                Write-Host '    [ON]  Show thumbnails instead of icons'          -ForegroundColor Green
+                Write-Host '    [ON]  Show window contents while dragging'        -ForegroundColor Green
+                Write-Host '    [OFF] Taskbar animations'                          -ForegroundColor DarkGray
+                Write-Host '    [OFF] Animate minimize / maximize'                 -ForegroundColor DarkGray
+                Write-Host '    [OFF] Drop shadows under icons'                    -ForegroundColor DarkGray
+                Write-Host '    [OFF] Glass / Acrylic transparency'                -ForegroundColor DarkGray
+                Write-Host '    [OFF] Fade / slide menus  |  Menu delay = 0 ms'   -ForegroundColor DarkGray
+                Write-Host ''
+                Write-Host '  Plan de Energia:' -ForegroundColor DarkCyan
+                Write-Host '    Activa Ultimate Performance (o High Performance si no esta disponible)'
+                Write-Host ''
+                Write-Host '  Nota: Los cambios de efectos visuales requieren cerrar sesion para verse.' -ForegroundColor DarkGray
+                Write-Host ''
+
+                [string] $confirm = (Read-Host '  Confirmar? [s] Aplicar  [q] Cancelar').Trim().ToLower()
+                if ($confirm -ne 's') { break }
+
+                Write-Host "`n  Aplicando..." -ForegroundColor Cyan
+                $job    = Start-PerformanceProcess
+                $result = Wait-ToolkitJobs -Jobs @($job)
+
+                Write-Host ''
+                Write-Host '  Efectos Visuales:' -ForegroundColor DarkCyan
+                foreach ($item in $result.Visuals.Applied) {
+                    [string] $itemColor = if     ($item -match '^\[ON\]' ) { 'Green'    }
+                                          elseif ($item -match '^\[OFF\]') { 'DarkGray' }
+                                          else                              { 'White'    }
+                    Write-Host ("    {0}" -f $item) -ForegroundColor $itemColor
+                }
+                if (-not $result.Visuals.Success) {
+                    foreach ($err in $result.Visuals.Errors) {
+                        Write-Host ("    [!] {0}" -f $err) -ForegroundColor Red
+                    }
+                }
+
+                Write-Host ''
+                Write-Host '  Plan de Energia:' -ForegroundColor DarkCyan
+                [string] $ppColor = if ($result.PowerPlan.Success) { 'Green' } else { 'Red' }
+                Write-Host ("    Activo : {0}" -f $result.PowerPlan.PlanName) -ForegroundColor $ppColor
+
+                Write-Host ''
+                Write-Host '  Nota: Para que los efectos visuales sean visibles, cierra sesion o reinicia el Explorer.' -ForegroundColor DarkGray
+            }
+            '7' {
                 Write-Host "`n  Recopilando estado PRE-service (puede tardar un momento)..." -ForegroundColor Cyan
                 $job    = Start-TelemetryJob -Phase 'Pre'
                 $result = Wait-ToolkitJobs -Jobs @($job)
 
                 Write-Host ("  Snapshot guardado : {0}" -f $result.FileName) -ForegroundColor Green
-                Write-Host "  Realiza el service y luego ejecuta [7] para capturar el estado POST." -ForegroundColor DarkGray
+                Write-Host "  Realiza el service y luego ejecuta [8] para capturar el estado POST." -ForegroundColor DarkGray
             }
-            '7' {
+            '8' {
                 Write-Host "`n  Recopilando estado POST-service (puede tardar un momento)..." -ForegroundColor Cyan
                 $job    = Start-TelemetryJob -Phase 'Post'
                 $result = Wait-ToolkitJobs -Jobs @($job)
 
                 Write-Host ("  Snapshot guardado : {0}" -f $result.FileName) -ForegroundColor Green
-                Write-Host "  Usa la opcion [8] para comparar PRE vs POST." -ForegroundColor DarkGray
+                Write-Host "  Usa la opcion [9] para comparar PRE vs POST." -ForegroundColor DarkGray
             }
-            '8' {
+            '9' {
                 try {
                     [PSCustomObject] $diff = Compare-Snapshot
                     Show-SnapshotComparison -Diff $diff
