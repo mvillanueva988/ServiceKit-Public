@@ -317,8 +317,42 @@ function Show-MainMenu {
                         Write-Host ('  {0,-4} {1,-28} {2} [{3}]' -f $adIdx, $ad.Name, $ad.InterfaceDescription, $mediaLabel)
                     }
                     Write-Host ''
+                    Write-Host '  [d]  Diagnosticos de red  ' -NoNewline; Write-Host '(TCP, DNS, velocidad, ping)' -ForegroundColor DarkGray
 
-                    [string] $selection = (Read-Host '  Numeros a optimizar (ej: 1,2), [all] para todos, [i] mas info, [q] cancelar').Trim().ToLower()
+                    [string] $selection = (Read-Host '  Numeros a optimizar (ej: 1,2), [all] para todos, [d] diag, [i] info, [q] cancelar').Trim().ToLower()
+
+                    if ($selection -eq 'd') {
+                        Write-Host "`n  Diagnosticando red..." -ForegroundColor Cyan
+                        $diagJob    = Start-NetworkDiagnosticsProcess
+                        $diagResult = Wait-ToolkitJobs -Jobs @($diagJob)
+                        [string] $tuning = if ($diagResult.TcpAutoTuning) { $diagResult.TcpAutoTuning } else { 'desconocido' }
+                        Write-Host ''
+                        Write-Host '  TCP AutoTuning : ' -NoNewline; Write-Host $tuning -ForegroundColor Cyan
+                        Write-Host ''
+                        if ($null -ne $diagResult.Adapters -and $diagResult.Adapters.Count -gt 0) {
+                            Write-Host '  Adaptadores activos:' -ForegroundColor DarkCyan
+                            foreach ($a in $diagResult.Adapters) {
+                                Write-Host ('    {0,-28} {1}' -f $a.Name, $a.LinkSpeed)
+                            }
+                            Write-Host ''
+                        }
+                        if ($null -ne $diagResult.DnsServers -and $diagResult.DnsServers.Count -gt 0) {
+                            Write-Host '  DNS (IPv4):' -ForegroundColor DarkCyan
+                            foreach ($iface in $diagResult.DnsServers.Keys) {
+                                [string] $servers = ($diagResult.DnsServers[$iface]) -join ', '
+                                Write-Host ('    {0,-28} {1}' -f $iface, $servers)
+                            }
+                            Write-Host ''
+                        }
+                        if ($diagResult.PingMs -ge 0) {
+                            Write-Host ('  Latencia 8.8.8.8 : {0} ms' -f $diagResult.PingMs) -ForegroundColor $(if ($diagResult.PingMs -lt 50) { 'Green' } elseif ($diagResult.PingMs -lt 150) { 'Yellow' } else { 'Red' })
+                        } else {
+                            Write-Host '  Latencia 8.8.8.8 : sin respuesta' -ForegroundColor Red
+                        }
+                        Write-Host ''
+                        Read-Host '  [Enter] para volver' | Out-Null
+                        continue networkLoop
+                    }
 
                     if ($selection -eq 'q' -or [string]::IsNullOrWhiteSpace($selection)) { break networkLoop }
 
