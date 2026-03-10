@@ -300,6 +300,9 @@ function Show-MainMenu {
 
                 if ($result.Success) {
                     Write-Host ("  Exito: {0}" -f $result.Message) -ForegroundColor Green
+                } elseif ($result.PSObject.Properties['Reason'] -and $result.Reason -match 'Cooldown') {
+                    Write-Host '  [!] Cooldown activo: ya existe un punto de restauracion reciente.' -ForegroundColor Yellow
+                    Write-Host ("      {0}" -f $result.Reason) -ForegroundColor DarkGray
                 } else {
                     Write-Host ("  Fallo: {0}" -f $result.Message) -ForegroundColor Red
                     Write-Host "  (Nota: Windows por defecto permite crear solo 1 punto cada 24 horas)" -ForegroundColor DarkGray
