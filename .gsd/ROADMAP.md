@@ -157,18 +157,21 @@ Plans:
 
 ### Phase 5: Portable Executable 🔜
 
-**Goal**: Un solo archivo distribuible (`.exe` o `.bat` autónomo) que contenga el toolkit completo. Sin carpetas de desarrollo (Logs/, .gsd/, .git/), sin requisitos de descarga adicional. Completamente portable.
+**Goal**: One-liner de PowerShell que descarga y lanza el toolkit desde GitHub en cualquier PC. Uso personal del técnico + servicio a distancia vía AnyDesk. Sin EXE compilado (ps2exe descartado), sin `%TEMP%`, sin versioning complejo.
 
-**Key decisions to make:**
-- Tool: `ps2exe` (convierte PS1 → EXE) vs. wrapper `.bat` con PS1 embebido vs. self-extracting archive
-- Inclusión de módulos: embed dentro del EXE o extraer al `%TEMP%` al runtime
-- Assets: `tools/manifest.json` embebido; binarios externos (Autoruns, etc.) no incluidos por defecto — se descargan al usar `[T]`
-- Signing: opcional para evitar SmartScreen warning
+**Decisions locked (post-discuss):**
+- Formato: ZIP limpio + `Run.bat` — no EXE. ps2exe descartado por falsos positivos AV, SmartScreen, bugs con `Start-Job`/`Add-Type`, y overhead de compilación.
+- One-liner: `irm https://raw.githubusercontent.com/USER/Toolkit/main/Launch.ps1 | iex`
+- Extracción a ruta fija `C:\PCTk\` — no `%TEMP%` (AV, limpiezas, reconexiones AnyDesk)
+- Auto-update por sobreescritura directa; `tools\bin\` se preserva entre actualizaciones
+- Herramientas externas: on-demand siempre, sin auto-detection de versiones
+- Firma: no. Click "ejecutar de todas formas" aceptable para uso técnico
 
-**Constraints:**
-- Solo cmdlets nativos de PowerShell / WMI / CIM (ya vigente)
-- No descargar nada en runtime para funciones core
-- Compatible con ejecución directa por doble click (no requiere PS abierto)
+**What to build:**
+1. `Launch.ps1` — one-liner handler: descarga Release ZIP → extrae a `C:\PCTk\` → lanza `main.ps1`
+2. `Release.ps1` — build script local: genera ZIP limpio (excluye `.gsd/`, `.git/`, `Logs/`, `output/`, `tools/bin/`)
+3. Fix en `Bootstrap-Tools.ps1` — verificar tamaño de descarga para detectar archivos parciales
+4. README actualizado con one-liner documentado
 
 **Depends on**: Phase 4b
 
