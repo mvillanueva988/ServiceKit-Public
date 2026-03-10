@@ -30,7 +30,7 @@
             "filename": "autorunsc.exe",
             "launchExe": "autorunsc.exe",
             "url": "https://live.sysinternals.com/autorunsc.exe",
-            "approxSizeMB": 1,
+            "approxSizeMB": 0.5,
             "sha256": ""
         },
         {

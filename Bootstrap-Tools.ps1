@@ -102,6 +102,8 @@ function Test-ToolInstalled {
         if ($Tool.PSObject.Properties['extractDir'] -and $Tool.extractDir) {
             return Test-Path (Join-Path $binDir $Tool.extractDir)
         }
+        # ZIP sin launchExe ni extractDir: el .zip es borrado post-extraccion → asumir no instalado
+        return $false
     }
 
     # Para EXEs: verificar existencia Y tamaño mínimo
@@ -130,6 +132,13 @@ function Test-ToolInstalled {
 foreach ($tool in $toolsToProcess) {
     [bool] $isZip = ($tool.PSObject.Properties['type'] -and $tool.type -eq 'zip') -or
                     ($tool.filename -like '*.zip')
+
+    # Saltar herramientas sin URL configurada (ej: winslop privado)
+    if ([string]::IsNullOrWhiteSpace($tool.url)) {
+        Write-Host ("  [~] {0,-16} URL no configurada, omitiendo." -f $tool.name) -ForegroundColor DarkGray
+        $skipped++
+        continue
+    }
 
     # Chequeo "ya existe"
     if (-not $Force -and (Test-ToolInstalled -Tool $tool)) {
