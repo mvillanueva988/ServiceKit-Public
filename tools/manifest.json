@@ -176,6 +176,28 @@
             "url": "https://github.com/ChrisTitusTech/winutil/releases/latest/download/winutil.exe",
             "approxSizeMB": 5,
             "sha256": ""
+        },
+        {
+            "name": "sophia",
+            "category": "setup",
+            "description": "Sophia Script - tweaks de privacidad y rendimiento via PS1. 150+ funciones granulares y reversibles para W10/W11. URL apunta a version W11 — reemplazar 'Windows.11' por 'Windows.10.And.11' para W10",
+            "filename": "Sophia.Script.zip",
+            "launchExe": "Sophia.Script\\Sophia.ps1",
+            "type": "zip",
+            "extractDir": "Sophia.Script",
+            "url": "https://github.com/farag2/Sophia-Script-for-Windows/releases/latest/download/Sophia.Script.for.Windows.11.zip",
+            "approxSizeMB": 1,
+            "sha256": ""
+        },
+        {
+            "name": "winslop",
+            "category": "setup",
+            "description": "WinSlop - script privado de configuracion masiva. Uso en casos extremos. Completar URL manualmente antes de usar.",
+            "filename": "winslop.exe",
+            "launchExe": "winslop.exe",
+            "url": "",
+            "approxSizeMB": 50,
+            "sha256": ""
         }
     ]
 }

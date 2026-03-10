@@ -26,14 +26,29 @@ function Show-MainMenu {
             Write-Host ''
         }
 
-        $regKey      = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
-        [string]$osInfo = if ($regKey) {
-            'Sistema: {0} - Build {1}' -f $regKey.ProductName, $regKey.CurrentBuild
+        $regKey  = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
+        [int]    $build   = if ($regKey) { [int]($regKey.CurrentBuild) } else { 0 }
+        [bool]   $isWin11 = ($build -ge 22000)
+        [bool]   $isHome  = ($regKey -and $regKey.ProductName -match '\bHome\b')
+        [bool]   $isLtsc  = ($regKey -and $regKey.ProductName -match 'LTSC')
+        if ($regKey) {
+            [string] $edition  = ([string]$regKey.ProductName) -replace '^Windows (10|11)\s*', ''
+            [string] $winVer   = if ($isWin11) { 'Win11' } else { 'Win10' }
+            [string] $arch     = if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
+            Write-Host ('  OS   : {0} {1}  Build {2}  {3}' -f $winVer, $edition.Trim(), $build, $arch) -ForegroundColor Green
+            $csHw  = Get-CimInstance -ClassName Win32_ComputerSystem    -ErrorAction SilentlyContinue
+            $gpuHw = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($csHw) {
+                [int]    $ramGb    = [int][math]::Ceiling($csHw.TotalPhysicalMemory / 1GB)
+                [string] $gpuShort = if ($gpuHw) {
+                    $n = [string]$gpuHw.Name
+                    if ($n.Length -gt 30) { $n.Substring(0, 28) + '..' } else { $n }
+                } else { 'N/A' }
+                Write-Host ('  HW   : {0} GB RAM  |  GPU: {1}' -f $ramGb, $gpuShort) -ForegroundColor DarkGray
+            }
         } else {
-            'Sistema: No disponible'
+            Write-Host '  OS   : No disponible' -ForegroundColor DarkGray
         }
-        [string]$padded = $osInfo.PadLeft([int](($osInfo.Length + 48) / 2)).PadRight(48)
-        Write-Host $padded -ForegroundColor Green
 
         Write-Host ''
         Write-Host '  [OPTIMIZACION]' -ForegroundColor DarkCyan
@@ -633,6 +648,10 @@ function Show-MainMenu {
                                 Write-Host '================================================' -ForegroundColor DarkCyan
                                 Write-Host ''
 
+                                if ($isLtsc) {
+                                    Write-Host '  [i] Edicion LTSC: Microsoft Store no incluida. Lista puede ser reducida o vacia.' -ForegroundColor Yellow
+                                    Write-Host ''
+                                }
                                 [PSCustomObject[]] $uwpApps = Get-InstalledUwpApps -Filter $uwpFilter
 
                                 if ($uwpFilter) {
@@ -723,6 +742,9 @@ function Show-MainMenu {
                     Write-Host ''
                     Write-Host '  Tweaks via registro de Windows. Sin dependencias externas.' -ForegroundColor DarkGray
                     Write-Host '  Los cambios son permanentes hasta revertirlos manualmente.' -ForegroundColor DarkGray
+                    if ($isHome) {
+                        Write-Host '  [!] Edicion Home: los tweaks de Group Policy (perfil Agresivo) son ignorados por Windows.' -ForegroundColor Yellow
+                    }
                     Write-Host ''
                     Write-Host '  [1]  Basico'
                     Write-Host '       Telemetria, Advertising ID, Bing en Start, Feedback, Activity Feed.' -ForegroundColor DarkGray
@@ -1138,7 +1160,12 @@ function Show-MainMenu {
                         }
 
                         Write-Host ("  Abriendo {0}..." -f $orow.Tool.name) -ForegroundColor Cyan
-                        Start-Process -FilePath $exePath
+                        if ($exeRel -match '\.ps1$') {
+                            # Scripts PS1: lanzar en nueva ventana con ExecutionPolicy bypass
+                            Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$exePath`""
+                        } else {
+                            Start-Process -FilePath $exePath
+                        }
                         Start-Sleep -Milliseconds 600
                         continue toolsLoop
                     }
@@ -1157,4 +1184,27 @@ function Show-MainMenu {
     }
 }
 
-Show-MainMenu   
+# ── Mutex: previene ejecuciones paralelas que colisionarian en output/ y jobs ──
+[System.Threading.Mutex] $script:_instanceMutex = $null
+try {
+    $script:_instanceMutex = [System.Threading.Mutex]::new($false, 'Local\PCOptimizacionToolkit')
+    if (-not $script:_instanceMutex.WaitOne(0)) {
+        Write-Host ''
+        Write-Host '  [!] Ya hay una instancia del toolkit en ejecucion.' -ForegroundColor Red
+        Write-Host '      Cerra la otra ventana antes de abrir una nueva.' -ForegroundColor DarkGray
+        Write-Host ''
+        Read-Host '  [Enter] para salir' | Out-Null
+        $script:_instanceMutex.Dispose()
+        exit 1
+    }
+} catch {
+    # Local\ mutex puede fallar en sesiones restringidas — continuar sin proteccion
+    $script:_instanceMutex = $null
+}
+
+Show-MainMenu
+
+if ($script:_instanceMutex) {
+    $script:_instanceMutex.ReleaseMutex()
+    $script:_instanceMutex.Dispose()
+}
