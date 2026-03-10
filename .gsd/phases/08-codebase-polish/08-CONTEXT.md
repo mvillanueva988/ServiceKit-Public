@@ -30,11 +30,6 @@ Resolver bugs críticos, regressions silenciosas y problemas de UX/async identif
 - Si el más reciente tiene menos de 24h: retornar objeto con `Success=$false` y `Reason='Cooldown 24h activo'`
 - El mensaje en `main.ps1` debe diferenciar cooldown de error de permisos
 
-**Sophia URL — OS detection:**
-- En `Bootstrap-Tools.ps1`, detectar versión de Windows via `[System.Environment]::OSVersion` o `(Get-CimInstance Win32_OperatingSystem).Version`
-- Si es W10 (version < 10.0.22000): usar URL `Windows.10.And.11`, si es W11: URL actual
-- Alternativamente: reemplazar la URL en `manifest.json` directamente con la variante `Windows.10.And.11` (compatible con ambos)
-
 ### 08-02: UX & Async
 
 **CIM hardware caching:**

@@ -221,7 +221,7 @@ Plans:
 
 **Plan structure:**
 
-- **08-01: Safety & Correctness** — Admin elevation check en startup; Spooler: warning de impresora antes de deshabilitar; Restore point: detectar cooldown 24hr con Get-ComputerRestorePoint; Bootstrap-Tools.ps1: detección de OS para URL de Sophia (W10 vs W11)
+- **08-01: Safety & Correctness** — Admin elevation check en startup; Spooler: warning de impresora antes de deshabilitar; Restore point: detectar cooldown 24hr con Get-ComputerRestorePoint
 - **08-02: UX & Async** — Cache de queries CIM en `$script:` (primer load); Apps Win32+UWP: mover a async; Cleanup preview: mover scan a async con spinner; Maintenance: capturar output de DISM/SFC, mostrar exit code + ruta CBS.log; Wait-ToolkitJobs: surfacear errores de jobs fallidos
 - **08-03: Launch.ps1 Hardening** — Reemplazar `[System.Net.WebClient]` con `Invoke-WebRequest`; pre-flight check para placeholder `TU_USUARIO/TU_REPO` con mensaje de setup claro
 
