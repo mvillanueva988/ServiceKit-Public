@@ -24,20 +24,31 @@ function Get-InstalledWin32Apps {
 
     foreach ($path in $regPaths) {
         foreach ($item in @(Get-ItemProperty -Path $path -ErrorAction SilentlyContinue)) {
+            # Acceso seguro a propiedades opcionales del registro (StrictMode-safe)
+            $pDN  = $item.PSObject.Properties['DisplayName']
+            $pSC  = $item.PSObject.Properties['SystemComponent']
+            $pPKN = $item.PSObject.Properties['ParentKeyName']
+
             # Excluir: sin nombre, componentes del sistema, sub-entradas de padre visible
-            if ([string]::IsNullOrWhiteSpace($item.DisplayName))          { continue }
-            if ($item.SystemComponent -eq 1)                               { continue }
-            if (-not [string]::IsNullOrWhiteSpace($item.ParentKeyName))   { continue }
-            if (-not $seen.Add($item.DisplayName.Trim()))                  { continue }  # dedup
+            if ($null -eq $pDN  -or [string]::IsNullOrWhiteSpace($pDN.Value))             { continue }
+            if ($null -ne $pSC  -and $pSC.Value -eq 1)                                    { continue }
+            if ($null -ne $pPKN -and -not [string]::IsNullOrWhiteSpace($pPKN.Value))      { continue }
+            if (-not $seen.Add(([string] $pDN.Value).Trim()))                              { continue }  # dedup
+
+            $pDV  = $item.PSObject.Properties['DisplayVersion']
+            $pPub = $item.PSObject.Properties['Publisher']
+            $pUS  = $item.PSObject.Properties['UninstallString']
+            $pQUS = $item.PSObject.Properties['QuietUninstallString']
+            $pES  = $item.PSObject.Properties['EstimatedSize']
 
             $list.Add([PSCustomObject]@{
-                Name                 = [string] $item.DisplayName.Trim()
-                Version              = [string] $item.DisplayVersion
-                Publisher            = [string] $item.Publisher
-                UninstallString      = [string] $item.UninstallString
-                QuietUninstallString = [string] $item.QuietUninstallString
-                SizeMB               = if ($item.EstimatedSize -gt 0) {
-                                           [math]::Round($item.EstimatedSize / 1024.0, 0)
+                Name                 = [string] (([string] $pDN.Value).Trim())
+                Version              = if ($null -ne $pDV)  { [string] $pDV.Value  } else { '' }
+                Publisher            = if ($null -ne $pPub) { [string] $pPub.Value } else { '' }
+                UninstallString      = if ($null -ne $pUS)  { [string] $pUS.Value  } else { '' }
+                QuietUninstallString = if ($null -ne $pQUS) { [string] $pQUS.Value } else { '' }
+                SizeMB               = if ($null -ne $pES -and $pES.Value -gt 0) {
+                                           [math]::Round($pES.Value / 1024.0, 0)
                                        } else { $null }
             })
         }

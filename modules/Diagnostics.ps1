@@ -41,13 +41,23 @@ function Get-BsodHistory {
                 6008 { 'Apagado abrupto detectado' }
             }
 
-            # Para EventID 1001 extraer el Stop Code del mensaje si está presente
+            # Para EventID 1001 extraer el Stop Code — primero via Properties (locale-independent),
+            # luego regex sobre Message como fallback
             [string] $detail = ''
             if ($ev.Id -eq 1001) {
-                $msg = $ev.Message
-                if ($msg -match '(?i)bugcheck.*?0x[0-9a-f]+') {
-                    $detail = $Matches[0] -replace '[\r\n]+', ' '
-                } elseif ($msg -match '0x[0-9A-Fa-f]{8}') {
+                try {
+                    foreach ($p in $ev.Properties) {
+                        $raw = $p.Value
+                        if ($raw -is [long] -or $raw -is [int] -or $raw -is [uint32] -or $raw -is [uint64]) {
+                            [long] $val = [long] $raw
+                            if ($val -gt 0 -and $val -le 0xFFFFFFFFFFFF) {
+                                $detail = '0x{0:X8}' -f $val
+                                break
+                            }
+                        }
+                    }
+                } catch { }
+                if ([string]::IsNullOrEmpty($detail) -and $ev.Message -match '0x[0-9A-Fa-f]{8,16}') {
                     $detail = $Matches[0]
                 }
             }
