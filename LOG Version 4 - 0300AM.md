@@ -147,4 +147,27 @@ Agregado `tools/bin/` para excluir binarios descargados del repo.
 
 ---
 
-*03:00 — 10/3/2026*
+---
+
+## Correcciones post-testeo (VM)
+
+Descubiertas al correr el toolkit desde la carpeta compartida de VirtualBox (`\\VBOXSVR\Toolkit`).
+
+### `Run.bat` — DOS fixes
+
+| Problema | Causa | Fix |
+|----------|-------|-----|
+| `CMD.EXE` no soporta rutas UNC como directorio actual | `cd /d` no funciona con `\\servidor\carpeta` | Reemplazado por `pushd` — asigna letra de unidad temporal automáticamente |
+| `main.ps1` no encontrado (`-File "main.ps1"`) | Al lanzar PowerShell desde una ruta UNC, `$PSScriptRoot` resuelve mal | Cambiado a `-File "%CD%\main.ps1"` — `%CD%` post-`pushd` es la letra de unidad mapeada |
+
+### `main.ps1` — Loader robustecido
+
+| Problema | Causa | Fix |
+|----------|-------|-----|
+| `Start-PerformanceProcess` no reconocida | Variable de iteración `$script` colisionaba con el scope `$script:` de PowerShell, abortando el dot-source | Renombrada a `$moduleScript` |
+| Errores de carga silenciosos | Sin try/catch, un módulo que falla aborta todos los siguientes | Cada dot-source envuelto en try/catch independiente |
+| Sin visibilidad de errores de carga | — | Errores acumulados en `$script:_loadErrors` y mostrados en el header del menú |
+
+---
+
+*10/3/2026*

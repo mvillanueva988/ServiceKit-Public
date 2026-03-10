@@ -1,11 +1,13 @@
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 
+[System.Collections.Generic.List[string]] $script:_loadErrors = [System.Collections.Generic.List[string]]::new()
 foreach ($folder in @('core', 'utils', 'modules')) {
     $folderPath = Join-Path $PSScriptRoot $folder
     $scripts = Get-ChildItem -Path $folderPath -Filter '*.ps1' -File -ErrorAction SilentlyContinue
-    foreach ($script in $scripts) {
-        . $script.FullName
+    foreach ($moduleScript in $scripts) {
+        try   { . $moduleScript.FullName }
+        catch { $script:_loadErrors.Add("$($moduleScript.Name): $($_.Exception.Message)") }
     }
 }
 
@@ -15,6 +17,14 @@ function Show-MainMenu {
         Write-Host '================================================' -ForegroundColor DarkCyan
         Write-Host '        PC OPTIMIZACION TOOLKIT                 ' -ForegroundColor Cyan
         Write-Host '================================================' -ForegroundColor DarkCyan
+
+        if ($script:_loadErrors.Count -gt 0) {
+            Write-Host '  [!] Errores al cargar modulos:' -ForegroundColor Red
+            foreach ($e in $script:_loadErrors) {
+                Write-Host "      $e" -ForegroundColor Red
+            }
+            Write-Host ''
+        }
 
         $regKey      = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
         [string]$osInfo = if ($regKey) {
