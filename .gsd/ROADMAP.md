@@ -9,7 +9,7 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
 - [x] **Phase 1: Core Toolkit** — Motor asíncrono + todos los módulos funcionales (sesiones 1-5)
 - [x] **Phase 2: Privacy Module** — 3 perfiles nativos (Basic/Medium/Aggressive) via registro Windows
 - [x] **Phase 3: Polish & Production** — manifest v3 (15 herramientas), oldscripts eliminado, out-of-scope documentado
-- [ ] **Phase 4: Compatibility Qualification** — Calificación de dinamismo: W10/W11, Home/Pro/LTSC, x86/x64, GPU families, hardware tiers
+- [x] **Phase 4: Compatibility Qualification** — 7 guards en Telemetry.ps1 + COMPATIBILITY.md
 - [ ] **Phase 5: Portable Executable** — Distribución como `.exe` standalone, sin dependencias externas, sin artifacts de desarrollo
 
 ---
@@ -103,16 +103,36 @@ Plans:
 | 1. Core Toolkit | 4/4 | ✅ Complete | 2026-03-10 |
 | 2. Privacy Module | 1/1 | ✅ Complete | 2026-03-10 |
 | 3. Polish & Production | 1/1 | ✅ Complete | 2026-03-10 |
-| 4. Compatibility Qualification | 0/? | 🔜 Pending | — |
+| 4. Compatibility Qualification | 1/1 | ✅ Complete | 2026-03-10 |
 | 5. Portable Executable | 0/? | 🔜 Pending | — |
 
 **Overall:** 6/? plans complete — Fases 1-3 cerradas.
 
 ---
 
+---
+
+### Phase 4: Compatibility Qualification ✅ COMPLETE
+
+**Goal**: Calificar qué tan dinámico es el script frente a diferentes entornos. El toolkit debe ejecutarse sin crashes ni errores falsos en cualquier variante soportada de Windows, y degradar gracefully las funciones no disponibles.
+**Depends on**: Phase 3
+**Completed**: 2026-03-10
+
+**What was built:**
+- `modules/Telemetry.ps1` — 7 guards de compatibilidad en `Get-SystemSnapshot`: Win32_Processor, Win32_VideoController, Win32_ComputerSystem, Win32_PhysicalMemory, Get-PhysicalDisk, Win32_SystemEnclosure, Win32_OperatingSystem — todos con `-ErrorAction SilentlyContinue` + fallback a valores vacíos/cero
+- `COMPATIBILITY.md` — Matriz completa feature × edición (Home/Pro/LTSC) × arquitectura (x64/x86/ARM64) + sección Out of Scope
+
+**Plans**: 1 plan
+
+Plans:
+
+- [x] 04-01: Compatibility guards + matriz de compatibilidad
+
+---
+
 ## Phase Details (Pending)
 
-### Phase 4: Compatibility Qualification 🔜
+### Phase 5: Portable Executable 🔜
 
 **Goal**: Calificar qué tan dinámico es el script frente a diferentes entornos. El toolkit debe ejecutarse sin crashes ni errores falsos en cualquier variante soportada de Windows, y degradar gracefully las funciones no disponibles.
 
