@@ -10,12 +10,15 @@ Set-StrictMode -Version Latest
 [string] $toolsBinSrc = Join-Path $InstallPath 'tools\bin'
 [string] $toolsBinBak = Join-Path $env:TEMP   'PCTk-toolsbin-backup'
 
+# Forzar TLS 1.2 antes de cualquier llamada de red (Windows 7/8 defaultean a TLS 1.0)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 function Invoke-Launch {
     # ── Intentar descarga desde GitHub Releases ───────────────────────────────
     [string] $downloadUrl = ''
     try {
         [string] $apiUrl  = "https://api.github.com/repos/$GitHubRepo/releases/latest"
-        $release          = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -UserAgent 'PCTk-Launcher' -ErrorAction Stop
+        $release          = Invoke-RestMethod -Uri $apiUrl -UserAgent 'PCTk-Launcher' -ErrorAction Stop
         $asset            = $release.assets | Where-Object { $_.name -like '*.zip' } | Select-Object -First 1
         if ($null -eq $asset) { throw 'No ZIP asset found in latest release.' }
         $downloadUrl      = $asset.browser_download_url
@@ -36,8 +39,9 @@ function Invoke-Launch {
     # ── Descargar ZIP ─────────────────────────────────────────────────────────
     Write-Host '  Descargando toolkit...' -ForegroundColor Cyan
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        [System.Net.WebClient]::new().DownloadFile($downloadUrl, $zipDest)
+        $wc = [System.Net.WebClient]::new()
+        try   { $wc.DownloadFile($downloadUrl, $zipDest) }
+        finally { $wc.Dispose() }
     }
     catch {
         Write-Host "  [!] Error al descargar: $($_.Exception.Message)" -ForegroundColor Red
