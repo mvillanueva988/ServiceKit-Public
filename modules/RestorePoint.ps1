@@ -6,6 +6,18 @@ function New-RestorePoint {
 
     Enable-ComputerRestore -Drive 'C:\' -ErrorAction SilentlyContinue
 
+    [object[]] $existing = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue)
+    if ($existing.Count -gt 0) {
+        $latest = $existing | Sort-Object -Property CreationTime -Descending | Select-Object -First 1
+        [datetime] $latestTime = [Management.ManagementDateTimeConverter]::ToDateTime($latest.CreationTime)
+        if (([datetime]::Now - $latestTime).TotalHours -lt 24) {
+            return [PSCustomObject]@{
+                Success = [bool] $false
+                Reason  = [string] 'Cooldown activo: el ultimo punto de restauracion fue creado hace menos de 24 horas. Windows no permite crear otro.'
+            }
+        }
+    }
+
     try {
         Checkpoint-Computer -Description 'Toolkit Pre-Service' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
 
