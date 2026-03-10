@@ -1,18 +1,46 @@
 {
-    "version": 1,
+    "version": 2,
     "comment": "Cada herramienta define su URL oficial de descarga y SHA-256 esperado. Ejecutar Bootstrap-Tools.ps1 para descargar y verificar.",
     "tools": [
         {
             "name": "autoruns",
-            "description": "Sysinternals Autoruns - muestra todos los programas configurados para arranque automatico",
+            "description": "Sysinternals Autoruns GUI - todos los puntos de arranque del sistema",
             "filename": "Autoruns.exe",
+            "launchExe": "Autoruns.exe",
             "url": "https://live.sysinternals.com/Autoruns.exe",
+            "sha256": ""
+        },
+        {
+            "name": "autorunsc",
+            "description": "Sysinternals Autorunsc CLI - exporta arranques en CSV, parseable por scripts",
+            "filename": "autorunsc.exe",
+            "launchExe": "autorunsc.exe",
+            "url": "https://live.sysinternals.com/autorunsc.exe",
+            "sha256": ""
+        },
+        {
+            "name": "shutup10",
+            "description": "O&O ShutUp10++ - aplica perfiles de privacidad y tweaks de Windows",
+            "filename": "OOSU10.exe",
+            "launchExe": "OOSU10.exe",
+            "url": "https://dl5.oo-software.com/files/ooshutup10/OOSU10.exe",
+            "sha256": ""
+        },
+        {
+            "name": "bcu",
+            "description": "BCUninstaller - desinstalador masivo con deteccion de leftovers (~370 MB)",
+            "filename": "BCUninstaller_portable.zip",
+            "launchExe": "BCUninstaller\\BCUninstaller.exe",
+            "type": "zip",
+            "extractDir": "BCUninstaller",
+            "url": "https://github.com/Klocman/Bulk-Crap-Uninstaller/releases/download/v5.7/BCUninstaller_5.7_portable.zip",
             "sha256": ""
         },
         {
             "name": "procmon",
             "description": "Sysinternals Process Monitor - monitoreo de actividad del sistema en tiempo real",
             "filename": "Procmon.exe",
+            "launchExe": "Procmon.exe",
             "url": "https://live.sysinternals.com/Procmon.exe",
             "sha256": ""
         },
@@ -20,6 +48,7 @@
             "name": "procexp",
             "description": "Sysinternals Process Explorer - administrador de tareas avanzado",
             "filename": "procexp.exe",
+            "launchExe": "procexp.exe",
             "url": "https://live.sysinternals.com/procexp.exe",
             "sha256": ""
         },
@@ -27,6 +56,7 @@
             "name": "tcpview",
             "description": "Sysinternals TCPView - conexiones de red activas con detalle de proceso",
             "filename": "Tcpview.exe",
+            "launchExe": "Tcpview.exe",
             "url": "https://live.sysinternals.com/Tcpview.exe",
             "sha256": ""
         }
