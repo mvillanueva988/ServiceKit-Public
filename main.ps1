@@ -187,6 +187,9 @@ function Show-MainMenu {
                     Write-Host ('{0,-10} ' -f $svc.Status) -NoNewline -ForegroundColor $statusColor
                     Write-Host ('{0,-8} ' -f $svc.Risk)   -NoNewline -ForegroundColor $riskColor
                     Write-Host $svc.Desc
+                    if ($svc.Name -eq 'Spooler') {
+                        Write-Host '  [!] Deshabilitar Spooler elimina la capacidad de imprimir (local y red)' -ForegroundColor Yellow
+                    }
                 }
                 Write-Host ''
 
