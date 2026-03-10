@@ -912,13 +912,26 @@ function Show-MainMenu {
                     [int] $installedCount = @($toolRows | Where-Object { $_.Installed }).Count
                     Write-Host ('  {0}/{1} herramientas descargadas.' -f $installedCount, $toolRows.Count) -ForegroundColor DarkGray
                     Write-Host ''
-                    Write-Host ('  {0,-6} {1,-4} {2,-16} {3}' -f 'Estado', '#', 'Nombre', 'Descripcion') -ForegroundColor DarkCyan
-                    Write-Host ('  {0}' -f ('-' * 74)) -ForegroundColor DarkCyan
+                    Write-Host ('  {0,-6} {1,-4} {2,-12} {3,-16} {4,-7} {5}' -f 'Estado', '#', 'Categoria', 'Nombre', 'Peso', 'Descripcion corta') -ForegroundColor DarkCyan
+                    Write-Host ('  {0}' -f ('-' * 90)) -ForegroundColor DarkCyan
 
+                    [string] $lastCat = ''
                     foreach ($row in $toolRows) {
+                        [string] $cat = if ($row.Tool.PSObject.Properties['category']) { $row.Tool.category } else { '---' }
+                        if ($cat -ne $lastCat) {
+                            if ($lastCat -ne '') { Write-Host '' }
+                            $lastCat = $cat
+                        }
                         [string] $icon  = if ($row.Installed) { '[OK] ' } else { '[--] ' }
                         [string] $color = if ($row.Installed) { 'Green' } else { 'DarkGray' }
-                        Write-Host ('  {0,-6} {1,-4} {2,-16} {3}' -f $icon, $row.Index, $row.Tool.name, $row.Tool.description) -ForegroundColor $color
+                        [string] $sizeStr = if ($row.Tool.PSObject.Properties['approxSizeMB'] -and $row.Tool.approxSizeMB) {
+                            '~{0}MB' -f $row.Tool.approxSizeMB
+                        } else { '---' }
+                        # Descripcion corta: hasta el primer guion largo
+                        [string] $fullDesc = $row.Tool.description
+                        [string] $shortDesc = if ($fullDesc -match '^([^-]+)-') { $Matches[1].Trim() } else { $fullDesc }
+                        if ($shortDesc.Length -gt 48) { $shortDesc = $shortDesc.Substring(0, 46) + '...' }
+                        Write-Host ('  {0,-6} {1,-4} {2,-12} {3,-16} {4,-7} {5}' -f $icon, $row.Index, $cat, $row.Tool.name, $sizeStr, $shortDesc) -ForegroundColor $color
                     }
 
                     Write-Host ''
