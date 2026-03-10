@@ -293,12 +293,38 @@ function Show-MainMenu {
                 $job    = Start-MaintenanceProcess
                 $result = Wait-ToolkitJobs -Jobs @($job)
 
-                [string]$dismStatus = if ($result.DismExitCode -eq 0) { 'Exito' } else { 'Error (codigo {0})' -f $result.DismExitCode }
-                [string]$sfcStatus  = if ($result.SfcExitCode  -eq 0) { 'Exito' } else { 'Error (codigo {0})' -f $result.SfcExitCode  }
+                [string]$dismStatus = switch ($result.DismExitCode) {
+                    0   { 'Exito' }
+                    87  { 'Error 87 — parametro invalido (puede requerir fuente de actualizacion de Windows)' }
+                    default { 'Error (codigo {0})' -f $result.DismExitCode }
+                }
+                [string]$sfcStatus  = if ($result.SfcExitCode -eq 0) { 'Exito' } else { 'Error (codigo {0})' -f $result.SfcExitCode }
 
                 Write-Host ("  DISM RestoreHealth : {0}" -f $dismStatus) -ForegroundColor $(if ($result.DismExitCode -eq 0) { 'Green' } else { 'Red' })
-                Write-Host ("  SFC /scannow       : {0}" -f $sfcStatus)  -ForegroundColor $(if ($result.SfcExitCode  -eq 0) { 'Green' } else { 'Red' })
-                Write-Host "`n  Para ver detalles del SFC, revisa: C:\Windows\Logs\CBS\CBS.log" -ForegroundColor DarkGray
+                Write-Host ("  SFC /scannow       : {0}" -f $sfcStatus)  -ForegroundColor $(if ($result.SfcExitCode -eq 0) { 'Green' } else { 'Red' })
+
+                if ($result.DismExitCode -ne 0) {
+                    [object[]] $dismKeyLines = @($result.DismOutput | Where-Object { [string]$_ -match 'Error|Warning' } | Select-Object -First 5)
+                    if ($dismKeyLines.Count -gt 0) {
+                        Write-Host ''
+                        Write-Host '  Detalles DISM:' -ForegroundColor DarkCyan
+                        foreach ($line in $dismKeyLines) {
+                            Write-Host ("    {0}" -f ([string]$line).Trim()) -ForegroundColor DarkYellow
+                        }
+                    }
+                }
+                if ($result.SfcExitCode -ne 0) {
+                    [object[]] $sfcKeyLines = @($result.SfcOutput | Where-Object { [string]$_ -match 'Error|Warning' } | Select-Object -First 5)
+                    if ($sfcKeyLines.Count -gt 0) {
+                        Write-Host ''
+                        Write-Host '  Detalles SFC:' -ForegroundColor DarkCyan
+                        foreach ($line in $sfcKeyLines) {
+                            Write-Host ("    {0}" -f ([string]$line).Trim()) -ForegroundColor DarkYellow
+                        }
+                    }
+                }
+                Write-Host ''
+                Write-Host '  Revisa C:\Windows\Logs\CBS\CBS.log para detalles completos.' -ForegroundColor DarkGray
                 Write-Host ''
                 Read-Host '  [Enter] para continuar' | Out-Null
             }
