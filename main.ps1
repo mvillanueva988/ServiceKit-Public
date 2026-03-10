@@ -191,12 +191,14 @@ function Show-MainMenu {
 
                 if ($preview.Folders.Count -eq 0) {
                     Write-Host '  No se encontro basura que limpiar.' -ForegroundColor DarkYellow
+                    Write-Host ''
+                    Read-Host '  [Enter] para continuar' | Out-Null
                     break
                 }
 
                 Write-Host ''
-                Write-Host ('  {0,-30} {1,10}' -f 'Carpeta', 'Tamanio') -ForegroundColor DarkCyan
-                Write-Host ('  {0}' -f ('-' * 43)) -ForegroundColor DarkCyan
+                Write-Host ('  {0,-36} {1,10}' -f 'Carpeta', 'Tamanio') -ForegroundColor DarkCyan
+                Write-Host ('  {0}' -f ('-' * 50)) -ForegroundColor DarkCyan
                 foreach ($row in $preview.Folders) {
                     [string] $sizeLabel = if ($row.SizeMB -ge 1024) {
                         '{0:N2} GB' -f ($row.SizeBytes / 1GB)
@@ -231,6 +233,8 @@ function Show-MainMenu {
                 if ($result.SoftErrors -gt 0) {
                     Write-Host ("  Advertencias      : {0} archivo(s) en uso o sin acceso." -f $result.SoftErrors) -ForegroundColor Yellow
                 }
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '3' {
                 Write-Host "`n  Iniciando mantenimiento del sistema (puede tardar varios minutos)..." -ForegroundColor Cyan
