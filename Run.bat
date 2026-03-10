@@ -16,7 +16,9 @@ if %errorLevel% == 0 (
 
 :ejecutar
 :: 2. Forzar a que la consola se posicione exactamente donde esta el .bat
-cd /d "%~dp0"
+:: pushd maneja rutas UNC (ej: \\VBOXSVR\Toolkit) mapeandolas a una letra temporal
+pushd "%~dp0"
 
 :: 3. Lanzar el frontend esquivando la Execution Policy
-powershell -NoProfile -ExecutionPolicy Bypass -File "main.ps1"
+:: %CD% usa la letra de unidad asignada por pushd (evita que $PSScriptRoot resuelva a UNC)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%CD%\main.ps1"
