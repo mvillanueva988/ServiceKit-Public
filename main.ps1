@@ -74,9 +74,9 @@ function Show-MainMenu {
         Write-Host '  [12] Apps Win32 + UWP'
         Write-Host '       Lista programas clasicos instalados (navegadores, juegos, drivers).' -ForegroundColor DarkGray
         Write-Host '       Desinstalacion MSI silenciosa cuando es posible. Tambien apps Store.' -ForegroundColor DarkGray
-        Write-Host '  [13] Privacidad (ShutUp10++)'
-        Write-Host '       Abre O&O ShutUp10++ para configurar tweaks de privacidad manualmente.' -ForegroundColor DarkGray
-        Write-Host '       Requiere descarga previa desde [T] Herramientas.' -ForegroundColor DarkGray
+        Write-Host '  [13] Privacidad'
+        Write-Host '       Perfiles Basic / Medio / Agresivo via registro. Sin dependencias externas.' -ForegroundColor DarkGray
+        Write-Host '       ShutUp10++ disponible como opcion avanzada en el sub-menu.' -ForegroundColor DarkGray
         Write-Host '  [14] Inicio del Sistema'
         Write-Host '       Lista entradas Run/RunOnce del registro y carpetas de Startup.' -ForegroundColor DarkGray
         Write-Host '       Deshabilita/habilita por indice. Abre Autoruns GUI para auditoria completa.' -ForegroundColor DarkGray
@@ -688,17 +688,85 @@ function Show-MainMenu {
                 }
             }
             '13' {
-                [bool] $ooAvailable = Test-ShutUp10Available
-                if (-not $ooAvailable) {
+                :privacyLoop while ($true) {
+                    Clear-Host
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+                    Write-Host '        PRIVACIDAD                              ' -ForegroundColor Cyan
+                    Write-Host '================================================' -ForegroundColor DarkCyan
                     Write-Host ''
-                    Write-Host '  [!] ShutUp10++ no esta descargado.' -ForegroundColor Yellow
-                    Write-Host '      Ve a [T] Herramientas -> [D] shutup10 para descargarlo.' -ForegroundColor DarkGray
-                } else {
-                    $r = Open-ShutUp10
-                    if ($r.Success) {
-                        Write-Host '  Abriendo O&O ShutUp10++...' -ForegroundColor Cyan
-                    } else {
-                        Write-Host ("  [!] Error: {0}" -f $r.Error) -ForegroundColor Red
+                    Write-Host '  Tweaks via registro de Windows. Sin dependencias externas.' -ForegroundColor DarkGray
+                    Write-Host '  Los cambios son permanentes hasta revertirlos manualmente.' -ForegroundColor DarkGray
+                    Write-Host ''
+                    Write-Host '  [1]  Basico'
+                    Write-Host '       Telemetria, Advertising ID, Bing en Start, Feedback, Activity Feed.' -ForegroundColor DarkGray
+                    Write-Host '  [2]  Medio' -ForegroundColor Yellow
+                    Write-Host '       Basico + ubicacion global, experiencias personalizadas,' -ForegroundColor DarkGray
+                    Write-Host '       sugerencias de inicio, apps silenciosas de MS, mapas.' -ForegroundColor DarkGray
+                    Write-Host '  [3]  Agresivo' -ForegroundColor Red
+                    Write-Host '       Medio + OneDrive (policy), Edge startup/background,' -ForegroundColor DarkGray
+                    Write-Host '       consumer features, tips, Error Reporting.' -ForegroundColor DarkGray
+                    Write-Host ''
+                    Write-Host '  [T]  Abrir ShutUp10++ GUI (200+ tweaks avanzados)' -ForegroundColor DarkGray
+                    Write-Host '       Requiere descarga previa desde [T] Herramientas.' -ForegroundColor DarkGray
+                    Write-Host '  [q]  Volver'
+                    Write-Host ''
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+
+                    [string] $privChoice = (Read-Host '  Selecciona un perfil').Trim().ToLower()
+
+                    switch ($privChoice) {
+                        { $_ -in '1', '2', '3' } {
+                            [string] $profileName = switch ($_) {
+                                '1' { 'Basic'      }
+                                '2' { 'Medium'     }
+                                '3' { 'Aggressive' }
+                            }
+                            [string] $profileLabel = switch ($_) {
+                                '1' { 'Basico'   }
+                                '2' { 'Medio'    }
+                                '3' { 'Agresivo' }
+                            }
+
+                            Write-Host ''
+                            Write-Host ("  Aplicando perfil {0}..." -f $profileLabel) -ForegroundColor Cyan
+
+                            [System.Management.Automation.Job] $job    = Start-PrivacyJob -Profile $profileName
+                            [PSCustomObject]                   $result = Wait-ToolkitJobs -Jobs @($job)
+
+                            Write-Host ''
+                            Write-Host ("  Perfil aplicado : {0}" -f $result.Profile) -ForegroundColor Cyan
+                            Write-Host ("  Tweaks aplicados: {0}" -f $result.Applied.Count) -ForegroundColor Green
+                            foreach ($item in $result.Applied) {
+                                Write-Host ("    + {0}" -f $item) -ForegroundColor DarkGray
+                            }
+                            if ($result.Errors.Count -gt 0) {
+                                Write-Host ("  Errores         : {0}" -f $result.Errors.Count) -ForegroundColor Yellow
+                                foreach ($err in $result.Errors) {
+                                    Write-Host ("    - {0}" -f $err) -ForegroundColor DarkYellow
+                                }
+                            }
+                            Write-Host ''
+                            Read-Host '  [Enter] para continuar' | Out-Null
+                            break privacyLoop
+                        }
+                        't' {
+                            [bool] $ooAvailable = Test-ShutUp10Available
+                            if (-not $ooAvailable) {
+                                Write-Host ''
+                                Write-Host '  [!] ShutUp10++ no esta descargado.' -ForegroundColor Yellow
+                                Write-Host '      Ve a [T] Herramientas y descarga shutup10.' -ForegroundColor DarkGray
+                                Write-Host ''
+                            } else {
+                                $r = Open-ShutUp10
+                                if ($r.Success) {
+                                    Write-Host '  Abriendo O&O ShutUp10++...' -ForegroundColor Cyan
+                                } else {
+                                    Write-Host ("  [!] Error: {0}" -f $r.Error) -ForegroundColor Red
+                                }
+                            }
+                        }
+                        'q'     { break privacyLoop }
+                        default { }
                     }
                 }
             }
