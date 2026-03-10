@@ -106,3 +106,83 @@ Optimize-Network -AdapterNames `$AdapterNames
 
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'NetworkOptimization' -ArgumentList $argList
 }
+
+function Get-NetworkDiagnostics {
+    <#
+    .SYNOPSIS
+        Recopila diagnóstico de red: TCP AutoTuning, adaptadores activos, DNS IPv4, latencia.
+        Retorna PSCustomObject con TcpAutoTuning, Adapters, DnsServers, PingMs.
+    #>
+    [CmdletBinding()]
+    param()
+
+    # -- TCP AutoTuning --
+    [string] $tcpTuning = 'desconocido'
+    $tcpSetting = Get-NetTCPSetting -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -ne $tcpSetting -and $null -ne $tcpSetting.AutoTuningLevelLocal) {
+        $tcpTuning = $tcpSetting.AutoTuningLevelLocal.ToString()
+    } else {
+        # Fallback: parsear netsh int tcp show global
+        [string] $netshOut = ((& netsh int tcp show global 2>&1) -join "`n")
+        if ($netshOut -match 'Receive Window Auto-Tuning Level\s*:\s*(\S+)') {
+            $tcpTuning = $Matches[1]
+        }
+    }
+
+    # -- Adaptadores activos --
+    [object[]] $adapters = @(
+        Get-NetAdapter -ErrorAction SilentlyContinue |
+            Where-Object { $_.Status -eq 'Up' } |
+            ForEach-Object {
+                [PSCustomObject]@{
+                    Name      = [string] $_.Name
+                    LinkSpeed = [string] $_.LinkSpeed
+                    MediaType = [string] $_.PhysicalMediaType
+                }
+            }
+    )
+
+    # -- DNS IPv4 por adaptador --
+    [hashtable] $dnsServers = @{}
+    [object[]] $dnsEntries = @(
+        Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
+            Where-Object { $_.AddressFamily -eq 2 -and $_.ServerAddresses.Count -gt 0 }
+    )
+    foreach ($entry in $dnsEntries) {
+        $dnsServers[$entry.InterfaceAlias] = [string[]] @($entry.ServerAddresses)
+    }
+
+    # -- Latencia a 8.8.8.8 --
+    [int] $pingMs = -1
+    [object[]] $pingResult = @(Test-Connection -ComputerName '8.8.8.8' -Count 2 -ErrorAction SilentlyContinue)
+    if ($pingResult.Count -gt 0) {
+        $pingMs = [int] ($pingResult | Measure-Object -Property ResponseTime -Average).Average
+    }
+
+    return [PSCustomObject]@{
+        TcpAutoTuning = [string]    $tcpTuning
+        Adapters      = [object[]]  $adapters
+        DnsServers    = [hashtable] $dnsServers
+        PingMs        = [int]       $pingMs
+    }
+}
+
+function Start-NetworkDiagnosticsProcess {
+    <#
+    .SYNOPSIS
+        Serializa Get-NetworkDiagnostics y la envía al motor asíncrono mediante Invoke-AsyncToolkitJob.
+        Retorna el objeto Job para su seguimiento con Wait-ToolkitJobs.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $fnBody   = ${Function:Get-NetworkDiagnostics}.ToString()
+    $jobBlock = [scriptblock]::Create(@"
+function Get-NetworkDiagnostics {
+$fnBody
+}
+Get-NetworkDiagnostics
+"@)
+
+    return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'NetworkDiagnostics'
+}
