@@ -6,6 +6,18 @@ Set-StrictMode -Version Latest
 [string] $InstallPath = 'C:\PCTk'
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Pre-flight: validar que el repo fue configurado ───────────────────────────
+if ($GitHubRepo -match 'TU_' -or $GitHubRepo -eq '') {
+    Write-Host ''
+    Write-Host '  [!] Launch.ps1 no esta configurado.' -ForegroundColor Red
+    Write-Host '      Edita Launch.ps1 y reemplaza $GitHubRepo con tu repositorio.' -ForegroundColor DarkGray
+    Write-Host '      Ejemplo: $GitHubRepo = "tu-usuario/pc-toolkit"' -ForegroundColor DarkGray
+    Write-Host ''
+    Read-Host '  Presiona Enter para salir'
+    exit 1
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
 [string] $zipDest     = Join-Path $env:TEMP 'PCTk-update.zip'
 [string] $toolsBinSrc = Join-Path $InstallPath 'tools\bin'
 [string] $toolsBinBak = Join-Path $env:TEMP   'PCTk-toolsbin-backup'
