@@ -9,15 +9,17 @@ function Repair-WindowsSystem {
     [CmdletBinding()]
     param()
 
-    DISM /Online /Cleanup-Image /RestoreHealth *> $null
-    $dismExitCode = $LASTEXITCODE
+    [string[]] $dismOutput = @(& dism.exe /Online /Cleanup-Image /RestoreHealth 2>&1)
+    [int] $dismExitCode    = $LASTEXITCODE
 
-    sfc /scannow *> $null
-    $sfcExitCode = $LASTEXITCODE
+    [string[]] $sfcOutput = @(& sfc.exe /scannow 2>&1)
+    [int] $sfcExitCode    = $LASTEXITCODE
 
     return [PSCustomObject]@{
         DismExitCode = $dismExitCode
+        DismOutput   = $dismOutput
         SfcExitCode  = $sfcExitCode
+        SfcOutput    = $sfcOutput
     }
 }
 
