@@ -910,20 +910,53 @@ function Show-MainMenu {
                     Write-Host ''
 
                     # Fechas de ultima instalacion y revision desde registro
+                    # Path moderno (W10 1903+ / W11): SOFTWARE\Microsoft\WindowsUpdate\UX\Settings
+                    # Path legacy (W10 pre-1903 / LTSC): Auto Update\Results\{Detect|Install}
                     [string] $lastInstall = 'Desconocida'
                     [string] $lastCheck   = 'Desconocida'
                     try {
-                        $regInstall = Get-ItemProperty `
-                            -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install' `
+                        # ── Intento moderno primero ────────────────────────────────────────────
+                        $regUX = Get-ItemProperty `
+                            -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' `
                             -ErrorAction SilentlyContinue
-                        if ($regInstall -and $regInstall.PSObject.Properties['LastSuccessTime']) {
-                            $lastInstall = $regInstall.LastSuccessTime
+
+                        if ($regUX) {
+                            # LastCheckedForUpdates: ISO 8601 string, ej "2026-03-10T14:30:00.0000000Z"
+                            $pCheck = $regUX.PSObject.Properties['LastCheckedForUpdates']
+                            if ($pCheck -and -not [string]::IsNullOrWhiteSpace($pCheck.Value)) {
+                                try {
+                                    $lastCheck = ([datetime]::Parse($pCheck.Value)).ToString('yyyy-MM-dd HH:mm')
+                                } catch { $lastCheck = [string]$pCheck.Value }
+                            }
+
+                            # Ultima instalacion exitosa
+                            foreach ($pName in @('LastSuccessfulInstallTime', 'LastInstallTime')) {
+                                $pInst = $regUX.PSObject.Properties[$pName]
+                                if ($pInst -and -not [string]::IsNullOrWhiteSpace($pInst.Value)) {
+                                    try {
+                                        $lastInstall = ([datetime]::Parse($pInst.Value)).ToString('yyyy-MM-dd HH:mm')
+                                    } catch { $lastInstall = [string]$pInst.Value }
+                                    break
+                                }
+                            }
                         }
-                        $regCheck = Get-ItemProperty `
-                            -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect' `
-                            -ErrorAction SilentlyContinue
-                        if ($regCheck -and $regCheck.PSObject.Properties['LastSuccessTime']) {
-                            $lastCheck = $regCheck.LastSuccessTime
+
+                        # ── Fallback al path legacy si el moderno no retorno datos ────────────
+                        if ($lastInstall -eq 'Desconocida') {
+                            $regInstall = Get-ItemProperty `
+                                -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install' `
+                                -ErrorAction SilentlyContinue
+                            if ($regInstall -and $regInstall.PSObject.Properties['LastSuccessTime']) {
+                                $lastInstall = $regInstall.LastSuccessTime
+                            }
+                        }
+                        if ($lastCheck -eq 'Desconocida') {
+                            $regCheck = Get-ItemProperty `
+                                -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect' `
+                                -ErrorAction SilentlyContinue
+                            if ($regCheck -and $regCheck.PSObject.Properties['LastSuccessTime']) {
+                                $lastCheck = $regCheck.LastSuccessTime
+                            }
                         }
                     } catch { }
 
