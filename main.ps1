@@ -239,7 +239,7 @@ function Show-MainMenu {
             }
             '2' {
                 Write-Host "`n  Escaneando carpetas temporales..." -ForegroundColor Cyan
-                [PSCustomObject] $preview = Get-CleanupPreview
+                [PSCustomObject] $preview = Wait-ToolkitJobs -Jobs @(Start-CleanupPreviewJob)
 
                 if ($preview.Folders.Count -eq 0) {
                     Write-Host '  No se encontro basura que limpiar.' -ForegroundColor DarkYellow

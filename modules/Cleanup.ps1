@@ -208,3 +208,26 @@ Clear-TempFiles
 
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'DiskCleanup'
 }
+
+function Start-CleanupPreviewJob {
+    <#
+    .SYNOPSIS
+        Escanea las rutas de limpieza de forma asíncrona y retorna el preview
+        sin borrar nada.
+    #>
+    [CmdletBinding()]
+    param()
+
+    [string] $fnBodyPaths   = ${Function:_Get-CleanupPaths}.ToString()
+    [string] $fnBodyPreview = ${Function:Get-CleanupPreview}.ToString()
+    [scriptblock] $jobBlock = [scriptblock]::Create(@"
+function _Get-CleanupPaths {
+$fnBodyPaths
+}
+function Get-CleanupPreview {
+$fnBodyPreview
+}
+Get-CleanupPreview
+"@)
+    return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'CleanupPreview'
+}
