@@ -120,6 +120,8 @@ function Show-MainMenu {
         Write-Host '       Autoruns, ShutUp10++, BCUninstaller, Process Monitor, TCPView, etc.' -ForegroundColor DarkGray
         Write-Host '       Descarga bajo demanda con barra de progreso. Lanza directo desde el menu.' -ForegroundColor DarkGray
         Write-Host '  [q]  Salir'
+        Write-Host '  [X]  Limpiar y salir' -ForegroundColor DarkRed
+        Write-Host '       Borra el directorio completo del toolkit de esta PC.' -ForegroundColor DarkGray
         Write-Host ''
         Write-Host '================================================' -ForegroundColor DarkCyan
 
@@ -1081,6 +1083,22 @@ function Show-MainMenu {
             'q' {
                 Write-Host "`n  Hasta luego." -ForegroundColor Gray
                 break mainLoop
+            }
+            'x' {
+                Write-Host ''
+                Write-Host '  [!] Esta accion eliminara el directorio completo del toolkit.' -ForegroundColor Red
+                Write-Host ("      Ruta: {0}" -f $PSScriptRoot) -ForegroundColor DarkGray
+                Write-Host ''
+                [string] $xConfirm = (Read-Host '  Esta seguro? Esta accion es irreversible. [s] Si  [q] Cancelar').Trim().ToLower()
+                if ($xConfirm -ne 's') {
+                    Write-Host "`n  Cancelado." -ForegroundColor DarkGray
+                    break
+                }
+                Write-Host ''
+                Write-Host '  Toolkit eliminado. Hasta la proxima.' -ForegroundColor Cyan
+                Start-Sleep -Milliseconds 1200
+                Start-Process cmd.exe -ArgumentList ("/c timeout /t 1 >nul && rmdir /s /q `"{0}`"" -f $PSScriptRoot) -WindowStyle Hidden
+                exit 0
             }
             't' {
                 [string] $manifestPath = Join-Path $PSScriptRoot 'tools\manifest.json'
