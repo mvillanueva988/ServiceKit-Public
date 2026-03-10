@@ -124,15 +124,59 @@ d098e50  feat: sesion 5 - Apps, StartupManager, Privacy + GSD onboarding
 
 ---
 
+## Sesión de polish post-Phase 3 (2026-03-10, continuación)
+
+> Los siguientes cambios se hicieron en la misma fecha como sesión de pulido antes de arrancar Phase 4.
+
+### Commits involucrados
+- `e4d255a` — checkpoint pre-polish
+- `8e19647` — polish batch principal
+- `f929134` — fix option 2 completeness
+
+### Bugfixes aplicados en esta sesión
+
+#### Apps.ps1 — PropertyNotFoundException bajo StrictMode
+Acceso directo `$item.DisplayName`, `$item.SystemComponent`, etc. lanzaba `PropertyNotFoundException` porque no todas las entradas del registro tienen esas propiedades. Corregido usando `$item.PSObject.Properties['NombrePropiedad']` con check de nulidad explícito. Afectaba las 3 hives: HKLM Uninstall, WOW6432Node, HKCU.
+
+#### StartupManager.ps1 — System.Object[] en columnas Nombre / Ubicación
+El display de la tabla usaba `$se.Name` y `$se.Location` sin forzar cast a `[string]`. PowerShell en ciertas condiciones devuelve `System.Object[]` al serializar propiedades de PSCustomObject en jobs. Corregido con `[string]` explícito en la construcción del objeto.
+
+#### main.ps1 — Opción 15 (Windows Update) — nueva
+Agregada opción `[15] Actualizaciones de Windows`:
+- Lee fechas de última instalación y última búsqueda desde registro (`Auto Update\Results\Install` / `Detect`)
+- Lista últimas 5 KBs via `Win32_QuickFixEngineering`
+- `[Enter]` abre `ms-settings:windowsupdate` directamente
+
+### QoL implementados
+
+#### Cleanup.ps1 — Cache por perfil de usuario (fuente única)
+`_Get-CleanupPaths` refactorizado completamente. Antes: rutas hardcodeadas a `$env:LOCALAPPDATA` del usuario actual únicamente. Ahora:
+- Enumera todos los perfiles del sistema via `Win32_UserProfile` (fallback: `C:\Users\*`)
+- Por cada perfil, detecta todos los subperfiles de cada navegador Chromium: `Default`, `Profile 1`, `Profile 2`... — con sus carpetas `Cache`, `Cache2`, `GPUCache`
+- Soporta Chrome, Edge, Brave, Opera, Opera GX
+- Firefox ya enumeraba perfiles dinámicamente — patrón conservado
+- Fuente única conservada en `_Get-CleanupPaths` (no hay otra definición de paths)
+
+#### main.ps1 — [Enter] para continuar en todas las opciones con resultado
+Antes de este fix, el menú principal se redibujaba inmediatamente tras completar una operación, borrando los resultados de pantalla. Agregado `Read-Host '[Enter] para continuar' | Out-Null` al final de las ops de: opciones 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13.
+
+#### main.ps1 — Confirmación explícita en Privacidad (opción 13)
+Antes de aplicar cualquier perfil (Basic/Medium/Aggressive), se muestra el perfil elegido + advertencia de permanencia y se pide `[s] Aplicar / [q] Cancelar`. Cancelar vuelve al sub-menú sin tocar el registro.
+
+#### main.ps1 — Columna carpeta en preview de limpieza
+Expandida de 30 a 36 caracteres para acomodar labels del tipo `Chrome/Profile 1/Cache (usuario)`.
+
+---
+
 ## Estado del proyecto al cierre
 
 | Dimensión | Estado |
 |-----------|--------|
 | Módulos completos | 13 / 13 |
-| Opciones de menú | 14 + [T] (todos funcionales) |
+| Opciones de menú | 15 + [T] (todos funcionales) |
 | Privacy.ps1 | ✅ 3 perfiles nativos via registro |
 | Herramientas externas | 15 en manifest v3 |
 | oldscripts/ | Eliminado del working tree, en historial git |
-| Fases GSD | Phase 1 ✅ — Phase 2 ✅ — Phase 3 ✅ |
+| Fases GSD | Phase 1 ✅ — Phase 2 ✅ — Phase 3 ✅ — Phase 4 🔲 — Phase 5 🔲 |
 
-**Proyecto: COMPLETO** — todas las fases cerradas.
+**Pendiente:** Phase 4 (Compatibility Qualification) y Phase 5 (Portable Executable).

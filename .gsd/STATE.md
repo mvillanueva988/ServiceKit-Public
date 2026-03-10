@@ -12,7 +12,7 @@ See: .gsd/PROJECT.md (updated 2026-03-10)
 Phase: 4 of 5 (Compatibility Qualification)
 Plan: 0 of ? in current phase
 Status: NOT STARTED
-Last activity: 2026-03-10 ART — Bugfix session: Apps.ps1 PropertyNotFoundStrict (PSObject.Properties safe access), StartupManager.ps1 unary-comma array wrap bug (System.Object[] en nombre/ubicación). Phases 4 y 5 definidas en ROADMAP.
+Last activity: 2026-03-10 ART — Polish batch sesión 7: cache por perfil de usuario en Cleanup.ps1, opción [15] Windows Update, [Enter] pauses en todas las opciones, confirmación explícita en Privacy, fix columna preview. Apps.ps1 y StartupManager.ps1 bugfixes también aplicados esta sesión.
 
 Progress: [██████░░░░] ~60% (6/? plans complete — fases 1-3 cerradas)
 
