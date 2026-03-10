@@ -39,9 +39,7 @@ function Invoke-Launch {
     # ── Descargar ZIP ─────────────────────────────────────────────────────────
     Write-Host '  Descargando toolkit...' -ForegroundColor Cyan
     try {
-        $wc = [System.Net.WebClient]::new()
-        try   { $wc.DownloadFile($downloadUrl, $zipDest) }
-        finally { $wc.Dispose() }
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $zipDest -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
     }
     catch {
         Write-Host "  [!] Error al descargar: $($_.Exception.Message)" -ForegroundColor Red
