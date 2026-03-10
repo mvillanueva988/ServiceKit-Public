@@ -17,16 +17,20 @@ function Get-SystemSnapshot {
     )
 
     # CPU
-    $cpuRaw = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
-    $cpu = [PSCustomObject]@{
-        Name    = [string] $cpuRaw.Name.Trim()
-        Cores   = [int]    $cpuRaw.NumberOfCores
-        Threads = [int]    $cpuRaw.NumberOfLogicalProcessors
+    $cpuRaw = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+    $cpu = if ($cpuRaw) {
+        [PSCustomObject]@{
+            Name    = [string] $cpuRaw.Name.Trim()
+            Cores   = [int]    $cpuRaw.NumberOfCores
+            Threads = [int]    $cpuRaw.NumberOfLogicalProcessors
+        }
+    } else {
+        [PSCustomObject]@{ Name = 'Unknown'; Cores = 0; Threads = 0 }
     }
 
     # GPU — detecta dedicada vs integrada desde el nombre
     $gpus = @(
-        Get-CimInstance -ClassName Win32_VideoController | ForEach-Object {
+        Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object {
             [PSCustomObject]@{
                 Name          = [string] $_.Name
                 Type          = [string] $(if ($_.Name -match 'NVIDIA|GeForce|RTX|GTX|Radeon RX|Radeon VII|Arc') { 'Dedicated' } else { 'Integrated' })
@@ -36,13 +40,12 @@ function Get-SystemSnapshot {
     )
 
     # RAM total
-    $ramTotalGb = [math]::Round(
-        (Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2
-    )
+    $csRaw = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $ramTotalGb = if ($csRaw) { [math]::Round($csRaw.TotalPhysicalMemory / 1GB, 2) } else { [double]0 }
 
     # RAM slots — excluye slots vacios
     $ramSlots = @(
-        Get-CimInstance -ClassName Win32_PhysicalMemory |
+        Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction SilentlyContinue |
             Where-Object { $_.Capacity -gt 0 } |
             ForEach-Object {
                 [PSCustomObject]@{
@@ -56,7 +59,7 @@ function Get-SystemSnapshot {
 
     # Discos físicos + contadores SMART
     $diskList = [System.Collections.Generic.List[PSCustomObject]]::new()
-    foreach ($physDisk in @(Get-PhysicalDisk)) {
+    foreach ($physDisk in @(Get-PhysicalDisk -ErrorAction SilentlyContinue)) {
         $rel      = $physDisk | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
         $tempC    = $null
         $wearPct  = $null
@@ -156,7 +159,8 @@ function Get-SystemSnapshot {
 
     # Batería — solo en laptops (chassis types portátiles)
     [PSCustomObject] $battery = $null
-    [int] $chassisType = (Get-CimInstance -ClassName Win32_SystemEnclosure).ChassisTypes[0]
+    $encRaw = Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction SilentlyContinue
+    [int] $chassisType = if ($encRaw -and $encRaw.ChassisTypes.Count -gt 0) { [int]$encRaw.ChassisTypes[0] } else { 0 }
     if ($chassisType -in @(8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32)) {
         [object] $bat = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue
         if ($bat) {
@@ -208,8 +212,8 @@ function Get-SystemSnapshot {
     } catch { }
 
     # Uptime
-    [object] $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    [double] $uptimeHours = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 1)
+    [object] $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+    [double] $uptimeHours = if ($os) { [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 1) } else { [double]0 }
 
     [bool] $multipleAv = (@($avList | Where-Object { $_.Enabled }).Count -gt 1)
 
