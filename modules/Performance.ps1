@@ -227,9 +227,9 @@ function Set-SystemTweaks {
             if ($ramMb -le 8192) {
                 [string] $svcPath = 'HKLM:\SYSTEM\CurrentControlSet\Control'
                 Set-ItemProperty -Path $svcPath -Name 'SvcHostSplitThresholdInKB' -Value ($ramMb * 1024) -Type DWord
-                $applied.Add("[SET] SvcHostSplitThreshold = ${ramMb}MB (RAM del sistema — reduce procesos svchost.exe)")
+                $applied.Add("[SET] SvcHostSplitThreshold = ${ramMb}MB (RAM del sistema - reduce procesos svchost.exe)")
             } else {
-                $applied.Add("[SKIP] SvcHostSplitThreshold — no necesario con ${ramMb}MB de RAM")
+                $applied.Add("[SKIP] SvcHostSplitThreshold - no necesario con ${ramMb}MB de RAM")
             }
         }
         catch { $errors.Add("SvcHostSplitThreshold: $($_.Exception.Message)") }
