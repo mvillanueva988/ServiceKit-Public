@@ -16,6 +16,8 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
   - [ ] 06-01-PLAN.md — Get-NetworkDiagnostics + opción [d] en menú
   - [ ] 06-02-PLAN.md — Verificación post-apply + UI con conteo de propiedades
 - [ ] **Phase 7: Auto-Cleanup / Self-Removal** — Opción para borrar o desaparecer el toolkit de una PC ajena al terminar el trabajo
+- [ ] **Phase 8: Codebase Polish** — Bugs críticos, fixes de UX/async y hardening de Launch.ps1 identificados en auditoría de código
+- [ ] **Phase 9: Deployment** — GitHub release, flujo de distribución, validación end-to-end del bootstrap
 
 ---
 
@@ -202,10 +204,46 @@ Plans:
 
 **Goal**: Mecanismo para que el toolkit desaparezca limpiamente de una PC ajena al terminar el trabajo.
 
-**Options to evaluate:**
-- `[X] Limpiar y salir` — opción en el menú principal que borra la carpeta del toolkit, limpia Recent Files, vacía Recycle Bin
-- **Self-destruct on exit** — cuando se combine con Phase 5 (EXE), el exe puede borrarse a sí mismo al salir (`cmd /c del exePath` en detached process)
-- **Ruta manual conocida** — instrucción en README de copiar a `C:\Toolkit` para borrado manual rápido
-- **No-trace mode** — no crear archivos de log, no crear output/, ejecutar todo en memoria
+**Decided:**
+- `[X] Limpiar y salir` en el menú principal con confirmación explícita
+- Borra el directorio completo via `$PSScriptRoot` (sin logs)
+- Muestra mensaje de confirmación antes de cerrar
+- Self-destruct EXE → diferido a fase futura
+- No-trace mode → diferido a fase futura
 
-**Depends on**: Phase 5 (para la variante EXE self-destruct)
+**Depends on**: Phase 6
+
+---
+
+### Phase 8: Codebase Polish 🔜
+
+**Goal**: Resolver bugs críticos, mejorar UX async y hardening de Launch.ps1 identificados en auditoría CONCERNS.md.
+
+**Plan structure:**
+
+- **08-01: Safety & Correctness** — Admin elevation check en startup; Spooler: warning de impresora antes de deshabilitar; Restore point: detectar cooldown 24hr con Get-ComputerRestorePoint; Bootstrap-Tools.ps1: detección de OS para URL de Sophia (W10 vs W11)
+- **08-02: UX & Async** — Cache de queries CIM en `$script:` (primer load); Apps Win32+UWP: mover a async; Cleanup preview: mover scan a async con spinner; Maintenance: capturar output de DISM/SFC, mostrar exit code + ruta CBS.log; Wait-ToolkitJobs: surfacear errores de jobs fallidos
+- **08-03: Launch.ps1 Hardening** — Reemplazar `[System.Net.WebClient]` con `Invoke-WebRequest`; pre-flight check para placeholder `TU_USUARIO/TU_REPO` con mensaje de setup claro
+
+**Out of scope (consciente):**
+- Refactor main.ps1 god file → riesgo alto, no aporta funcionalidad (issue cosmético/arquitectónico)
+- Job serialization anti-pattern → refactor masivo, alto riesgo de regresión
+- SHA-256 en manifest → ya documentado como out-of-scope en PROJECT.md
+- Test coverage → no hay framework de tests en el proyecto
+
+**Depends on**: Phase 7
+
+---
+
+### Phase 9: Deployment 🔜
+
+**Goal**: Publicar el toolkit en GitHub, validar el flujo de distribución end-to-end (descarga → descomprime → ejecuta).
+
+**Plan structure:**
+
+- **09-01: Release Setup** — Configurar `$GitHubRepo` en Launch.ps1 con el repo real; validar Release.ps1 end-to-end (build → ZIP → upload a GitHub Releases); verificar que el ZIP tiene la estructura correcta para bootstrap
+- **09-02: Deploy Docs & First-Run** — Sección de deployment en README (cómo usarlo desde cero en una PC nueva); validar flujo de Launch.ps1 → descarga → Expand-Archive → main.ps1; CHANGELOG final
+
+**Requires from user**: Nombre del repositorio de GitHub (`usuario/repo`) antes de ejecutar
+
+**Depends on**: Phase 8
