@@ -14,7 +14,7 @@ function Optimize-Network {
     )
 
     # -- 1. Resolver adaptadores objetivo --
-    [System.Collections.Generic.List[string]] $optimized = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[PSCustomObject]] $optimized = [System.Collections.Generic.List[PSCustomObject]]::new()
     [bool] $overallSuccess = $true
 
     [object[]] $allAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
@@ -54,15 +54,22 @@ function Optimize-Network {
         } | Select-Object -First 1
 
         if ($matchedKey) {
+            [int] $changesMade = 0
             foreach ($prop in $powerProps) {
                 $regVal = Get-ItemProperty -Path $matchedKey.PSPath -Name $prop -ErrorAction SilentlyContinue
                 if ($null -ne $regVal -and $null -ne $regVal.$prop) {
                     Set-ItemProperty -Path $matchedKey.PSPath -Name $prop -Value '0' -ErrorAction SilentlyContinue
+                    # Verificar que el cambio tomó efecto
+                    $verify = Get-ItemProperty -Path $matchedKey.PSPath -Name $prop -ErrorAction SilentlyContinue
+                    if ($null -ne $verify -and $verify.$prop -eq '0') {
+                        $changesMade++
+                    }
                 }
             }
+            $optimized.Add([PSCustomObject]@{ Name = $adapter.Name; ChangesMade = $changesMade })
+        } else {
+            $optimized.Add([PSCustomObject]@{ Name = $adapter.Name; ChangesMade = 0 })
         }
-
-        $optimized.Add($adapter.Name)
     }
 
     # -- 3. Comandos globales de red --
@@ -76,7 +83,7 @@ function Optimize-Network {
     }
 
     return [PSCustomObject]@{
-        AdaptersOptimized = [string[]] $optimized.ToArray()
+        AdaptersOptimized = [PSCustomObject[]] $optimized.ToArray()
         Success           = [bool] $overallSuccess
     }
 }
