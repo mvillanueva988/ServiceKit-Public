@@ -2,13 +2,13 @@
 
 ## Overview
 
-El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo durante 5 sesiones. La fase 1 está completa (13 de 14 opciones de menú funcionales). La fase actual (Fase 2) termina el único módulo pendiente: Privacy con perfiles nativos. La fase 3 cierra remanentes de baja prioridad antes de cierre del proyecto.
+El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo durante 5 sesiones. **Proyecto completo.** Fase 1 (Core Toolkit), Fase 2 (Privacy Module con 3 perfiles nativos via registro) y Fase 3 (Polish & Production) cerradas.
 
 ## Phases
 
 - [x] **Phase 1: Core Toolkit** — Motor asíncrono + todos los módulos funcionales (sesiones 1-5)
-- [x] **Phase 2: Privacy Module** — Lanzador GUI de ShutUp10++ con check de disponibilidad
-- [ ] **Phase 3: Polish & Production** — SHA-256 en manifest, Restore-SystemTweaks, limpieza de oldscripts
+- [x] **Phase 2: Privacy Module** — 3 perfiles nativos (Basic/Medium/Aggressive) via registro Windows
+- [x] **Phase 3: Polish & Production** — manifest v3 (15 herramientas), oldscripts eliminado, out-of-scope documentado
 
 ---
 
@@ -53,36 +53,44 @@ Plans: (ejecutados org��nicamente, sin GSD)
 **Depends on**: Phase 1
 **Completed**: 2026-03-10
 
-**Decision**: Approach de perfiles `.cfg` descartado — el formato no tiene especificación pública estable y ShutUp10++ maneja sus propios perfiles internamente. Lanzador GUI directo es la implementación final.
+**Decision**: Approach de perfiles `.cfg` descartado — el formato no tiene especificación pública estable. Implementación final: 3 perfiles nativos via registro Windows sin dependencias externas. ShutUp10++ conservado como herramienta en `[T]` para técnicos que prefieran GUI.
 
 **What was built:**
-- `modules/Privacy.ps1` — `Test-ShutUp10Available` + `Open-ShutUp10` (lanzador GUI con check)
-- `main.ps1 [13]` — check de disponibilidad + launch, error claro con instrucción `[T] Herramientas`
+- `modules/Privacy.ps1` — `Invoke-PrivacyTweaks -Profile [Basic|Medium|Aggressive]` + `Start-PrivacyJob` async
+- `modules/Privacy.ps1` — `Test-ShutUp10Available` + `Open-ShutUp10` para sub-opción [T] del menú
+- `main.ps1 [13]` — sub-menú con 3 perfiles + [T] launcher GUI
 
 **Plans**: 1 plan
 
 Plans:
 
-- [x] 02-01: Privacy.ps1 lanzador GUI con check de disponibilidad
+- [x] 02-01: Privacy.ps1 con 3 perfiles nativos via registro Windows
 
 ---
 
-### Phase 3: Polish & Production
+### Phase 3: Polish & Production ✅ COMPLETE
 
 **Goal**: Cerrar remanentes técnicos de baja prioridad antes de dar el proyecto por completo.
 **Depends on**: Phase 2
+**Completed**: 2026-03-10 06:43 ART
 
-**Success Criteria** (what must be TRUE):
+**Success Criteria** (all met ✅):
 
-1. `manifest.json` tiene SHA-256 definidos (o la decisión de no incluirlos está documentada)
-2. `Restore-SystemTweaks` existe en Performance.ps1 o está explícitamente fuera de scope
-3. `/oldscripts` eliminado (o archivado/ignorado en git)
+1. ✅ `manifest.json` SHA-256 vacíos documentados como intencional (URLs apuntan a "latest", no a versiones fijas)
+2. ✅ `Restore-SystemTweaks` documentado como Out of Scope (nunca solicitado; System Restore Point cumple el mismo propósito)
+3. ✅ `/oldscripts` eliminado del working tree (preservado en git history)
+
+**What was built:**
+- `tools/manifest.json` v3 — 15 herramientas con campos `category` y `approxSizeMB`; 8 herramientas nuevas (crystaldiskinfo, crystaldiskmark, wiztree, hwinfo64, cpuz, ddu, bleachbit, winutil)
+- `main.ps1 [T]` — tabla mejorada con columnas Categoría, Peso y descripción corta; herramientas agrupadas por categoría
+- `oldscripts/` — eliminado del working tree, preservado en git history
+- Bugfixes: `Apps.ps1` `$args` → `$cmdArgs`; `Performance.ps1` em dash → ASCII hyphen
 
 **Plans**: 1 plan
 
 Plans:
 
-- [ ] 03-01: Cleanup de producción (SHA-256, Restore-SystemTweaks decision, oldscripts)
+- [x] 03-01: Cleanup de producción (manifest v3, Restore-SystemTweaks decision, oldscripts)
 
 ---
 
@@ -91,7 +99,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
 | 1. Core Toolkit | 4/4 | ✅ Complete | 2026-03-10 |
-| 2. Privacy Module | 0/1 | 🔄 In progress | — |
-| 3. Polish & Production | 0/1 | Not started | — |
+| 2. Privacy Module | 1/1 | ✅ Complete | 2026-03-10 |
+| 3. Polish & Production | 1/1 | ✅ Complete | 2026-03-10 |
 
-**Overall:** 4/6 plans complete (67%)
+**Overall:** 6/6 plans complete (100%) — Proyecto completo.

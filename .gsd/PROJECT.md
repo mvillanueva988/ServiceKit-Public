@@ -12,7 +12,7 @@ El técnico ejecuta una acción y la consola nunca bloquea — cada operación p
 
 ### Validated
 
-- ✓ Privacy.ps1: lanzador de ShutUp10++ GUI con check de disponibilidad — Phase 2
+- ✓ Privacy.ps1: 3 perfiles nativos (Basic/Medium/Aggressive) via registro Windows — Phase 2
 - ✓ Motor asíncrono (`JobManager.ps1`) — sesión 1
 - ✓ Debloat de servicios con selección granular — sesión 1
 - ✓ Limpieza de temporales con preview de espacio — sesión 1/3
@@ -33,8 +33,8 @@ _(nada pendiente — Phase 2 completa)_
 
 ### Out of Scope
 
-- SHA-256 llenos en manifest.json — diferido a pre-producción cuando se fijen versiones específicas
-- `Restore-SystemTweaks` — revierte tweaks de registro; baja prioridad, no solicitado aún
+- SHA-256 llenos en manifest.json — intencional: URLs apuntan a versiones "latest"; SHA-256 fijo no aplica. Decisión final 2026-03-10.
+- `Restore-SystemTweaks` — inversa de `Set-SystemTweaks`; nunca solicitado; System Restore Point cumple el mismo propósito. Decisión final 2026-03-10.
 - GUI / interfaz gráfica — el target es consola PowerShell, sin WPF ni WinForms
 - Descarga automática de updates de Windows — fuera del scope del toolkit
 - BCUninstaller integrado al flujo — disponible como herramienta externa descargable, no integrado nativamente
@@ -63,11 +63,11 @@ _(nada pendiente — Phase 2 completa)_
 | `Start-Job` para toda operación pesada | Sin bloqueo de consola. Patrón universal; spinner visual como feedback | ✓ Bueno |
 | Preview→Confirm para operaciones destructivas | `-WhatIf` no funciona en `Start-Job`. Preview síncrono logra el mismo objetivo sin complejidad | ✓ Bueno |
 | Serialización de funciones al job via `.ToString()` | Los jobs corren en runspace aislado sin acceso al scope padre | ✓ Bueno |
-| Privacy via OOSU10.exe GUI (lanzador directo) | Formato `.cfg` no tiene especificación pública estable; ShutUp10++ maneja sus propios perfiles internamente | ✓ Bueno |
+| Privacy via registro Windows (3 perfiles nativos) | Formato `.cfg` sin especificación pública estable. Registro Windows es estable 10+ años; cero dependencias externas en runtime | ✓ Bueno |
 | `StartupApproved` para toggle de entradas de inicio | Método oficial Windows 10/11. No destruye la entrada original | ✓ Bueno |
 | `SvcHostSplitThreshold` condicional a ≤ 8 GB RAM | En sistemas con más RAM el split no genera overhead medible | ✓ Bueno |
 | manifest.json + Bootstrap script para herramientas externas | Sin git-lfs, sin submodules, sin inflar el repo | ✓ Bueno |
 
 ---
 
-_Last updated: 2026-03-10 — Phase 2 completa. Privacy.ps1 = lanzador GUI._
+_Last updated: 2026-03-10 06:43 ART — Proyecto completo. Fases 1, 2 y 3 cerradas. manifest v3 (15 herramientas), Privacy 3 perfiles nativos, oldscripts eliminado._
