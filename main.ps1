@@ -11,6 +11,13 @@ foreach ($folder in @('core', 'utils', 'modules')) {
     }
 }
 
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host '  [!] Este toolkit requiere privilegios de Administrador.' -ForegroundColor Red
+    Write-Host '      Ejecuta PowerShell como Administrador e intenta de nuevo.' -ForegroundColor DarkGray
+    Read-Host '  Presiona Enter para salir'
+    exit 1
+}
+
 function Show-MainMenu {
     :mainLoop while ($true) {
         Clear-Host
