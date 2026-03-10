@@ -18,6 +18,10 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     exit 1
 }
 
+$script:hwCached   = $false
+$script:hwComputer = $null
+$script:hwGPU      = @()
+
 function Show-MainMenu {
     :mainLoop while ($true) {
         Clear-Host
@@ -43,8 +47,13 @@ function Show-MainMenu {
             [string] $winVer   = if ($isWin11) { 'Win11' } else { 'Win10' }
             [string] $arch     = if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
             Write-Host ('  OS   : {0} {1}  Build {2}  {3}' -f $winVer, $edition.Trim(), $build, $arch) -ForegroundColor Green
-            $csHw  = Get-CimInstance -ClassName Win32_ComputerSystem    -ErrorAction SilentlyContinue
-            [object[]] $allGpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
+            if (-not $script:hwCached) {
+                $script:hwComputer = Get-CimInstance -ClassName Win32_ComputerSystem    -ErrorAction SilentlyContinue
+                $script:hwGPU      = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
+                $script:hwCached   = $true
+            }
+            $csHw = $script:hwComputer
+            [object[]] $allGpus = @($script:hwGPU)
             if ($csHw) {
                 [int]    $ramGb    = [int][math]::Ceiling($csHw.TotalPhysicalMemory / 1GB)
                 [string] $gpuShort = if ($allGpus.Count -eq 0) {
