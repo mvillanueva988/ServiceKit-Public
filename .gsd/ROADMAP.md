@@ -15,7 +15,7 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
 - [ ] **Phase 6: Network Module Review** — Diagnóstico de red (TCP/DNS/ping), verificación post-apply en Optimize-Network
   - [ ] 06-01-PLAN.md — Get-NetworkDiagnostics + opción [d] en menú
   - [ ] 06-02-PLAN.md — Verificación post-apply + UI con conteo de propiedades
-- [ ] **Phase 7: Auto-Cleanup / Self-Removal** — Opción para borrar o desaparecer el toolkit de una PC ajena al terminar el trabajo
+- [x] **Phase 7: Auto-Cleanup / Self-Removal** — Opción [X] Limpiar y salir: confirmación explícita + deferred rmdir vía cmd.exe detachado
 - [ ] **Phase 8: Codebase Polish** — Bugs críticos, fixes de UX/async y hardening de Launch.ps1 identificados en auditoría de código
 - [ ] **Phase 9: Deployment** — GitHub release, flujo de distribución, validación end-to-end del bootstrap
 
