@@ -215,3 +215,41 @@ function _Invoke-UninstallCommand {
         return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Error = $_.Exception.Message }
     }
 }
+
+# ─── Start-Win32AppsJob ───────────────────────────────────────────────────────
+function Start-Win32AppsJob {
+    <#
+    .SYNOPSIS
+        Carga la lista completa de apps Win32 instaladas de forma asíncrona.
+    #>
+    [CmdletBinding()]
+    param()
+
+    [string] $fnBody = ${Function:Get-InstalledWin32Apps}.ToString()
+    [scriptblock] $jobBlock = [scriptblock]::Create(@"
+function Get-InstalledWin32Apps {
+$fnBody
+}
+Get-InstalledWin32Apps
+"@)
+    return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'Win32AppsLoad'
+}
+
+# ─── Start-UwpAppsJob ────────────────────────────────────────────────────────
+function Start-UwpAppsJob {
+    <#
+    .SYNOPSIS
+        Carga la lista completa de apps UWP instaladas de forma asíncrona.
+    #>
+    [CmdletBinding()]
+    param()
+
+    [string] $fnBody = ${Function:Get-InstalledUwpApps}.ToString()
+    [scriptblock] $jobBlock = [scriptblock]::Create(@"
+function Get-InstalledUwpApps {
+$fnBody
+}
+Get-InstalledUwpApps
+"@)
+    return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'UwpAppsLoad'
+}
