@@ -59,7 +59,14 @@ function Wait-ToolkitJobs {
     Write-Host ("`r" + (' ' * 60) + "`r") -NoNewline
 
     $results = foreach ($job in $Jobs) {
-        Receive-Job -Job $job -AutoRemoveJob -Wait
+        if ($job.State -eq 'Failed') {
+            [object[]] $childErrors = @($job.ChildJobs | ForEach-Object { $_.Error } | Where-Object { $_ })
+            [string] $errMsg = if ($childErrors.Count -gt 0) { $childErrors[0].Exception.Message } else { 'Error desconocido' }
+            Write-Host ("  [!] Trabajo '{0}' fallo: {1}" -f $job.Name, $errMsg) -ForegroundColor Red
+            Receive-Job -Job $job -AutoRemoveJob -Wait -ErrorAction SilentlyContinue
+        } else {
+            Receive-Job -Job $job -AutoRemoveJob -Wait
+        }
     }
 
     return $results
