@@ -9,12 +9,12 @@ See: .gsd/PROJECT.md (updated 2026-03-10)
 
 ## Current Position
 
-Phase: 7 of 9 (Auto-Cleanup) — COMPLETA → avanzando a Phase 8
-Plan: 1 of 1 — Fase completa
-Status: Transitioning to Phase 8 — Codebase Polish
-Last activity: 2026-03-10 ART — Phase 7 verificada (PASS). Transition a Phase 8.
+Phase: 8 of 9 (Codebase Polish)
+Plan: 2 of 3 — In progress
+Status: In progress — 08-01 complete, 08-02 complete, 08-03 pending
+Last activity: 2026-03-10 ART — Completed 08-02-PLAN (UX & Async)
 
-Progress: [███████████████░] ~95% (phases 1-7 complete, phases 8-9 pending)
+Progress: [████████████████░] ~97% (phases 1-8 in progress, 08-02 done, 08-03 pending)
 
 ## Performance Metrics
 
