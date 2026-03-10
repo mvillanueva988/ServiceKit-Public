@@ -92,10 +92,34 @@ function Test-ToolInstalled {
     param([object] $Tool)
     $isZip = ($Tool.PSObject.Properties['type'] -and $Tool.type -eq 'zip') -or
              ($Tool.filename -like '*.zip')
-    if ($isZip -and $Tool.PSObject.Properties['extractDir'] -and $Tool.extractDir) {
-        return Test-Path (Join-Path $binDir $Tool.extractDir)
+
+    if ($isZip) {
+        # Para ZIPs, verificar que el launchExe exista dentro del extractDir
+        if ($Tool.PSObject.Properties['launchExe'] -and $Tool.launchExe) {
+            $launchPath = Join-Path $binDir $Tool.launchExe
+            return Test-Path $launchPath
+        }
+        if ($Tool.PSObject.Properties['extractDir'] -and $Tool.extractDir) {
+            return Test-Path (Join-Path $binDir $Tool.extractDir)
+        }
     }
-    return Test-Path (Join-Path $binDir $Tool.filename)
+
+    # Para EXEs: verificar existencia Y tamaño mínimo
+    $exePath = Join-Path $binDir $Tool.filename
+    if (-not (Test-Path $exePath)) { return $false }
+
+    # Si el manifest declara approxSizeMB, verificar que el archivo tenga al menos 50% de ese tamaño
+    if ($Tool.PSObject.Properties['approxSizeMB'] -and $Tool.approxSizeMB -gt 0) {
+        [long] $minBytes = [long]($Tool.approxSizeMB * 0.5 * 1MB)
+        [long] $actual   = (Get-Item $exePath).Length
+        if ($actual -lt $minBytes) {
+            Write-Host ("  [!] {0}: archivo incompleto ({1:N1} MB de ~{2} MB esperados), forzando re-descarga" -f `
+                $Tool.name, ($actual / 1MB), $Tool.approxSizeMB) -ForegroundColor Yellow
+            return $false
+        }
+    }
+
+    return $true
 }
 
 # ─── Proceso principal ────────────────────────────────────────────────────────
