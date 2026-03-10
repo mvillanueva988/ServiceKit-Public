@@ -10,11 +10,11 @@ See: .gsd/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 5 of 7 (Portable Executable)
-Plan: 0 of ? in current phase
-Status: NOT STARTED
-Last activity: 2026-03-10 ART — Phase 4b complete. Banner Win10/Win11 + edition + arch + RAM + GPU; $isWin11/$isHome/$isLtsc vars; Privacy Home warning; UWP LTSC warning; PS1 launcher support; instance mutex; Apps.ps1 WOW6432Node x86 guard; manifest.json v4 con Sophia Script + WinSlop (18 tools total). Phase 7 Auto-Cleanup agregada al roadmap.
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-03-10 ART — Completed 05-01-PLAN.md. Launch.ps1 + Release.ps1 creados y verificados. ZIP limpio (0.1 MB, 21 archivos, sin dev artifacts).
 
-Progress: [███████░░░] ~70% (8/? plans complete — fases 1-3 + 4a + 4b cerradas)
+Progress: [██████████░] ~75% (plans 1-4 fases 1-4 + 05-01 completado)
 
 ## Performance Metrics
 
@@ -49,7 +49,10 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- [ ] Ejecutar Phase 5: Portable Executable (ps2exe u otro empaquetador a definir)
+- [x] Ejecutar Phase 5 Plan 1: Launch.ps1 + Release.ps1 ✓
+- [ ] Configurar `$GitHubRepo` en Launch.ps1 con usuario/repo real de GitHub
+- [ ] Publicar primer release en GitHub (subir ZIP generado por Release.ps1)
+- [ ] Ejecutar Phase 5 Plan 2: Bootstrap integrity fix + README rewrite
 - [ ] Ejecutar Phase 6: Network Module Review (gaps de cobertura, casos borde, mejoras)
 - [ ] Ejecutar Phase 7: Auto-Cleanup / Self-Removal (limpieza al salir, self-destruct EXE)
 - [ ] WinSlop URL está vacía en manifest.json — usuario necesita proveer URL privada cuando quiera usarlo
@@ -62,6 +65,4 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-10 ART
-Stopped at: Phase 4b complete. Todos los cambios de código aplicados y commiteados. ROADMAP y STATE actualizados. Siguiente: Phase 5 (Portable Executable).
-Pending decision: WinSlop URL vacía — usuario tiene URL privada.
-Resume file: None
+Stopped at: Completed 05-01-PLAN.md (Launch.ps1 + Release.ps1)
