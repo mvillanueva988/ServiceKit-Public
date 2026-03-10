@@ -9,12 +9,12 @@ See: .gsd/PROJECT.md (updated 2026-03-10)
 
 ## Current Position
 
-Phase: 3 of 3 (Polish & Production)
-Plan: 1 of 1 in current phase
-Status: COMPLETE
-Last activity: 2026-03-10 06:43 ART — Phase 3 completa. manifest v3 (15 herramientas), oldscripts eliminado, Restore-SystemTweaks documentado como out of scope.
+Phase: 4 of 5 (Compatibility Qualification)
+Plan: 0 of ? in current phase
+Status: NOT STARTED
+Last activity: 2026-03-10 ART — Bugfix session: Apps.ps1 PropertyNotFoundStrict (PSObject.Properties safe access), StartupManager.ps1 unary-comma array wrap bug (System.Object[] en nombre/ubicación). Phases 4 y 5 definidas en ROADMAP.
 
-Progress: [██████████] 100% (6/6 plans complete — todas las fases cerradas)
+Progress: [██████░░░░] ~60% (6/? plans complete — fases 1-3 cerradas)
 
 ## Performance Metrics
 
@@ -49,7 +49,8 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-_(ninguno — proyecto completo)_
+- [ ] Ejecutar Phase 4: Compatibility Qualification (auditar guards, fallbacks por OS/edition/arch)
+- [ ] Ejecutar Phase 5: Portable Executable (ps2exe u otro empaquetador a definir)
 
 ### Blockers/Concerns
 
@@ -57,6 +58,6 @@ _(ninguno — proyecto completo)_
 
 ## Session Continuity
 
-Last session: 2026-03-10 06:43 ART
-Stopped at: Proyecto completo. Phase 3 cerrada: manifest v3 (15 herramientas con categoria/peso), oldscripts eliminado del working tree, Restore-SystemTweaks documentado como out of scope. Todos los bugs de carga de modulos corregidos.
+Last session: 2026-03-10 ART
+Stopped at: Bugfix session cerrada. Apps.ps1 y StartupManager.ps1 corregidos. ROADMAP actualizado con Phase 4 (Compatibility Qualification) y Phase 5 (Portable Executable).
 Resume file: None

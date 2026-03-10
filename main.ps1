@@ -80,6 +80,9 @@ function Show-MainMenu {
         Write-Host '  [14] Inicio del Sistema'
         Write-Host '       Lista entradas Run/RunOnce del registro y carpetas de Startup.' -ForegroundColor DarkGray
         Write-Host '       Deshabilita/habilita por indice. Abre Autoruns GUI para auditoria completa.' -ForegroundColor DarkGray
+        Write-Host '  [15] Actualizaciones de Windows'
+        Write-Host '       Muestra ultima actualizacion instalada y KBs recientes.' -ForegroundColor DarkGray
+        Write-Host '       Abre Windows Update en Configuracion para buscar actualizaciones.' -ForegroundColor DarkGray
         Write-Host ''
         Write-Host '  [HERRAMIENTAS EXTERNAS]' -ForegroundColor DarkCyan
         Write-Host '  [T]  Herramientas'
@@ -865,6 +868,74 @@ function Show-MainMenu {
 
                     Write-Host '  Opcion no valida.' -ForegroundColor Red
                     Start-Sleep -Milliseconds 700
+                }
+            }
+            '15' {
+                :wuLoop while ($true) {
+                    Clear-Host
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+                    Write-Host '      ACTUALIZACIONES DE WINDOWS                ' -ForegroundColor Cyan
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+                    Write-Host ''
+
+                    # Fechas de ultima instalacion y revision desde registro
+                    [string] $lastInstall = 'Desconocida'
+                    [string] $lastCheck   = 'Desconocida'
+                    try {
+                        $regInstall = Get-ItemProperty `
+                            -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install' `
+                            -ErrorAction SilentlyContinue
+                        if ($regInstall -and $regInstall.PSObject.Properties['LastSuccessTime']) {
+                            $lastInstall = $regInstall.LastSuccessTime
+                        }
+                        $regCheck = Get-ItemProperty `
+                            -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect' `
+                            -ErrorAction SilentlyContinue
+                        if ($regCheck -and $regCheck.PSObject.Properties['LastSuccessTime']) {
+                            $lastCheck = $regCheck.LastSuccessTime
+                        }
+                    } catch { }
+
+                    [string] $installColor = if ($lastInstall -eq 'Desconocida') { 'DarkGray' } else { 'White' }
+                    Write-Host ('  Ultima actualizacion instalada : {0}' -f $lastInstall) -ForegroundColor $installColor
+                    Write-Host ('  Ultima busqueda de updates     : {0}' -f $lastCheck)   -ForegroundColor DarkGray
+                    Write-Host ''
+
+                    # Ultimos KBs via CIM (rapido, no requiere privilegios)
+                    [object[]] $recentKBs = @(
+                        Get-CimInstance -ClassName Win32_QuickFixEngineering -ErrorAction SilentlyContinue |
+                            Where-Object { $_.PSObject.Properties['InstalledOn'] -and $_.InstalledOn } |
+                            Sort-Object InstalledOn -Descending |
+                            Select-Object -First 5
+                    )
+
+                    if ($recentKBs.Count -gt 0) {
+                        Write-Host '  Ultimas actualizaciones instaladas:' -ForegroundColor DarkCyan
+                        Write-Host ('  {0,-12} {1,-14} {2}' -f 'Fecha', 'KB', 'Descripcion') -ForegroundColor DarkCyan
+                        Write-Host ('  {0}' -f ('-' * 55)) -ForegroundColor DarkCyan
+                        foreach ($kb in $recentKBs) {
+                            [string] $kbDate = try { $kb.InstalledOn.ToString('yyyy-MM-dd') } catch { '?' }
+                            Write-Host ('  {0,-12} {1,-14} {2}' -f $kbDate, $kb.HotFixID, $kb.Description) -ForegroundColor DarkGray
+                        }
+                        Write-Host ''
+                    } else {
+                        Write-Host '  Sin historial de KBs disponible via CIM.' -ForegroundColor DarkGray
+                        Write-Host ''
+                    }
+
+                    Write-Host '  [Enter]  Abrir Windows Update en Configuracion' -ForegroundColor Cyan
+                    Write-Host '  [q]      Volver' -ForegroundColor DarkGray
+                    Write-Host ''
+                    Write-Host '================================================' -ForegroundColor DarkCyan
+
+                    [string] $wuChoice = (Read-Host '  Selecciona').Trim().ToLower()
+
+                    if ($wuChoice -eq 'q') { break wuLoop }
+
+                    Write-Host "`n  Abriendo Windows Update..." -ForegroundColor Cyan
+                    Start-Process 'ms-settings:windowsupdate'
+                    Start-Sleep -Milliseconds 800
+                    break wuLoop
                 }
             }
             'q' {

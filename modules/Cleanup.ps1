@@ -1,5 +1,45 @@
 Set-StrictMode -Version Latest
 
+# ─── _Get-CleanupPaths ────────────────────────────────────────────────────────
+# Fuente única de rutas. Llamada en tiempo de ejecución para que los paths de
+# entorno ($env:*) se resuelvan correctamente dentro del job asíncrono.
+function _Get-CleanupPaths {
+    [OutputType([PSCustomObject[]])]
+    param()
+
+    $paths = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # Rutas estáticas
+    foreach ($entry in @(
+        [PSCustomObject]@{ Label = 'Windows Temp';          Path = "$env:SystemRoot\Temp" }
+        [PSCustomObject]@{ Label = 'Windows Prefetch';      Path = "$env:SystemRoot\Prefetch" }
+        [PSCustomObject]@{ Label = 'Windows Update Cache';  Path = "$env:SystemRoot\SoftwareDistribution\Download" }
+        [PSCustomObject]@{ Label = 'Usuario Temp';          Path = "$env:TEMP" }
+        [PSCustomObject]@{ Label = 'LocalAppData Temp';     Path = "$env:LOCALAPPDATA\Temp" }
+        [PSCustomObject]@{ Label = 'Chrome Cache';          Path = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache" }
+        [PSCustomObject]@{ Label = 'Edge Cache';            Path = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache" }
+        [PSCustomObject]@{ Label = 'Brave Cache';           Path = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cache" }
+        [PSCustomObject]@{ Label = 'Opera Cache';           Path = "$env:LOCALAPPDATA\Opera Software\Opera Stable\Cache" }
+        [PSCustomObject]@{ Label = 'Opera GX Cache';        Path = "$env:LOCALAPPDATA\Opera Software\Opera GX Stable\Cache" }
+    )) { $paths.Add($entry) }
+
+    # Firefox — enumerar perfiles dinámicamente desde %APPDATA%
+    [string] $ffRoot = "$env:APPDATA\Mozilla\Firefox\Profiles"
+    if (Test-Path $ffRoot -PathType Container) {
+        Get-ChildItem -Path $ffRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            [string] $cache2 = Join-Path $_.FullName 'cache2'
+            if (Test-Path $cache2 -PathType Container) {
+                $paths.Add([PSCustomObject]@{
+                    Label = 'Firefox Cache ({0})' -f $_.Name
+                    Path  = $cache2
+                })
+            }
+        }
+    }
+
+    return $paths.ToArray()
+}
+
 function Clear-TempFiles {
     <#
     .SYNOPSIS
@@ -9,25 +49,13 @@ function Clear-TempFiles {
     [CmdletBinding()]
     param()
 
-    $paths = @(
-        "$env:SystemRoot\Temp",
-        "$env:SystemRoot\Prefetch",
-        "$env:SystemRoot\SoftwareDistribution\Download",
-        "$env:TEMP",
-        "$env:LOCALAPPDATA\Temp",
-        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache",
-        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache",
-        "$env:LOCALAPPDATA\Mozilla\Firefox\Profiles",
-        "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cache",
-        "$env:LOCALAPPDATA\Opera Software\Opera Stable\Cache",
-        "$env:LOCALAPPDATA\Opera Software\Opera GX Stable\Cache",
-        "$env:SystemRoot\Logs"
-    )
+    [PSCustomObject[]] $cleanPaths = _Get-CleanupPaths
 
     $totalFreedBytes = [long]0
     $softErrors      = 0
 
-    foreach ($path in $paths) {
+    foreach ($entry in $cleanPaths) {
+        [string] $path = $entry.Path
         if (-not (Test-Path -Path $path -PathType Container)) { continue }
 
         $isWU = $path -like '*SoftwareDistribution*'
@@ -71,25 +99,12 @@ function Get-CleanupPreview {
     [CmdletBinding()]
     param()
 
-    $paths = @(
-        [PSCustomObject]@{ Label = 'Windows Temp';            Path = "$env:SystemRoot\Temp" }
-        [PSCustomObject]@{ Label = 'Windows Prefetch';        Path = "$env:SystemRoot\Prefetch" }
-        [PSCustomObject]@{ Label = 'Windows Update Cache';    Path = "$env:SystemRoot\SoftwareDistribution\Download" }
-        [PSCustomObject]@{ Label = 'Usuario Temp';            Path = "$env:TEMP" }
-        [PSCustomObject]@{ Label = 'LocalAppData Temp';       Path = "$env:LOCALAPPDATA\Temp" }
-        [PSCustomObject]@{ Label = 'Chrome Cache';            Path = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache" }
-        [PSCustomObject]@{ Label = 'Edge Cache';              Path = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache" }
-        [PSCustomObject]@{ Label = 'Firefox Profiles';        Path = "$env:LOCALAPPDATA\Mozilla\Firefox\Profiles" }
-        [PSCustomObject]@{ Label = 'Brave Cache';             Path = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cache" }
-        [PSCustomObject]@{ Label = 'Opera Cache';             Path = "$env:LOCALAPPDATA\Opera Software\Opera Stable\Cache" }
-        [PSCustomObject]@{ Label = 'Opera GX Cache';          Path = "$env:LOCALAPPDATA\Opera Software\Opera GX Stable\Cache" }
-        [PSCustomObject]@{ Label = 'Windows Logs';            Path = "$env:SystemRoot\Logs" }
-    )
+    [PSCustomObject[]] $cleanPaths = _Get-CleanupPaths
 
     [System.Collections.Generic.List[PSCustomObject]] $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
     [long] $totalBytes = 0
 
-    foreach ($entry in $paths) {
+    foreach ($entry in $cleanPaths) {
         if (-not (Test-Path -Path $entry.Path -PathType Container)) { continue }
 
         $files = Get-ChildItem -Path $entry.Path -Recurse -Force -File -ErrorAction SilentlyContinue
@@ -123,10 +138,14 @@ function Start-CleanupProcess {
     [CmdletBinding()]
     param()
 
-    $fnBody   = ${Function:Clear-TempFiles}.ToString()
+    $fnBodyPaths = ${Function:_Get-CleanupPaths}.ToString()
+    $fnBodyClean = ${Function:Clear-TempFiles}.ToString()
     $jobBlock = [scriptblock]::Create(@"
+function _Get-CleanupPaths {
+$fnBodyPaths
+}
 function Clear-TempFiles {
-$fnBody
+$fnBodyClean
 }
 Clear-TempFiles
 "@)

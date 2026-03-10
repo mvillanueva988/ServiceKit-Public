@@ -116,7 +116,7 @@ function Get-StartupEntries {
         }
     }
 
-    return , [PSCustomObject[]] $entries.ToArray()
+    return [PSCustomObject[]] $entries.ToArray()
 }
 
 # ─── Set-StartupEntry ─────────────────────────────────────────────────────────

@@ -9,6 +9,8 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
 - [x] **Phase 1: Core Toolkit** — Motor asíncrono + todos los módulos funcionales (sesiones 1-5)
 - [x] **Phase 2: Privacy Module** — 3 perfiles nativos (Basic/Medium/Aggressive) via registro Windows
 - [x] **Phase 3: Polish & Production** — manifest v3 (15 herramientas), oldscripts eliminado, out-of-scope documentado
+- [ ] **Phase 4: Compatibility Qualification** — Calificación de dinamismo: W10/W11, Home/Pro/LTSC, x86/x64, GPU families, hardware tiers
+- [ ] **Phase 5: Portable Executable** — Distribución como `.exe` standalone, sin dependencias externas, sin artifacts de desarrollo
 
 ---
 
@@ -101,5 +103,55 @@ Plans:
 | 1. Core Toolkit | 4/4 | ✅ Complete | 2026-03-10 |
 | 2. Privacy Module | 1/1 | ✅ Complete | 2026-03-10 |
 | 3. Polish & Production | 1/1 | ✅ Complete | 2026-03-10 |
+| 4. Compatibility Qualification | 0/? | 🔜 Pending | — |
+| 5. Portable Executable | 0/? | 🔜 Pending | — |
 
-**Overall:** 6/6 plans complete (100%) — Proyecto completo.
+**Overall:** 6/? plans complete — Fases 1-3 cerradas.
+
+---
+
+## Phase Details (Pending)
+
+### Phase 4: Compatibility Qualification 🔜
+
+**Goal**: Calificar qué tan dinámico es el script frente a diferentes entornos. El toolkit debe ejecutarse sin crashes ni errores falsos en cualquier variante soportada de Windows, y degradar gracefully las funciones no disponibles.
+
+**Scope of qualification:**
+- **OS**: Windows 10 (21H2+), Windows 11 (22H2+)
+- **Editions**: Home, Pro, Enterprise, LTSC
+- **Architecture**: x64 (primario), x86 (secundario), ARM64 (best-effort)
+- **GPU families**: NVIDIA, AMD, Intel integrated
+- **CPU families**: Intel (moderna + legacy), AMD Ryzen
+- **Hardware tiers**: Gama baja (TDP bajo, HDDs, <8GB RAM), media (8-16GB, SSD), alta (>16GB, NVMe, dGPU)
+
+**Key risks to audit:**
+- `Ultimate Power Plan` (`powercfg /duplicatescheme`) — no disponible en Home ni en algunas LTSC
+- `DISM /RestoreHealth` — requiere Windows Update o fuente alternativa; falla sin internet en LTSC
+- CIM queries (`Win32_VideoController`, `Win32_Processor`) — algunas pueden estar bloqueadas en entornos corporativos
+- `Get-AppxPackage` — comportamiento distinto en LTSC (apps UWP pueden no existir)
+- Disk cleanup paths (`%TEMP%`, `Windows\Temp`) — permisos variables según usuario
+- Registry paths de 32-bit vs 64-bit (`WOW6432Node`) — ya cubierto en Apps.ps1
+- `StartupApproved` registry — existente desde W8, pero estructura puede variar
+
+**Deliverable**: Matriz de compatibilidad + guards/fallbacks implementados en código.
+
+**Depends on**: Phase 3
+
+---
+
+### Phase 5: Portable Executable 🔜
+
+**Goal**: Un solo archivo distribuible (`.exe` o `.bat` autónomo) que contenga el toolkit completo. Sin carpetas de desarrollo (Logs/, .gsd/, .git/), sin requisitos de descarga adicional. Completamente portable.
+
+**Key decisions to make:**
+- Tool: `ps2exe` (convierte PS1 → EXE) vs. wrapper `.bat` con PS1 embebido vs. self-extracting archive
+- Inclusión de módulos: embed dentro del EXE o extraer al `%TEMP%` al runtime
+- Assets: `tools/manifest.json` embebido; binarios externos (Autoruns, etc.) no incluidos por defecto — se descargan al usar `[T]`
+- Signing: opcional para evitar SmartScreen warning
+
+**Constraints:**
+- Solo cmdlets nativos de PowerShell / WMI / CIM (ya vigente)
+- No descargar nada en runtime para funciones core
+- Compatible con ejecución directa por doble click (no requiere PS abierto)
+
+**Depends on**: Phase 4
