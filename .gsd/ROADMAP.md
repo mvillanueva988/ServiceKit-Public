@@ -9,8 +9,10 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
 - [x] **Phase 1: Core Toolkit** — Motor asíncrono + todos los módulos funcionales (sesiones 1-5)
 - [x] **Phase 2: Privacy Module** — 3 perfiles nativos (Basic/Medium/Aggressive) via registro Windows
 - [x] **Phase 3: Polish & Production** — manifest v3 (15 herramientas), oldscripts eliminado, out-of-scope documentado
-- [x] **Phase 4: Compatibility Qualification** — 7 guards en Telemetry.ps1 + COMPATIBILITY.md
+- [x] **Phase 4a: Compatibility — Crash Guards** — 7 guards en Telemetry.ps1 + COMPATIBILITY.md
+- [ ] **Phase 4b: Compatibility — UX Guards** — Detección edición/build, guard x86 en Apps, LTSC en UWP, hardware info en banner, instance lock
 - [ ] **Phase 5: Portable Executable** — Distribución como `.exe` standalone, sin dependencias externas, sin artifacts de desarrollo
+- [ ] **Phase 6: Network Module Review** — Auditoría de Network.ps1: gaps de cobertura, casos borde, mejoras de diagnóstico
 
 ---
 
@@ -103,16 +105,14 @@ Plans:
 | 1. Core Toolkit | 4/4 | ✅ Complete | 2026-03-10 |
 | 2. Privacy Module | 1/1 | ✅ Complete | 2026-03-10 |
 | 3. Polish & Production | 1/1 | ✅ Complete | 2026-03-10 |
-| 4. Compatibility Qualification | 1/1 | ✅ Complete | 2026-03-10 |
+| 4a. Compatibility — Crash Guards | 1/1 | ✅ Complete | 2026-03-10 |
+| 4b. Compatibility — UX Guards | 0/? | 🔜 Pending | — |
 | 5. Portable Executable | 0/? | 🔜 Pending | — |
+| 6. Network Module Review | 0/? | 🔜 Pending | — |
 
-**Overall:** 6/? plans complete — Fases 1-3 cerradas.
+**Overall:** 7/? plans complete — Fases 1-3 + 4a cerradas.
 
----
-
----
-
-### Phase 4: Compatibility Qualification ✅ COMPLETE
+### Phase 4a: Compatibility — Crash Guards ✅ COMPLETE
 
 **Goal**: Calificar qué tan dinámico es el script frente a diferentes entornos. El toolkit debe ejecutarse sin crashes ni errores falsos en cualquier variante soportada de Windows, y degradar gracefully las funciones no disponibles.
 **Depends on**: Phase 3
@@ -132,30 +132,33 @@ Plans:
 
 ## Phase Details (Pending)
 
-### Phase 5: Portable Executable 🔜
+### Phase 4b: Compatibility — UX Guards 🔜
 
-**Goal**: Calificar qué tan dinámico es el script frente a diferentes entornos. El toolkit debe ejecutarse sin crashes ni errores falsos en cualquier variante soportada de Windows, y degradar gracefully las funciones no disponibles.
+**Goal**: Agregar guards de UX que avisan al técnico del contexto en el que está operando — sin crashear (eso ya está), sino mostrando información contextual relevante o degradando con mensaje explicativo.
 
-**Scope of qualification:**
-- **OS**: Windows 10 (21H2+), Windows 11 (22H2+)
-- **Editions**: Home, Pro, Enterprise, LTSC
-- **Architecture**: x64 (primario), x86 (secundario), ARM64 (best-effort)
-- **GPU families**: NVIDIA, AMD, Intel integrated
-- **CPU families**: Intel (moderna + legacy), AMD Ryzen
-- **Hardware tiers**: Gama baja (TDP bajo, HDDs, <8GB RAM), media (8-16GB, SSD), alta (>16GB, NVMe, dGPU)
+**Depends on**: Phase 4a
+**Scope:**
 
-**Key risks to audit:**
-- `Ultimate Power Plan` (`powercfg /duplicatescheme`) — no disponible en Home ni en algunas LTSC
-- `DISM /RestoreHealth` — requiere Windows Update o fuente alternativa; falla sin internet en LTSC
-- CIM queries (`Win32_VideoController`, `Win32_Processor`) — algunas pueden estar bloqueadas en entornos corporativos
-- `Get-AppxPackage` — comportamiento distinto en LTSC (apps UWP pueden no existir)
-- Disk cleanup paths (`%TEMP%`, `Windows\Temp`) — permisos variables según usuario
-- Registry paths de 32-bit vs 64-bit (`WOW6432Node`) — ya cubierto en Apps.ps1
-- `StartupApproved` registry — existente desde W8, pero estructura puede variar
+| Área | Problema | Implementación propuesta |
+|------|----------|--------------------------|
+| Edición Windows (GPO) | `HKLM:\SOFTWARE\Policies\...` funciona en Pro/Enterprise pero Home silenciosamente ignora las keys. Privacy "Aggressive" aplica GPO que Home ignora | Detectar edición, mostrar nota en sub-menú Privacy si la edición es Home |
+| OS build Win10 vs Win11 | Win11 cambió ubicación del menú Start y algunos registry keys de startup | Detectar `CurrentBuild >= 22000` para Win11; nota contextual donde corresponda |
+| x86 vs x64 en Apps.ps1 | `WOW6432Node` solo existe en x64. En x86 puro las 3 rutas son equivalentes, pero el path `WOW6432Node` devuelve resultados duplicados | Guard de arquitectura en `Get-InstalledWin32Apps` — saltar WOW6432Node si `[Environment]::Is64BitOperatingSystem -eq $false` |
+| LTSC detection en UWP | `Get-AppxPackage` devuelve poco/nada en LTSC; lista vacía puede confundir | Detectar LTSC, mostrar nota explicativa en sub-menú UWP |
+| Hardware info en banner | El banner de inicio solo muestra OS. Podría mostrar RAM, tipo de disco, GPU | Agregar 2-3 líneas de info de hardware al menú principal (lectura rápida, no async) |
+| Instance lock | Si el técnico ejecuta dos instancias simultáneas, los jobs pueden colisionar en el mismo output/ | Mutex o lockfile simple en main.ps1 al inicio |
 
-**Deliverable**: Matriz de compatibilidad + guards/fallbacks implementados en código.
+**Tier 1 (impacto real, pocos cambios):**
+1. Guard x86 en `Get-InstalledWin32Apps` (saltar WOW6432Node en x86)
+2. Guard LTSC en sub-menú UWP (mensaje + skip `Get-AppxPackage`)
+3. Detección Win10/Win11 + Home/Pro en banner de inicio
+4. Nota de edición en Privacy "Aggressive" si GPO será ignorada
 
-**Depends on**: Phase 3
+**Tier 2 (cosmético/nice-to-have):**
+5. Hardware info en banner (RAM, SSD/HDD, GPU)
+6. Instance lock
+
+**Depends on**: Phase 4a
 
 ---
 
@@ -174,4 +177,23 @@ Plans:
 - No descargar nada en runtime para funciones core
 - Compatible con ejecución directa por doble click (no requiere PS abierto)
 
-**Depends on**: Phase 4
+**Depends on**: Phase 4b
+
+---
+
+### Phase 6: Network Module Review 🔜
+
+**Goal**: Auditoría profunda de `modules/Network.ps1`. Evaluar qué falta, qué puede fallar a escala, qué está mal hecho, y qué optimizaciones no se están considerando.
+
+**Areas a revisar:**
+
+- **Cobertura de adaptadores**: Solo se procesan NICs activos (`Status=Up`). ¿Qué pasa con el Wi-Fi en modo avión? ¿Con adaptadores de VM (Hyper-V, VirtualBox)?
+- **Power-saving via Set-NetAdapterAdvancedProperty**: La actual implementación escribe directo al registro por GUID. `Set-NetAdapterAdvancedProperty` es el cmdlet oficial — existe desde W8. ¿Vale la pena migrar?
+- **TCP AutoTuning "normal"**: En algunos entornos corporativos o conexiones satelitales, `autotuninglevel=normal` puede ser peor que `disabled`. ¿Debería ser configurable?
+- **DNS flush solo**: `ipconfig /flushdns` es ruidoso si no hay problemas de DNS. ¿Separar en opción independiente?
+- **Falta de diagnóstico de red**: El módulo solo optimiza pero no diagnostica. ¿Agregar lectura de latencia, pérdida de paquetes, configuración de DNS actual?
+- **IPv6**: No se toca. En algunos entornos problemáticos, IPv6 mal configurado genera latencia. ¿Agregar opción de deshabilitar con advertencia?
+- **MTU**: No se configura. MTU 1500 vs jumbo frames — relevante en algunos entornos.
+- **Resultados de diagnóstico**: El módulo retorna `AdaptersOptimized[]` pero no verifica si los cambios de registro realmente se aplicaron (algunos drivers ignoran las propiedades).
+
+**Depends on**: Phase 4b (o puede ejecutarse en paralelo)

@@ -9,12 +9,12 @@ See: .gsd/PROJECT.md (updated 2026-03-10)
 
 ## Current Position
 
-Phase: 5 of 5 (Portable Executable)
+Phase: 4b of 6 (Compatibility — UX Guards)
 Plan: 0 of ? in current phase
 Status: NOT STARTED
-Last activity: 2026-03-10 ART — Phase 4 complete: 7 compatibility guards en Telemetry.ps1 + COMPATIBILITY.md.
+Last activity: 2026-03-10 ART — Fix WU LastCheckedForUpdates (path moderno + fallback legacy). ROADMAP reestructurado: Phase 4 dividida en 4a (crash guards, completo) y 4b (UX guards, pendiente); Phase 6 Network Review agregada.
 
-Progress: [████████░░] ~80% (7/? plans complete — fases 1-4 cerradas)
+Progress: [██████░░░░] ~60% (7/? plans complete — fases 1-3 + 4a cerradas)
 
 ## Performance Metrics
 
@@ -49,7 +49,9 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
+- [ ] Ejecutar Phase 4b: Compatibility UX Guards (edición detection, x86 en Apps, LTSC en UWP, hardware banner, instance lock)
 - [ ] Ejecutar Phase 5: Portable Executable (ps2exe u otro empaquetador a definir)
+- [ ] Ejecutar Phase 6: Network Module Review (gaps de cobertura, casos borde, mejoras)
 
 ### Blockers/Concerns
 
@@ -58,5 +60,6 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-10 ART
-Stopped at: Phase 4 complete. 7 guards agregados a Telemetry.ps1 (Win32_Processor, Win32_VideoController, Win32_ComputerSystem, Win32_PhysicalMemory, Get-PhysicalDisk, Win32_SystemEnclosure, Win32_OperatingSystem). COMPATIBILITY.md creado.
+Stopped at: WU fix (path moderno `WindowsUpdate\UX\Settings\LastCheckedForUpdates` + fallback legacy). ROADMAP reestructurado con Phase 4b y Phase 6.
+Pending decision: Titus/Sophia/WinSlop — usuario mencionó estas herramientas pero no están documentadas en los logs de decisión. Confirmar si van a manifest.json, son referencia de tweaks, o se descartan.
 Resume file: None
