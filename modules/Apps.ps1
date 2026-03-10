@@ -164,16 +164,16 @@ function _Invoke-UninstallCommand {
         [string] $AppName
     )
 
-    [string] $exe  = ''
-    [string] $args = ''
+    [string] $exe     = ''
+    [string] $cmdArgs = ''
 
     if ($CmdStr -match '^"([^"]+)"\s*(.*)$') {
-        $exe  = $Matches[1]
-        $args = $Matches[2].Trim()
+        $exe     = $Matches[1]
+        $cmdArgs = $Matches[2].Trim()
     }
     elseif ($CmdStr -match '^(\S+)\s*(.*)$') {
-        $exe  = $Matches[1]
-        $args = $Matches[2].Trim()
+        $exe     = $Matches[1]
+        $cmdArgs = $Matches[2].Trim()
     }
     else {
         return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Error = "No se pudo parsear: $CmdStr" }
@@ -181,7 +181,7 @@ function _Invoke-UninstallCommand {
 
     try {
         $startParams = @{ FilePath = $exe; Wait = $true; PassThru = $true }
-        if ($args)                   { $startParams['ArgumentList'] = $args }
+        if ($cmdArgs)                { $startParams['ArgumentList'] = $cmdArgs }
         if ($Method -eq 'Quiet')     { $startParams['NoNewWindow']  = $true }
 
         $proc = Start-Process @startParams
