@@ -4,7 +4,7 @@ phase: 04-compatibility-qualification
 source:
   - 04-01-SUMMARY.md
 started: 2026-03-10T00:00:00
-updated: 2026-03-10T00:06:00
+updated: 2026-03-10T00:08:00
 ---
 ## Current Test
 [testing complete]
@@ -28,7 +28,7 @@ pending: 0
 skipped: 0
 ## Gaps
 - truth: "En laptops con GPU hibrida (iGPU + dGPU), el header del menu muestra ambas GPUs o prioriza la dGPU, no solo la primera que retorna WMI"
-  status: failed
+  status: fixed
   reason: "User reported: en laptops hibridas con iGPU + dGPU, Select-Object -First 1 puede devolver la integrada en lugar de la dedicada"
   severity: minor
   test: 2
