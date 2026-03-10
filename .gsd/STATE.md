@@ -5,14 +5,14 @@
 See: .gsd/PROJECT.md (updated 2026-03-10)
 
 **Core value:** El técnico ejecuta una acción y la consola nunca bloquea — cada operación pesada corre en background con spinner visual.
-**Current focus:** Phase 8 — Codebase Polish
+**Current focus:** Phase 9 — Deployment
 
 ## Current Position
 
-Phase: 8 of 9 (Codebase Polish)
-Plan: 3 of 3 — Complete
-Status: Phase 8 complete — 08-01 ✅, 08-02 ✅, 08-03 ✅
-Last activity: 2026-03-10 ART — Completed 08-03-PLAN (Launch.ps1 Hardening)
+Phase: 8 of 9 (Codebase Polish) — COMPLETA
+Plan: 3 of 3 — Fase completa
+Status: BLOQUEADO en Phase 9 — Deployment: usuario debe proveer $GitHubRepo (usuario/repo)
+Last activity: 2026-03-10 ART — Phase 8 verificada (11/11 PASS). Phases 7+8 completas.
 
 Progress: [█████████████████] ~99% (Phase 8 fully complete, Phase 9 pending)
 

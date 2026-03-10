@@ -16,7 +16,7 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
   - [ ] 06-01-PLAN.md — Get-NetworkDiagnostics + opción [d] en menú
   - [ ] 06-02-PLAN.md — Verificación post-apply + UI con conteo de propiedades
 - [x] **Phase 7: Auto-Cleanup / Self-Removal** — Opción [X] Limpiar y salir: confirmación explícita + deferred rmdir vía cmd.exe detachado
-- [ ] **Phase 8: Codebase Polish** — Bugs críticos, fixes de UX/async y hardening de Launch.ps1 identificados en auditoría de código
+- [x] **Phase 8: Codebase Polish** — Admin check, Spooler warning, restore cooldown, CIM cache, async apps/cleanup, DISM output, Launch.ps1 hardening (completed 2026-03-10)
 - [ ] **Phase 9: Deployment** — GitHub release, flujo de distribución, validación end-to-end del bootstrap
 
 ---
@@ -215,7 +215,7 @@ Plans:
 
 ---
 
-### Phase 8: Codebase Polish 🔜
+### Phase 8: Codebase Polish ✅ COMPLETE
 
 **Goal**: Resolver bugs críticos, mejorar UX async y hardening de Launch.ps1 identificados en auditoría CONCERNS.md.
 
