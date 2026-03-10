@@ -11,10 +11,10 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
 - [x] **Phase 3: Polish & Production** — manifest v3 (15 herramientas), oldscripts eliminado, out-of-scope documentado
 - [x] **Phase 4a: Compatibility — Crash Guards** — 7 guards en Telemetry.ps1 + COMPATIBILITY.md
 - [x] **Phase 4b: Compatibility — UX Guards** — Banner OS/HW/Edition, x86 guard en Apps, LTSC en UWP, Privacy GPO note, PS1 launcher, instance mutex
-- [ ] **Phase 5: Portable Executable** — Distribución como `.exe` standalone, sin dependencias externas, sin artifacts de desarrollo
-  - [ ] 05-01-PLAN.md — Launch.ps1 (one-liner handler) + Release.ps1 (build script)
-  - [ ] 05-02-PLAN.md — Bootstrap integrity fix + README rewrite
-- [ ] **Phase 6: Network Module Review** — Auditoría de Network.ps1: gaps de cobertura, casos borde, mejoras de diagnóstico
+- [x] **Phase 5: Portable Executable** — Launch.ps1 (one-liner), Release.ps1 (build), Bootstrap integrity fix, README
+- [ ] **Phase 6: Network Module Review** — Diagnóstico de red (TCP/DNS/ping), verificación post-apply en Optimize-Network
+  - [ ] 06-01-PLAN.md — Get-NetworkDiagnostics + opción [d] en menú
+  - [ ] 06-02-PLAN.md — Verificación post-apply + UI con conteo de propiedades
 - [ ] **Phase 7: Auto-Cleanup / Self-Removal** — Opción para borrar o desaparecer el toolkit de una PC ajena al terminar el trabajo
 
 ---

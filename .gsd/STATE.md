@@ -9,10 +9,10 @@ See: .gsd/PROJECT.md (updated 2026-03-10)
 
 ## Current Position
 
-Phase: 5 of 7 (Portable Executable) — COMPLETA
-Plan: 2 of 2 in current phase — Phase 5 finalizada
-Status: Phase complete — Ready for Phase 6
-Last activity: 2026-03-10 ART — Completed 05-02-PLAN.md. Bootstrap integrity check + README rewritten. Phase 5 done.
+Phase: 6 of 7 (Network Module Review) — EN PROGRESO
+Plan: 0 of 2 in current phase — Planes creados, listos para ejecutar
+Status: Planning complete — Ready for execution
+Last activity: 2026-03-10 ART — Phase 6 planned. 2 plans: 06-01 (Diagnostics) + 06-02 (Verification).
 
 Progress: [████████████░] ~82% (phases 1-5 complete, phases 6-7 pending)
 
@@ -53,7 +53,8 @@ Recent decisions affecting current work:
 - [x] Configurar `$GitHubRepo` en Launch.ps1 con usuario/repo real de GitHub (pendiente usuario)
 - [ ] Publicar primer release en GitHub (subir ZIP generado por Release.ps1)
 - [x] Ejecutar Phase 5 Plan 2: Bootstrap integrity fix + README rewrite ✓
-- [ ] Ejecutar Phase 6: Network Module Review (gaps de cobertura, casos borde, mejoras)
+- [ ] Ejecutar Phase 6 Plan 1: Get-NetworkDiagnostics + [d] en menú
+- [ ] Ejecutar Phase 6 Plan 2: Verificación post-apply en Optimize-Network
 - [ ] Ejecutar Phase 7: Auto-Cleanup / Self-Removal (limpieza al salir, self-destruct EXE)
 - [ ] WinSlop URL está vacía en manifest.json — usuario necesita proveer URL privada cuando quiera usarlo
 - [ ] Sophia Script URL apunta a versión W11 — cambiar a `Windows.10.And.11` para W10
