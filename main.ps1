@@ -385,7 +385,11 @@ function Show-MainMenu {
 
                     Write-Host ''
                     foreach ($ad in $result.AdaptersOptimized) {
-                        Write-Host ("  [OK] Adaptador : {0}" -f $ad) -ForegroundColor Green
+                        if ($ad.ChangesMade -gt 0) {
+                            Write-Host ("  [OK] {0,-28} {1} propiedades aplicadas" -f $ad.Name, $ad.ChangesMade) -ForegroundColor Green
+                        } else {
+                            Write-Host ("  [-] {0,-28} sin cambios (propiedades no encontradas en driver)" -f $ad.Name) -ForegroundColor DarkYellow
+                        }
                     }
                     Write-Host '  [OK] TCP Global Settings + DNS Flush' -ForegroundColor Green
 
