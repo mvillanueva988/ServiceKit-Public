@@ -624,6 +624,8 @@ function Show-MainMenu {
 
                     switch ($appsChoice) {
                         '1' {
+                            Write-Host "`n  Cargando lista de apps instaladas..." -ForegroundColor Cyan
+                            [PSCustomObject[]] $allWin32Apps = @(Wait-ToolkitJobs -Jobs @(Start-Win32AppsJob))
                             [string] $win32Filter = ''
                             :win32Loop while ($true) {
                                 Clear-Host
@@ -632,7 +634,15 @@ function Show-MainMenu {
                                 Write-Host '================================================' -ForegroundColor DarkCyan
                                 Write-Host ''
 
-                                [PSCustomObject[]] $win32Apps = Get-InstalledWin32Apps -Filter $win32Filter
+                                [PSCustomObject[]] $win32Apps = if ([string]::IsNullOrWhiteSpace($win32Filter)) {
+                                    $allWin32Apps
+                                } else {
+                                    try {
+                                        @($allWin32Apps | Where-Object { $_.Name -match $win32Filter -or $_.Publisher -match $win32Filter })
+                                    } catch {
+                                        @($allWin32Apps | Where-Object { $_.Name -like "*$win32Filter*" -or $_.Publisher -like "*$win32Filter*" })
+                                    }
+                                }
 
                                 if ($win32Filter) {
                                     Write-Host ('  Filtro: "{0}" — {1} resultado(s).' -f $win32Filter, $win32Apps.Count) -ForegroundColor Yellow
@@ -718,6 +728,8 @@ function Show-MainMenu {
                             }
                         }
                         '2' {
+                            Write-Host "`n  Cargando lista de paquetes AppX..." -ForegroundColor Cyan
+                            [PSCustomObject[]] $allUwpApps = @(Wait-ToolkitJobs -Jobs @(Start-UwpAppsJob))
                             [string] $uwpFilter = ''
                             :uwpLoop while ($true) {
                                 Clear-Host
@@ -730,7 +742,15 @@ function Show-MainMenu {
                                     Write-Host '  [i] Edicion LTSC: Microsoft Store no incluida. Lista puede ser reducida o vacia.' -ForegroundColor Yellow
                                     Write-Host ''
                                 }
-                                [PSCustomObject[]] $uwpApps = Get-InstalledUwpApps -Filter $uwpFilter
+                                [PSCustomObject[]] $uwpApps = if ([string]::IsNullOrWhiteSpace($uwpFilter)) {
+                                    $allUwpApps
+                                } else {
+                                    try {
+                                        @($allUwpApps | Where-Object { $_.DisplayName -match $uwpFilter -or $_.Name -match $uwpFilter })
+                                    } catch {
+                                        @($allUwpApps | Where-Object { $_.DisplayName -like "*$uwpFilter*" -or $_.Name -like "*$uwpFilter*" })
+                                    }
+                                }
 
                                 if ($uwpFilter) {
                                     Write-Host ('  Filtro: "{0}" — {1} resultado(s).' -f $uwpFilter, $uwpApps.Count) -ForegroundColor Yellow
