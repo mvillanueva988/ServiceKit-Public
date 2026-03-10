@@ -9,12 +9,12 @@ See: .gsd/PROJECT.md (updated 2026-03-10)
 
 ## Current Position
 
-Phase: 4b of 6 (Compatibility — UX Guards)
+Phase: 5 of 7 (Portable Executable)
 Plan: 0 of ? in current phase
 Status: NOT STARTED
-Last activity: 2026-03-10 ART — Fix WU LastCheckedForUpdates (path moderno + fallback legacy). ROADMAP reestructurado: Phase 4 dividida en 4a (crash guards, completo) y 4b (UX guards, pendiente); Phase 6 Network Review agregada.
+Last activity: 2026-03-10 ART — Phase 4b complete. Banner Win10/Win11 + edition + arch + RAM + GPU; $isWin11/$isHome/$isLtsc vars; Privacy Home warning; UWP LTSC warning; PS1 launcher support; instance mutex; Apps.ps1 WOW6432Node x86 guard; manifest.json v4 con Sophia Script + WinSlop (18 tools total). Phase 7 Auto-Cleanup agregada al roadmap.
 
-Progress: [██████░░░░] ~60% (7/? plans complete — fases 1-3 + 4a cerradas)
+Progress: [███████░░░] ~70% (8/? plans complete — fases 1-3 + 4a + 4b cerradas)
 
 ## Performance Metrics
 
@@ -49,9 +49,11 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- [ ] Ejecutar Phase 4b: Compatibility UX Guards (edición detection, x86 en Apps, LTSC en UWP, hardware banner, instance lock)
 - [ ] Ejecutar Phase 5: Portable Executable (ps2exe u otro empaquetador a definir)
 - [ ] Ejecutar Phase 6: Network Module Review (gaps de cobertura, casos borde, mejoras)
+- [ ] Ejecutar Phase 7: Auto-Cleanup / Self-Removal (limpieza al salir, self-destruct EXE)
+- [ ] WinSlop URL está vacía en manifest.json — usuario necesita proveer URL privada cuando quiera usarlo
+- [ ] Sophia Script URL apunta a versión W11 — cambiar a `Windows.10.And.11` para W10
 
 ### Blockers/Concerns
 
@@ -60,6 +62,6 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-10 ART
-Stopped at: WU fix (path moderno `WindowsUpdate\UX\Settings\LastCheckedForUpdates` + fallback legacy). ROADMAP reestructurado con Phase 4b y Phase 6.
-Pending decision: Titus/Sophia/WinSlop — usuario mencionó estas herramientas pero no están documentadas en los logs de decisión. Confirmar si van a manifest.json, son referencia de tweaks, o se descartan.
+Stopped at: Phase 4b complete. Todos los cambios de código aplicados y commiteados. ROADMAP y STATE actualizados. Siguiente: Phase 5 (Portable Executable).
+Pending decision: WinSlop URL vacía — usuario tiene URL privada.
 Resume file: None

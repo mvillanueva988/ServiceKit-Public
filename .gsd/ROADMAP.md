@@ -10,9 +10,10 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
 - [x] **Phase 2: Privacy Module** — 3 perfiles nativos (Basic/Medium/Aggressive) via registro Windows
 - [x] **Phase 3: Polish & Production** — manifest v3 (15 herramientas), oldscripts eliminado, out-of-scope documentado
 - [x] **Phase 4a: Compatibility — Crash Guards** — 7 guards en Telemetry.ps1 + COMPATIBILITY.md
-- [ ] **Phase 4b: Compatibility — UX Guards** — Detección edición/build, guard x86 en Apps, LTSC en UWP, hardware info en banner, instance lock
+- [x] **Phase 4b: Compatibility — UX Guards** — Banner OS/HW/Edition, x86 guard en Apps, LTSC en UWP, Privacy GPO note, PS1 launcher, instance mutex
 - [ ] **Phase 5: Portable Executable** — Distribución como `.exe` standalone, sin dependencias externas, sin artifacts de desarrollo
 - [ ] **Phase 6: Network Module Review** — Auditoría de Network.ps1: gaps de cobertura, casos borde, mejoras de diagnóstico
+- [ ] **Phase 7: Auto-Cleanup / Self-Removal** — Opción para borrar o desaparecer el toolkit de una PC ajena al terminar el trabajo
 
 ---
 
@@ -106,11 +107,12 @@ Plans:
 | 2. Privacy Module | 1/1 | ✅ Complete | 2026-03-10 |
 | 3. Polish & Production | 1/1 | ✅ Complete | 2026-03-10 |
 | 4a. Compatibility — Crash Guards | 1/1 | ✅ Complete | 2026-03-10 |
-| 4b. Compatibility — UX Guards | 0/? | 🔜 Pending | — |
+| 4b. Compatibility — UX Guards | 1/1 | ✅ Complete | 2026-03-10 |
 | 5. Portable Executable | 0/? | 🔜 Pending | — |
 | 6. Network Module Review | 0/? | 🔜 Pending | — |
+| 7. Auto-Cleanup / Self-Removal | 0/? | 🔜 Pending | — |
 
-**Overall:** 7/? plans complete — Fases 1-3 + 4a cerradas.
+**Overall:** 8/? plans complete — Fases 1-3 + 4a + 4b cerradas.
 
 ### Phase 4a: Compatibility — Crash Guards ✅ COMPLETE
 
@@ -132,33 +134,24 @@ Plans:
 
 ## Phase Details (Pending)
 
-### Phase 4b: Compatibility — UX Guards 🔜
+### Phase 4b: Compatibility — UX Guards ✅ COMPLETE
 
-**Goal**: Agregar guards de UX que avisan al técnico del contexto en el que está operando — sin crashear (eso ya está), sino mostrando información contextual relevante o degradando con mensaje explicativo.
-
+**Goal**: Guards de UX informativos — el técnico sabe el contexto en el que está operando.
 **Depends on**: Phase 4a
-**Scope:**
+**Completed**: 2026-03-10
 
-| Área | Problema | Implementación propuesta |
-|------|----------|--------------------------|
-| Edición Windows (GPO) | `HKLM:\SOFTWARE\Policies\...` funciona en Pro/Enterprise pero Home silenciosamente ignora las keys. Privacy "Aggressive" aplica GPO que Home ignora | Detectar edición, mostrar nota en sub-menú Privacy si la edición es Home |
-| OS build Win10 vs Win11 | Win11 cambió ubicación del menú Start y algunos registry keys de startup | Detectar `CurrentBuild >= 22000` para Win11; nota contextual donde corresponda |
-| x86 vs x64 en Apps.ps1 | `WOW6432Node` solo existe en x64. En x86 puro las 3 rutas son equivalentes, pero el path `WOW6432Node` devuelve resultados duplicados | Guard de arquitectura en `Get-InstalledWin32Apps` — saltar WOW6432Node si `[Environment]::Is64BitOperatingSystem -eq $false` |
-| LTSC detection en UWP | `Get-AppxPackage` devuelve poco/nada en LTSC; lista vacía puede confundir | Detectar LTSC, mostrar nota explicativa en sub-menú UWP |
-| Hardware info en banner | El banner de inicio solo muestra OS. Podría mostrar RAM, tipo de disco, GPU | Agregar 2-3 líneas de info de hardware al menú principal (lectura rápida, no async) |
-| Instance lock | Si el técnico ejecuta dos instancias simultáneas, los jobs pueden colisionar en el mismo output/ | Mutex o lockfile simple en main.ps1 al inicio |
+**What was built:**
+- `main.ps1` banner — OS (Win10/Win11), edición, build, arch (x64/x86), RAM GB, GPU model
+- `main.ps1` variables `$isWin11`, `$isHome`, `$isLtsc` disponibles en todo el scope del loop
+- `main.ps1` Privacy submenu — nota amarilla en Home: "tweaks de Group Policy (perfil Agresivo) son ignorados"
+- `main.ps1` UWP submenu — nota amarilla en LTSC: "Microsoft Store no incluida, lista puede ser reducida"
+- `main.ps1` Tool launcher — soporte para `launchExe` con extensión `.ps1`
+- `main.ps1` Instance mutex — `Local\PCOptimizacionToolkit` previene dos instancias
+- `modules/Apps.ps1` — WOW6432Node saltado en x86 puro
+- `tools/manifest.json` v4 — Sophia Script + WinSlop (18 herramientas total)
 
-**Tier 1 (impacto real, pocos cambios):**
-1. Guard x86 en `Get-InstalledWin32Apps` (saltar WOW6432Node en x86)
-2. Guard LTSC en sub-menú UWP (mensaje + skip `Get-AppxPackage`)
-3. Detección Win10/Win11 + Home/Pro en banner de inicio
-4. Nota de edición en Privacy "Aggressive" si GPO será ignorada
-
-**Tier 2 (cosmético/nice-to-have):**
-5. Hardware info en banner (RAM, SSD/HDD, GPU)
-6. Instance lock
-
-**Depends on**: Phase 4a
+Plans:
+- [x] 04b-01: UX guards
 
 ---
 
@@ -197,3 +190,17 @@ Plans:
 - **Resultados de diagnóstico**: El módulo retorna `AdaptersOptimized[]` pero no verifica si los cambios de registro realmente se aplicaron (algunos drivers ignoran las propiedades).
 
 **Depends on**: Phase 4b (o puede ejecutarse en paralelo)
+
+---
+
+### Phase 7: Auto-Cleanup / Self-Removal 🔜
+
+**Goal**: Mecanismo para que el toolkit desaparezca limpiamente de una PC ajena al terminar el trabajo.
+
+**Options to evaluate:**
+- `[X] Limpiar y salir` — opción en el menú principal que borra la carpeta del toolkit, limpia Recent Files, vacía Recycle Bin
+- **Self-destruct on exit** — cuando se combine con Phase 5 (EXE), el exe puede borrarse a sí mismo al salir (`cmd /c del exePath` en detached process)
+- **Ruta manual conocida** — instrucción en README de copiar a `C:\Toolkit` para borrado manual rápido
+- **No-trace mode** — no crear archivos de log, no crear output/, ejecutar todo en memoria
+
+**Depends on**: Phase 5 (para la variante EXE self-destruct)
