@@ -37,13 +37,29 @@ function Show-MainMenu {
             [string] $arch     = if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
             Write-Host ('  OS   : {0} {1}  Build {2}  {3}' -f $winVer, $edition.Trim(), $build, $arch) -ForegroundColor Green
             $csHw  = Get-CimInstance -ClassName Win32_ComputerSystem    -ErrorAction SilentlyContinue
-            $gpuHw = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue | Select-Object -First 1
+            [object[]] $allGpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
             if ($csHw) {
                 [int]    $ramGb    = [int][math]::Ceiling($csHw.TotalPhysicalMemory / 1GB)
-                [string] $gpuShort = if ($gpuHw) {
-                    $n = [string]$gpuHw.Name
+                [string] $gpuShort = if ($allGpus.Count -eq 0) {
+                    'N/A'
+                } elseif ($allGpus.Count -eq 1) {
+                    $n = [string]$allGpus[0].Name
                     if ($n.Length -gt 30) { $n.Substring(0, 28) + '..' } else { $n }
-                } else { 'N/A' }
+                } else {
+                    # GPU hibrida: priorizar dGPU (NVIDIA/AMD/Radeon/GeForce) para display principal
+                    $dGpu = $allGpus | Where-Object { $_.Name -match 'NVIDIA|AMD|Radeon|GeForce|RTX|GTX|RX\s' } | Select-Object -First 1
+                    $iGpu = $allGpus | Where-Object { $_.Name -match 'Intel|UHD|Iris|HD Graphics' } | Select-Object -First 1
+                    if ($dGpu -and $iGpu) {
+                        [string] $dName = [string]$dGpu.Name; if ($dName.Length -gt 22) { $dName = $dName.Substring(0, 20) + '..' }
+                        [string] $iName = [string]$iGpu.Name -replace 'Intel\s*(UHD|Iris|HD)?\s*Graphics\s*', 'iGPU '
+                        if ($iName.Length -gt 10) { $iName = $iName.Substring(0, 8).Trim() }
+                        '{0} + {1}' -f $dName, $iName
+                    } elseif ($dGpu) {
+                        $n = [string]$dGpu.Name; if ($n.Length -gt 30) { $n.Substring(0, 28) + '..' } else { $n }
+                    } else {
+                        $n = [string]$allGpus[0].Name; if ($n.Length -gt 30) { $n.Substring(0, 28) + '..' } else { $n }
+                    }
+                }
                 Write-Host ('  HW   : {0} GB RAM  |  GPU: {1}' -f $ramGb, $gpuShort) -ForegroundColor DarkGray
             }
         } else {
