@@ -182,6 +182,8 @@ function Show-MainMenu {
                         Write-Host ("    - {0}" -f $err) -ForegroundColor DarkYellow
                     }
                 }
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '2' {
                 Write-Host "`n  Escaneando carpetas temporales..." -ForegroundColor Cyan
@@ -201,15 +203,15 @@ function Show-MainMenu {
                     } else {
                         '{0:N1} MB' -f $row.SizeMB
                     }
-                    Write-Host ('  {0,-30} {1,10}' -f $row.Label, $sizeLabel)
+                    Write-Host ('  {0,-36} {1,10}' -f $row.Label, $sizeLabel)
                 }
-                Write-Host ('  {0}' -f ('-' * 43)) -ForegroundColor DarkCyan
+                Write-Host ('  {0}' -f ('-' * 50)) -ForegroundColor DarkCyan
                 [string] $totalLabel = if ($preview.TotalGB -ge 1) {
                     '{0:N2} GB' -f $preview.TotalGB
                 } else {
                     '{0:N1} MB' -f $preview.TotalMB
                 }
-                Write-Host ('  {0,-30} {1,10}' -f 'TOTAL estimado', $totalLabel) -ForegroundColor Yellow
+                Write-Host ('  {0,-36} {1,10}' -f 'TOTAL estimado', $totalLabel) -ForegroundColor Yellow
                 Write-Host ''
 
                 [string] $confirm = (Read-Host '  Confirmar limpieza? [s] Si  [q] Cancelar').Trim().ToLower()
@@ -241,6 +243,8 @@ function Show-MainMenu {
                 Write-Host ("  DISM RestoreHealth : {0}" -f $dismStatus) -ForegroundColor $(if ($result.DismExitCode -eq 0) { 'Green' } else { 'Red' })
                 Write-Host ("  SFC /scannow       : {0}" -f $sfcStatus)  -ForegroundColor $(if ($result.SfcExitCode  -eq 0) { 'Green' } else { 'Red' })
                 Write-Host "`n  Para ver detalles del SFC, revisa: C:\Windows\Logs\CBS\CBS.log" -ForegroundColor DarkGray
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '4' {
                 Write-Host "`n  Creando punto de restauracion (puede demorar un poco)..." -ForegroundColor Cyan
@@ -253,6 +257,8 @@ function Show-MainMenu {
                     Write-Host ("  Fallo: {0}" -f $result.Message) -ForegroundColor Red
                     Write-Host "  (Nota: Windows por defecto permite crear solo 1 punto cada 24 horas)" -ForegroundColor DarkGray
                 }
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '5' {
                 # Sub-loop para poder volver al menu de red luego de leer la info
@@ -333,6 +339,8 @@ function Show-MainMenu {
                     if (-not $result.Success) {
                         Write-Host '  [!] Alguno de los comandos globales requirio privilegios de administrador.' -ForegroundColor Yellow
                     }
+                    Write-Host ''
+                    Read-Host '  [Enter] para continuar' | Out-Null
 
                     break networkLoop
                 }
@@ -425,6 +433,8 @@ function Show-MainMenu {
 
                     Write-Host ''
                     Write-Host '  Nota: Cierra sesion o reinicia el Explorer para ver los cambios.' -ForegroundColor DarkGray
+                    Write-Host ''
+                    Read-Host '  [Enter] para continuar' | Out-Null
 
                     break perfLoop
                 }
@@ -436,6 +446,8 @@ function Show-MainMenu {
 
                 Write-Host ("  Snapshot guardado : {0}" -f $result.FileName) -ForegroundColor Green
                 Write-Host "  Realiza el service y luego ejecuta [8] para capturar el estado POST." -ForegroundColor DarkGray
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '8' {
                 Write-Host "`n  Recopilando estado POST-service (puede tardar un momento)..." -ForegroundColor Cyan
@@ -444,6 +456,8 @@ function Show-MainMenu {
 
                 Write-Host ("  Snapshot guardado : {0}" -f $result.FileName) -ForegroundColor Green
                 Write-Host "  Usa la opcion [9] para comparar PRE vs POST." -ForegroundColor DarkGray
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '9' {
                 try {
@@ -452,12 +466,16 @@ function Show-MainMenu {
                 } catch {
                     Write-Host ("`n  Error: {0}" -f $_.Exception.Message) -ForegroundColor Red
                 }
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '10' {
                 Write-Host "`n  Leyendo Event Log (ultimos 90 dias)..." -ForegroundColor Cyan
                 $job    = Start-BsodHistoryJob -Days 90
                 $result = Wait-ToolkitJobs -Jobs @($job)
                 Show-BsodHistory -Data $result
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '11' {
                 [string] $backupRoot = Join-Path $PSScriptRoot 'output\driver_backup'
@@ -481,6 +499,8 @@ function Show-MainMenu {
                 } else {
                     Write-Host ("  Error: {0}" -f $result.Message) -ForegroundColor Red
                 }
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
             }
             '12' {
                 :appsLoop while ($true) {
@@ -729,6 +749,13 @@ function Show-MainMenu {
                                 '2' { 'Medio'    }
                                 '3' { 'Agresivo' }
                             }
+
+                            Write-Host ''
+                            Write-Host ('  Perfil seleccionado : {0}' -f $profileLabel) -ForegroundColor Cyan
+                            Write-Host '  Los tweaks son permanentes hasta revertirlos manualmente.' -ForegroundColor Yellow
+                            Write-Host ''
+                            [string] $privConfirm = (Read-Host '  Confirmar? [s] Aplicar  [q] Cancelar').Trim().ToLower()
+                            if ($privConfirm -ne 's') { continue privacyLoop }
 
                             Write-Host ''
                             Write-Host ("  Aplicando perfil {0}..." -f $profileLabel) -ForegroundColor Cyan

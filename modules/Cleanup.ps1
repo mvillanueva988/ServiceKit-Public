@@ -9,30 +9,86 @@ function _Get-CleanupPaths {
 
     $paths = [System.Collections.Generic.List[PSCustomObject]]::new()
 
-    # Rutas estáticas
+    # ── Rutas de sistema (independientes del usuario) ──────────────────────────
     foreach ($entry in @(
-        [PSCustomObject]@{ Label = 'Windows Temp';          Path = "$env:SystemRoot\Temp" }
-        [PSCustomObject]@{ Label = 'Windows Prefetch';      Path = "$env:SystemRoot\Prefetch" }
-        [PSCustomObject]@{ Label = 'Windows Update Cache';  Path = "$env:SystemRoot\SoftwareDistribution\Download" }
-        [PSCustomObject]@{ Label = 'Usuario Temp';          Path = "$env:TEMP" }
-        [PSCustomObject]@{ Label = 'LocalAppData Temp';     Path = "$env:LOCALAPPDATA\Temp" }
-        [PSCustomObject]@{ Label = 'Chrome Cache';          Path = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache" }
-        [PSCustomObject]@{ Label = 'Edge Cache';            Path = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache" }
-        [PSCustomObject]@{ Label = 'Brave Cache';           Path = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cache" }
-        [PSCustomObject]@{ Label = 'Opera Cache';           Path = "$env:LOCALAPPDATA\Opera Software\Opera Stable\Cache" }
-        [PSCustomObject]@{ Label = 'Opera GX Cache';        Path = "$env:LOCALAPPDATA\Opera Software\Opera GX Stable\Cache" }
+        [PSCustomObject]@{ Label = 'Windows Temp';     Path = "$env:SystemRoot\Temp" }
+        [PSCustomObject]@{ Label = 'Windows Prefetch'; Path = "$env:SystemRoot\Prefetch" }
+        [PSCustomObject]@{ Label = 'WU Cache';         Path = "$env:SystemRoot\SoftwareDistribution\Download" }
     )) { $paths.Add($entry) }
 
-    # Firefox — enumerar perfiles dinámicamente desde %APPDATA%
-    [string] $ffRoot = "$env:APPDATA\Mozilla\Firefox\Profiles"
-    if (Test-Path $ffRoot -PathType Container) {
-        Get-ChildItem -Path $ffRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            [string] $cache2 = Join-Path $_.FullName 'cache2'
-            if (Test-Path $cache2 -PathType Container) {
-                $paths.Add([PSCustomObject]@{
-                    Label = 'Firefox Cache ({0})' -f $_.Name
-                    Path  = $cache2
-                })
+    # ── Enumerar todos los perfiles de usuario del equipo ──────────────────────
+    # Win32_UserProfile primero (incluye perfiles de dominio con rutas no-estándar),
+    # fallback a C:\Users\ si CIM no devuelve nada.
+    [System.Collections.Generic.List[string]] $profileRoots =
+        [System.Collections.Generic.List[string]]::new()
+
+    [object[]] $wmiProfiles = @(
+        Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.Special -and $_.LocalPath -and (Test-Path $_.LocalPath) }
+    )
+    foreach ($p in $wmiProfiles) { $profileRoots.Add($p.LocalPath) }
+
+    if ($profileRoots.Count -eq 0) {
+        [System.Collections.Generic.HashSet[string]] $excluded =
+            [System.Collections.Generic.HashSet[string]]::new(
+                [string[]]@('Public', 'Default', 'Default User', 'All Users'),
+                [System.StringComparer]::OrdinalIgnoreCase
+            )
+        Get-ChildItem -Path (Join-Path $env:SystemDrive 'Users') -Directory -ErrorAction SilentlyContinue |
+            Where-Object { -not $excluded.Contains($_.Name) } |
+            ForEach-Object { $profileRoots.Add($_.FullName) }
+    }
+
+    foreach ($root in $profileRoots) {
+        [string] $user  = Split-Path $root -Leaf
+        [string] $local = Join-Path $root 'AppData\Local'
+        [string] $roam  = Join-Path $root 'AppData\Roaming'
+
+        # Temp del perfil
+        [string] $tempPath = Join-Path $local 'Temp'
+        if (Test-Path $tempPath -PathType Container) {
+            $paths.Add([PSCustomObject]@{ Label = "Temp ($user)"; Path = $tempPath })
+        }
+
+        # Chromium-based: enumerar TODOS los perfiles del navegador (Default, Profile 1, Profile 2, ...)
+        foreach ($br in @(
+            [PSCustomObject]@{ Short = 'Chrome';   Base = "$local\Google\Chrome\User Data" }
+            [PSCustomObject]@{ Short = 'Edge';     Base = "$local\Microsoft\Edge\User Data" }
+            [PSCustomObject]@{ Short = 'Brave';    Base = "$local\BraveSoftware\Brave-Browser\User Data" }
+            [PSCustomObject]@{ Short = 'Opera';    Base = "$local\Opera Software\Opera Stable" }
+            [PSCustomObject]@{ Short = 'Opera GX'; Base = "$local\Opera Software\Opera GX Stable" }
+        )) {
+            if (-not (Test-Path $br.Base -PathType Container)) { continue }
+
+            Get-ChildItem -Path $br.Base -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq 'Default' -or $_.Name -match '^Profile \d+$' } |
+                ForEach-Object {
+                    [string] $profTag = if ($_.Name -eq 'Default') { '' } else { "/$($_.Name)" }
+                    foreach ($cdir in @('Cache', 'Cache2', 'GPUCache')) {
+                        [string] $cp = Join-Path $_.FullName $cdir
+                        if (Test-Path $cp -PathType Container) {
+                            $paths.Add([PSCustomObject]@{
+                                Label = "$($br.Short)$profTag/$cdir ($user)"
+                                Path  = $cp
+                            })
+                        }
+                    }
+                }
+        }
+
+        # Firefox — perfiles dinámicos desde %APPDATA%\Mozilla\Firefox\Profiles
+        [string] $ffRoot = "$roam\Mozilla\Firefox\Profiles"
+        if (Test-Path $ffRoot -PathType Container) {
+            Get-ChildItem -Path $ffRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                [string] $cache2 = Join-Path $_.FullName 'cache2'
+                if (Test-Path $cache2 -PathType Container) {
+                    [string] $ffShort = $_.Name
+                    if ($ffShort.Length -gt 14) { $ffShort = $ffShort.Substring(0, 14) }
+                    $paths.Add([PSCustomObject]@{
+                        Label = "Firefox/$ffShort ($user)"
+                        Path  = $cache2
+                    })
+                }
             }
         }
     }
