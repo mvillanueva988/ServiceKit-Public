@@ -200,7 +200,7 @@ Plans:
 
 ---
 
-### Phase 7: Auto-Cleanup / Self-Removal 🔜
+### Phase 7: Auto-Cleanup / Self-Removal ✅ COMPLETE
 
 **Goal**: Mecanismo para que el toolkit desaparezca limpiamente de una PC ajena al terminar el trabajo.
 

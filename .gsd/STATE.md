@@ -5,14 +5,14 @@
 See: .gsd/PROJECT.md (updated 2026-03-10)
 
 **Core value:** El técnico ejecuta una acción y la consola nunca bloquea — cada operación pesada corre en background con spinner visual.
-**Current focus:** Phase 3 — Polish & Production
+**Current focus:** Phase 8 — Codebase Polish
 
 ## Current Position
 
-Phase: 7 of 9 (Auto-Cleanup) — COMPLETA
-Plan: 1 of 1 in current phase — Fase completa
-Status: Phase complete — Ready for Phase 8 execution
-Last activity: 2026-03-10 ART — Phase 7 ejecutada. 07-01 ([X] Limpiar y salir) completado.
+Phase: 7 of 9 (Auto-Cleanup) — COMPLETA → avanzando a Phase 8
+Plan: 1 of 1 — Fase completa
+Status: Transitioning to Phase 8 — Codebase Polish
+Last activity: 2026-03-10 ART — Phase 7 verificada (PASS). Transition a Phase 8.
 
 Progress: [███████████████░] ~95% (phases 1-7 complete, phases 8-9 pending)
 
