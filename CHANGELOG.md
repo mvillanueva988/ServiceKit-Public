@@ -10,6 +10,15 @@ Formato: Keep a Changelog + versionado semantico.
 - A partir de este punto, las versiones se toman desde `VERSION` (`MAJOR.MINOR.PATCH`).
 - Los releases historicos con fecha (`v2026.03.xx`) se mantienen como legado de transicion.
 
+## [v1.0.2] - 2026-03-14
+
+### Fixed
+- Bootstrap: reintentos de descarga y validacion de payload ZIP antes de extraer.
+- Menu de herramientas: Enter vacio ya no sale del submenu; `D N -f` habilita re-descarga forzada explicita.
+- Privacidad: deteccion/lanzamiento de ShutUp10 unificado para evitar falsos "no descargado".
+- Telemetria: referencias PRE/POST alineadas a opciones [7]/[8] del menu actual.
+- Windows Update: fallback de fechas endurecido para evitar valores ambiguos/invalidos.
+
 ## [v2026.03.14] - 2026-03-14
 
 ### Added
