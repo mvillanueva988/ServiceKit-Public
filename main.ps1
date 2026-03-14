@@ -789,20 +789,33 @@ function Show-MainMenu {
 
                                     Write-Host "`n  Desinstalando..." -ForegroundColor Cyan
                                     [PSCustomObject] $unResult = Invoke-Win32Uninstall -App $selApp
+
+                                    $unMethodProp = $unResult.PSObject.Properties['Method']
+                                    [string] $unMethod = if ($null -ne $unMethodProp) { [string] $unMethodProp.Value } else { 'Unknown' }
+
                                     $unErrorProp = $unResult.PSObject.Properties['Error']
                                     [string] $unError = if ($null -ne $unErrorProp) { [string] $unErrorProp.Value } else { '' }
+
+                                    $unExitProp = $unResult.PSObject.Properties['ExitCode']
+                                    [object] $unExitCode = if ($null -ne $unExitProp) { $unExitProp.Value } else { $null }
 
                                     if ($unResult.Success) {
                                         Write-Host ('  [OK] {0} desinstalado correctamente.' -f $unResult.App) -ForegroundColor Green
                                     } else {
-                                        [string] $errMsg = if (-not [string]::IsNullOrWhiteSpace($unError)) { $unError } else { 'Codigo de salida: {0}' -f $unResult.ExitCode }
+                                        [string] $errMsg = if (-not [string]::IsNullOrWhiteSpace($unError)) {
+                                            $unError
+                                        } elseif ($null -ne $unExitCode) {
+                                            'Codigo de salida: {0}' -f $unExitCode
+                                        } else {
+                                            'Fallo de desinstalacion sin detalle adicional.'
+                                        }
                                         Write-Host ('  [!]  Error: {0}' -f $errMsg) -ForegroundColor Red
                                     }
-                                    Write-ToolkitAuditLog -Action 'UninstallWin32App' -Status $(if ($unResult.Success) { 'Success' } else { 'Error' }) -Summary ('{0} via {1}' -f $selApp.Name, $unResult.Method) -Details ([PSCustomObject]@{
+                                    Write-ToolkitAuditLog -Action 'UninstallWin32App' -Status $(if ($unResult.Success) { 'Success' } else { 'Error' }) -Summary ('{0} via {1}' -f $selApp.Name, $unMethod) -Details ([PSCustomObject]@{
                                         AppName   = $selApp.Name
-                                        Method    = $unResult.Method
+                                        Method    = $unMethod
                                         Command   = $uninstallPreview.CommandLine
-                                        ExitCode  = $unResult.ExitCode
+                                        ExitCode  = $unExitCode
                                         Error     = $unError
                                     })
                                     Write-Host ''
@@ -844,14 +857,20 @@ function Show-MainMenu {
                                 Write-Host ''
 
                                 if ($uwpApps.Count -gt 0) {
-                                    Write-Host ('  {0,-4} {1,-48} {2}' -f '#', 'Paquete', 'Version') -ForegroundColor DarkCyan
-                                    Write-Host ('  {0}' -f ('-' * 70)) -ForegroundColor DarkCyan
+                                    [int] $pkgColWidth = [math]::Max(24, [math]::Min(48, [console]::WindowWidth - 24))
+                                    [string] $rowFmt = ('  {0,-4} {1,-' + $pkgColWidth + '} {2,-14}')
+                                    Write-Host ($rowFmt -f '#', 'Paquete', 'Version') -ForegroundColor DarkCyan
+                                    Write-Host ('  {0}' -f ('-' * ($pkgColWidth + 22))) -ForegroundColor DarkCyan
                                     [int] $idx = 0
                                     foreach ($app in $uwpApps) {
                                         $idx++
-                                        [string] $shortDisplay = if ($app.DisplayName.Length -gt 47) { $app.DisplayName.Substring(0, 44) + '...' } else { $app.DisplayName }
+                                        [string] $cleanDisplay = [regex]::Replace(([string]$app.DisplayName), '[\r\n\t]', ' ')
+                                        $cleanDisplay = [regex]::Replace($cleanDisplay, '\s{2,}', ' ').Trim()
+                                        [string] $shortDisplay = if ($cleanDisplay.Length -gt $pkgColWidth) { $cleanDisplay.Substring(0, [math]::Max(1, $pkgColWidth - 3)) + '...' } else { $cleanDisplay }
+                                        [string] $verStr = [string] $app.Version
+                                        if ($verStr.Length -gt 14) { $verStr = $verStr.Substring(0, 14) }
                                         [string] $rowColor     = if ($app.IsMicrosoft) { 'DarkGray' } else { 'White' }
-                                        Write-Host ('  {0,-4} {1,-48} {2}' -f $idx, $shortDisplay, $app.Version) -ForegroundColor $rowColor
+                                        Write-Host ($rowFmt -f $idx, $shortDisplay, $verStr) -ForegroundColor $rowColor
                                     }
                                 } else {
                                     Write-Host '  Sin resultados.' -ForegroundColor DarkYellow
@@ -1272,12 +1291,17 @@ function Show-MainMenu {
                     if ($tc -eq 'da') {
                         [PSCustomObject[]] $missing = @($toolRows | Where-Object { -not $_.Installed })
                         if ($missing.Count -eq 0) {
-                            Write-Host '`n  Todas las herramientas ya estan descargadas.' -ForegroundColor Green
+                            Write-Host "`n  Todas las herramientas ya estan descargadas." -ForegroundColor Green
                             Start-Sleep -Milliseconds 1200
                         } else {
                             foreach ($row in $missing) {
                                 Write-Host ("`n  [{0}/{1}] Descargando: {2}" -f ($missing.IndexOf($row) + 1), $missing.Count, $row.Tool.name) -ForegroundColor Cyan
-                                & (Join-Path $PSScriptRoot 'Bootstrap-Tools.ps1') -ToolName $row.Tool.name
+                                try {
+                                    & (Join-Path $PSScriptRoot 'Bootstrap-Tools.ps1') -ToolName $row.Tool.name -ErrorAction Stop
+                                }
+                                catch {
+                                    Write-Host ('  [!] Error al descargar {0}: {1}' -f $row.Tool.name, $_.Exception.Message) -ForegroundColor Red
+                                }
                             }
                             Write-Host ''
                             Read-Host '  Presione Enter para continuar'
@@ -1293,7 +1317,12 @@ function Show-MainMenu {
                             Write-Host '  Numero invalido.' -ForegroundColor Red ; Start-Sleep -Milliseconds 700 ; continue toolsLoop
                         }
                         Write-Host ("`n  Descargando: {0}..." -f $drow.Tool.name) -ForegroundColor Cyan
-                        & (Join-Path $PSScriptRoot 'Bootstrap-Tools.ps1') -ToolName $drow.Tool.name -Force
+                        try {
+                            & (Join-Path $PSScriptRoot 'Bootstrap-Tools.ps1') -ToolName $drow.Tool.name -Force -ErrorAction Stop
+                        }
+                        catch {
+                            Write-Host ('  [!] Error al descargar {0}: {1}' -f $drow.Tool.name, $_.Exception.Message) -ForegroundColor Red
+                        }
                         Write-Host ''
                         Read-Host '  Presione Enter para continuar'
                         continue toolsLoop
