@@ -1,5 +1,4 @@
 #Requires -Version 5.1
-Set-StrictMode -Version Latest
 
 <#
 .SYNOPSIS
@@ -18,6 +17,8 @@ param(
     [string] $ToolName = '',
     [switch] $RequireHash
 )
+
+Set-StrictMode -Version Latest
 
 [string] $manifestPath = Join-Path $PSScriptRoot 'tools\manifest.json'
 [string] $binDir       = Join-Path $PSScriptRoot 'tools\bin'

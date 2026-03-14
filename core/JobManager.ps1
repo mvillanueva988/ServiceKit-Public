@@ -42,21 +42,16 @@ function Wait-ToolkitJobs {
         [System.Management.Automation.Job[]] $Jobs
     )
 
-    $spinnerFrames = @('|', '/', '-', '\')
-    $frameIndex    = 0
+    while ($true) {
+        [System.Management.Automation.Job[]] $runningJobs = @($Jobs | Where-Object { $_.State -eq 'Running' })
+        if ($runningJobs.Count -eq 0) {
+            break
+        }
 
-    while ($Jobs | Where-Object { $_.State -eq 'Running' }) {
-        $frame  = $spinnerFrames[$frameIndex % $spinnerFrames.Length]
-        $frameIndex++
-
-        $running = @($Jobs | Where-Object { $_.State -eq 'Running' }).Count
-        Write-Host -NoNewline ("`r  {0}  Ejecutando trabajos... ({1} activos)" -f $frame, $running)
-
+        # Evitar render dinamico (spinner/progress) porque en algunas consolas VM
+        # produce solapado visual con los menus y tablas.
         Start-Sleep -Milliseconds 120
     }
-
-    # Limpiar línea del spinner
-    Write-Host ("`r" + (' ' * 60) + "`r") -NoNewline
 
     $results = foreach ($job in $Jobs) {
         if ($job.State -eq 'Failed') {
