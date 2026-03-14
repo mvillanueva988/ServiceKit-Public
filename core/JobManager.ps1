@@ -48,11 +48,10 @@ function Wait-ToolkitJobs {
             break
         }
 
-        Write-Progress -Activity 'Ejecutando trabajos' -Status ("{0} activo(s)" -f $runningJobs.Count) -PercentComplete 0
+        # Evitar render dinamico (spinner/progress) porque en algunas consolas VM
+        # produce solapado visual con los menus y tablas.
         Start-Sleep -Milliseconds 120
     }
-
-    Write-Progress -Activity 'Ejecutando trabajos' -Completed
 
     $results = foreach ($job in $Jobs) {
         if ($job.State -eq 'Failed') {
