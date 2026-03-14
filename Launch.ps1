@@ -46,6 +46,20 @@ function Get-ExpectedSha256FromFile {
     return ''
 }
 
+function Invoke-ToolkitMain {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Path
+}
+
 function Invoke-Launch {
     # ── Intentar descarga desde GitHub Releases ───────────────────────────────
     [string] $downloadUrl = ''
@@ -67,7 +81,7 @@ function Invoke-Launch {
         # Fallback: si ya hay versión local, usarla
         if (Test-Path (Join-Path $InstallPath 'main.ps1')) {
             Write-Host '  [!] No se pudo descargar actualizacion. Lanzando version local...' -ForegroundColor Yellow
-            & (Join-Path $InstallPath 'main.ps1')
+            Invoke-ToolkitMain -Path (Join-Path $InstallPath 'main.ps1')
             return
         }
         # Error fatal: sin internet y sin versión local
@@ -87,7 +101,7 @@ function Invoke-Launch {
         # Intentar fallback local
         if (Test-Path (Join-Path $InstallPath 'main.ps1')) {
             Write-Host '  [!] Lanzando version local...' -ForegroundColor Yellow
-            & (Join-Path $InstallPath 'main.ps1')
+            Invoke-ToolkitMain -Path (Join-Path $InstallPath 'main.ps1')
         }
         else {
             Write-Host '  [!] Sin version local disponible.' -ForegroundColor Red
@@ -106,7 +120,7 @@ function Invoke-Launch {
         if (Test-Path $shaDest) { Remove-Item $shaDest -Force }
         if (Test-Path (Join-Path $InstallPath 'main.ps1')) {
             Write-Host '  [!] Lanzando version local...' -ForegroundColor Yellow
-            & (Join-Path $InstallPath 'main.ps1')
+            Invoke-ToolkitMain -Path (Join-Path $InstallPath 'main.ps1')
         }
         return
     }
@@ -119,7 +133,7 @@ function Invoke-Launch {
         if (Test-Path $shaDest) { Remove-Item $shaDest -Force }
         if (Test-Path (Join-Path $InstallPath 'main.ps1')) {
             Write-Host '  [!] Lanzando version local...' -ForegroundColor Yellow
-            & (Join-Path $InstallPath 'main.ps1')
+            Invoke-ToolkitMain -Path (Join-Path $InstallPath 'main.ps1')
         }
         return
     }
@@ -151,7 +165,7 @@ function Invoke-Launch {
 
     # ── Lanzar ───────────────────────────────────────────────────────────────
     Write-Host '  Listo.' -ForegroundColor Green
-    & (Join-Path $InstallPath 'main.ps1')
+    Invoke-ToolkitMain -Path (Join-Path $InstallPath 'main.ps1')
 }
 
 Invoke-Launch
