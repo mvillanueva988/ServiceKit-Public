@@ -119,6 +119,75 @@ function Test-DownloadedZipFile {
     }
 }
 
+function Test-DownloadedExeFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    if (-not (Test-Path $Path)) { return $false }
+
+    try {
+        [System.IO.FileStream] $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        try {
+            if ($stream.Length -lt 2) { return $false }
+
+            [byte[]] $sig = [byte[]]::new(2)
+            [void] $stream.Read($sig, 0, 2)
+            return ($sig[0] -eq 0x4D -and $sig[1] -eq 0x5A) # MZ
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-DownloadFallbackUrlFromHtml {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [string] $ExpectedExt
+    )
+
+    if (-not (Test-Path $Path)) { return '' }
+
+    [string] $html = ''
+    try {
+        $html = Get-Content -Path $Path -Raw -ErrorAction Stop
+    }
+    catch {
+        return ''
+    }
+
+    if ([string]::IsNullOrWhiteSpace($html)) { return '' }
+
+    [string[]] $patterns = @(
+        'url=([^"''\s>]+)',
+        '(https?://downloads\.sourceforge\.net/[^"''\s>]+)',
+        '(https?://[^"''\s>]+' + [regex]::Escape($ExpectedExt) + '[^"''\s>]*)'
+    )
+
+    foreach ($pattern in $patterns) {
+        $match = [regex]::Match($html, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($match.Success) {
+            [string] $candidate = [System.Net.WebUtility]::HtmlDecode($match.Groups[1].Value)
+            $candidate = $candidate -replace '&amp;', '&'
+            if ($candidate -match '^https?://') {
+                return $candidate
+            }
+        }
+    }
+
+    return ''
+}
+
 # ─── Verificar si una herramienta ya esta instalada ──────────────────────────
 function Test-ToolInstalled {
     param([object] $Tool)
@@ -126,10 +195,19 @@ function Test-ToolInstalled {
              ($Tool.filename -like '*.zip')
 
     if ($isZip) {
-        # Para ZIPs, verificar que el launchExe exista dentro del extractDir
+        # Para ZIPs, verificar launchExe (exacto o por búsqueda de leaf)
         if ($Tool.PSObject.Properties['launchExe'] -and $Tool.launchExe) {
             $launchPath = Join-Path $binDir $Tool.launchExe
-            return Test-Path $launchPath
+            if (Test-Path $launchPath) { return $true }
+
+            [string] $leaf = Split-Path -Path ([string]$Tool.launchExe) -Leaf
+            if (-not [string]::IsNullOrWhiteSpace($leaf)) {
+                [object[]] $found = @(
+                    Get-ChildItem -Path $binDir -Recurse -File -Filter $leaf -ErrorAction SilentlyContinue |
+                        Select-Object -First 1
+                )
+                if ($found.Count -gt 0) { return $true }
+            }
         }
         if ($Tool.PSObject.Properties['extractDir'] -and $Tool.extractDir) {
             return Test-Path (Join-Path $binDir $Tool.extractDir)
@@ -241,7 +319,16 @@ foreach ($tool in $toolsToProcess) {
         Write-Host ("  [~] Extrayendo {0}..." -f $tool.name) -ForegroundColor Cyan
         try {
             if (-not (Test-DownloadedZipFile -Path $destFile)) {
-                throw 'Payload no es un ZIP valido (posible HTML/error remoto).'
+                [string] $fallbackUrl = Get-DownloadFallbackUrlFromHtml -Path $destFile -ExpectedExt '.zip'
+                if (-not [string]::IsNullOrWhiteSpace($fallbackUrl)) {
+                    Write-Host ("  [~] {0}: resolviendo URL final de descarga..." -f $tool.name) -ForegroundColor Yellow
+                    Remove-Item $destFile -Force -ErrorAction SilentlyContinue
+                    Invoke-ToolDownload -Url $fallbackUrl -Dest $destFile -DisplayName $tool.name
+                }
+
+                if (-not (Test-DownloadedZipFile -Path $destFile)) {
+                    throw 'Payload no es un ZIP valido (posible HTML/error remoto).'
+                }
             }
 
             if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
@@ -255,6 +342,22 @@ foreach ($tool in $toolsToProcess) {
             continue
         }
     } else {
+        if ($tool.filename -like '*.exe' -and -not (Test-DownloadedExeFile -Path $destFile)) {
+            [string] $fallbackExeUrl = Get-DownloadFallbackUrlFromHtml -Path $destFile -ExpectedExt '.exe'
+            if (-not [string]::IsNullOrWhiteSpace($fallbackExeUrl)) {
+                Write-Host ("  [~] {0}: resolviendo URL final de descarga..." -f $tool.name) -ForegroundColor Yellow
+                Remove-Item $destFile -Force -ErrorAction SilentlyContinue
+                Invoke-ToolDownload -Url $fallbackExeUrl -Dest $destFile -DisplayName $tool.name
+            }
+
+            if (-not (Test-DownloadedExeFile -Path $destFile)) {
+                Write-Host ("  [!] {0}: payload descargado no es un ejecutable valido." -f $tool.name) -ForegroundColor Red
+                if (Test-Path $destFile) { Remove-Item $destFile -Force -ErrorAction SilentlyContinue }
+                $failed++
+                continue
+            }
+        }
+
         Write-Host ("  [v] {0}: descargado" -f $tool.name) -ForegroundColor $(if ($tool.sha256) { 'Green' } else { 'Yellow' })
     }
 

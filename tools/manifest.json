@@ -117,7 +117,7 @@
             "launchExe": "WizTree\\WizTree64.exe",
             "type": "zip",
             "extractDir": "WizTree",
-            "url": "https://www.diskanalyzer.com/files/wiztree_portable.zip",
+            "url": "https://diskanalyzer.com/files/wiztree_4_30_portable.zip",
             "approxSizeMB": 3,
             "sha256": ""
         },
@@ -129,7 +129,7 @@
             "launchExe": "HWiNFO64\\HWiNFO64.exe",
             "type": "zip",
             "extractDir": "HWiNFO64",
-            "url": "https://www.hwinfo.com/files/hwi_portable.zip",
+            "url": "https://sourceforge.net/projects/hwinfo/files/latest/download",
             "approxSizeMB": 10,
             "sha256": ""
         },
@@ -141,7 +141,7 @@
             "launchExe": "CPU-Z\\cpuz_x64.exe",
             "type": "zip",
             "extractDir": "CPU-Z",
-            "url": "https://download.cpuid.com/cpu-z/cpu-z_portable.zip",
+            "url": "https://download.cpuid.com/cpu-z/cpu-z_2.16-en.zip",
             "approxSizeMB": 3,
             "sha256": ""
         },
@@ -149,9 +149,11 @@
             "name": "ddu",
             "category": "drivers",
             "description": "Display Driver Uninstaller (DDU) - limpia completamente drivers de GPU (NVIDIA/AMD/Intel) del sistema incluyendo entradas de registro, para instalacion limpia de nuevo driver",
-            "filename": "DDU.exe",
-            "launchExe": "DDU.exe",
-            "url": "https://www.wagnardsoft.com/DDU/DDU-setup.exe",
+            "filename": "DDU.zip",
+            "launchExe": "DDU\\Display Driver Uninstaller.exe",
+            "type": "zip",
+            "extractDir": "DDU",
+            "url": "https://sourceforge.net/projects/display-driver-uninstaller/files/latest/download",
             "approxSizeMB": 9,
             "sha256": ""
         },
@@ -163,7 +165,7 @@
             "launchExe": "BleachBit\\bleachbit.exe",
             "type": "zip",
             "extractDir": "BleachBit",
-            "url": "https://download.bleachbit.org/BleachBit-portable.zip",
+            "url": "https://download.bleachbit.org/BleachBit-4.6.2-portable.zip",
             "approxSizeMB": 18,
             "sha256": ""
         },
@@ -171,9 +173,9 @@
             "name": "winutil",
             "category": "setup",
             "description": "Chris Titus WinUtil - script de setup de Windows: instala aplicaciones por categoria (Winget/Chocolatey), applies tweaks de rendimiento/privacidad y repara componentes del sistema. Ideal para setup inicial post-instalacion",
-            "filename": "winutil.exe",
-            "launchExe": "winutil.exe",
-            "url": "https://github.com/ChrisTitusTech/winutil/releases/latest/download/winutil.exe",
+            "filename": "winutil.ps1",
+            "launchExe": "winutil.ps1",
+            "url": "https://christitus.com/win",
             "approxSizeMB": 5,
             "sha256": ""
         },
