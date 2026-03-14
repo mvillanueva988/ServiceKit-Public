@@ -61,15 +61,17 @@ El launcher valida el SHA-256 del ZIP antes de instalar (requiere asset `.sha256
 Desde la raiz del repositorio:
 
 ```powershell
-.\Prep-ReleaseWorkspace.ps1 -DryRun   # vista previa de limpieza
-.\Prep-ReleaseWorkspace.ps1           # limpia generados + valida tracking
+.\_local-dev\scripts\Prep-ReleaseWorkspace.ps1 -DryRun   # vista previa de limpieza
+.\_local-dev\scripts\Prep-ReleaseWorkspace.ps1           # limpia generados + valida tracking
 ```
 
 Opcional: si quieres conservar los ZIP actuales en `dist/` durante la limpieza:
 
 ```powershell
-.\Prep-ReleaseWorkspace.ps1 -KeepDist
+.\_local-dev\scripts\Prep-ReleaseWorkspace.ps1 -KeepDist
 ```
+
+Este paso es obligatorio como **ultimo paso antes de cada push a GitHub** (release o commit comun) para evitar subir artefactos generados o carpetas internas.
 
 ## Publicar nuevo release
 
