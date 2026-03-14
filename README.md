@@ -34,6 +34,43 @@ El launcher valida el SHA-256 del ZIP antes de instalar (requiere asset `.sha256
 - PowerShell 5.1 (incluido en Windows)
 - Permisos de administrador
 
+## Estructura de carpetas (que se publica vs que se genera)
+
+### Toolkit funcional (se publica)
+
+- `core/`
+- `modules/`
+- `utils/`
+- `tools/` (sin `tools/bin`, porque se descarga on-demand)
+- `main.ps1`, `Launch.ps1`, `Release.ps1`, `Bootstrap-Tools.ps1`, `Run.bat`
+
+### Generado por scripts/runtime (no se versiona)
+
+- `output/audit/` (logs JSONL de acciones)
+- `output/snapshots/` (snapshots PRE/POST)
+- `output/driver_backup/` (exports de drivers)
+- `dist/` (ZIP y SHA256 de release local)
+- `tools/bin/` (herramientas descargadas)
+
+### Desarrollo interno local (no se publica)
+
+- `_local-dev/` (documentacion/artefactos internos del proceso de desarrollo)
+
+## Preparacion antes de publicar
+
+Desde la raiz del repositorio:
+
+```powershell
+.\Prep-ReleaseWorkspace.ps1 -DryRun   # vista previa de limpieza
+.\Prep-ReleaseWorkspace.ps1           # limpia generados + valida tracking
+```
+
+Opcional: si quieres conservar los ZIP actuales en `dist/` durante la limpieza:
+
+```powershell
+.\Prep-ReleaseWorkspace.ps1 -KeepDist
+```
+
 ## Publicar nuevo release
 
 Desde la raíz del repositorio:
