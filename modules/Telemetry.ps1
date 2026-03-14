@@ -293,7 +293,7 @@ function Compare-Snapshot {
                 Sort-Object LastWriteTime -Descending
         )
         if ($preFiles.Count -eq 0) {
-            throw 'No se encontro snapshot PRE. Usa la opcion [6] antes del service.'
+            throw 'No se encontro snapshot PRE. Usa la opcion [7] antes del service.'
         }
         $PrePath = $preFiles[0].FullName
     }
@@ -304,7 +304,7 @@ function Compare-Snapshot {
                 Sort-Object LastWriteTime -Descending
         )
         if ($postFiles.Count -eq 0) {
-            throw 'No se encontro snapshot POST. Usa la opcion [7] despues del service.'
+            throw 'No se encontro snapshot POST. Usa la opcion [8] despues del service.'
         }
         $PostPath = $postFiles[0].FullName
     }
@@ -371,6 +371,8 @@ function Compare-Snapshot {
         PostFile         = [string]   (Split-Path $PostPath -Leaf)
         PreTimestamp     = [string]   $pre.Timestamp
         PostTimestamp    = [string]   $post.Timestamp
+        PreUptimeHours   = [double]   $pre.UptimeHours
+        PostUptimeHours  = [double]   $post.UptimeHours
         ComputerName     = [string]   $post.ComputerName
         VolumeDiff       = $volDiff.ToArray()
         TotalFreedGb     = [double]   $totalFreedGb
@@ -454,6 +456,7 @@ function Show-SnapshotComparison {
 
     # Antivirus (auditoria de estado, no escaneo)
     Write-Host '  [ANTIVIRUS]' -ForegroundColor DarkCyan
+    Write-Host '    [i] Auditoria de estado (sin escaneo activo)' -ForegroundColor DarkGray
     if ($Diff.AvFixed) {
         Write-Host '    [+] Conflicto de antivirus resuelto' -ForegroundColor Green
     } else {
@@ -463,6 +466,7 @@ function Show-SnapshotComparison {
 
     # Sistema
     Write-Host '  [SISTEMA]' -ForegroundColor DarkCyan
+    Write-Host ('    [i] Uptime PRE/POST: {0}h -> {1}h' -f $Diff.PreUptimeHours.ToString('0.0'), $Diff.PostUptimeHours.ToString('0.0')) -ForegroundColor DarkGray
     if ($Diff.Rebooted) {
         Write-Host '    [+] Sistema reiniciado correctamente' -ForegroundColor Green
     } else {
