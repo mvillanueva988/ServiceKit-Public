@@ -10,6 +10,14 @@ Formato: Keep a Changelog + versionado semantico.
 - A partir de este punto, las versiones se toman desde `VERSION` (`MAJOR.MINOR.PATCH`).
 - Los releases historicos con fecha (`v2026.03.xx`) se mantienen como legado de transicion.
 
+## [v1.0.3] - 2026-03-14
+
+### Fixed
+- Descargas de herramientas externas endurecidas con resolucion de URL final cuando el proveedor entrega HTML intermedio.
+- Validacion de payload para ZIP/EXE antes de extraer o ejecutar para evitar errores de formato.
+- Manifest de herramientas actualizado para enlaces caidos/obsoletos en apps grises criticas.
+- Deteccion y resolucion de ruta de lanzamiento mejorada para extraidos con carpetas versionadas/anidadas.
+
 ## [v1.0.2] - 2026-03-14
 
 ### Fixed
