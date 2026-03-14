@@ -56,15 +56,62 @@ function Convert-ToolkitDateDisplay {
 
     if ($Value -is [double] -or $Value -is [float] -or $Value -is [decimal]) {
         try {
-            return ([datetime]::FromOADate([double]$Value)).ToString('yyyy-MM-dd HH:mm')
+            [double] $oaDate = [double] $Value
+            if ($oaDate -ge 2 -and $oaDate -le 2958465) {
+                return ([datetime]::FromOADate($oaDate)).ToString('yyyy-MM-dd HH:mm')
+            }
         }
         catch {
             # Continuar con parse de string
         }
     }
 
+    if ($Value -is [byte] -or $Value -is [sbyte] -or
+        $Value -is [int16] -or $Value -is [uint16] -or
+        $Value -is [int32] -or $Value -is [uint32] -or
+        $Value -is [int64] -or $Value -is [uint64]) {
+        try {
+            [long] $numericValue = [long] $Value
+            if ($numericValue -ge 116444736000000000 -and $numericValue -le 2650467743999999999) {
+                return ([datetime]::FromFileTimeUtc($numericValue).ToLocalTime()).ToString('yyyy-MM-dd HH:mm')
+            }
+
+            if ($numericValue -ge 2 -and $numericValue -le 2958465) {
+                return ([datetime]::FromOADate([double]$numericValue)).ToString('yyyy-MM-dd HH:mm')
+            }
+        }
+        catch {
+            # Mantener fallback por string
+        }
+    }
+
     [string] $raw = [string] $Value
     if ([string]::IsNullOrWhiteSpace($raw)) { return 'Desconocida' }
+
+    if ($raw -match '^\d{16,19}$') {
+        try {
+            [long] $fileTime = [long] $raw
+            if ($fileTime -ge 116444736000000000 -and $fileTime -le 2650467743999999999) {
+                return ([datetime]::FromFileTimeUtc($fileTime).ToLocalTime()).ToString('yyyy-MM-dd HH:mm')
+            }
+        }
+        catch {
+            return 'Desconocida'
+        }
+    }
+
+    if ($raw -match '^\d+(\.\d+)?$') {
+        try {
+            [double] $rawNumeric = [double]::Parse($raw, [System.Globalization.CultureInfo]::InvariantCulture)
+            if ($rawNumeric -ge 2 -and $rawNumeric -le 2958465) {
+                return ([datetime]::FromOADate($rawNumeric)).ToString('yyyy-MM-dd HH:mm')
+            }
+            return 'Desconocida'
+        }
+        catch {
+            return 'Desconocida'
+        }
+    }
 
     try {
         return ([datetime]::Parse($raw, [System.Globalization.CultureInfo]::CurrentCulture)).ToString('yyyy-MM-dd HH:mm')
@@ -74,7 +121,7 @@ function Convert-ToolkitDateDisplay {
             return ([datetime]::Parse($raw, [System.Globalization.CultureInfo]::InvariantCulture)).ToString('yyyy-MM-dd HH:mm')
         }
         catch {
-            return $raw
+            return 'Desconocida'
         }
     }
 }
@@ -122,16 +169,22 @@ function Get-WindowsUpdateStatus {
         if ($result.LastInstall -eq 'Desconocida') {
             $regInstall = Get-ItemProperty -Path $legacyInstallPath -ErrorAction SilentlyContinue
             if ($regInstall -and $regInstall.PSObject.Properties['LastSuccessTime']) {
-                $result.LastInstall = Convert-ToolkitDateDisplay -Value $regInstall.LastSuccessTime
-                $result.Source = 'Legacy'
+                [string] $legacyInstallDate = Convert-ToolkitDateDisplay -Value $regInstall.LastSuccessTime
+                if ($legacyInstallDate -ne 'Desconocida') {
+                    $result.LastInstall = $legacyInstallDate
+                    $result.Source = 'Legacy'
+                }
             }
         }
 
         if ($result.LastCheck -eq 'Desconocida') {
             $regCheck = Get-ItemProperty -Path $legacyDetectPath -ErrorAction SilentlyContinue
             if ($regCheck -and $regCheck.PSObject.Properties['LastSuccessTime']) {
-                $result.LastCheck = Convert-ToolkitDateDisplay -Value $regCheck.LastSuccessTime
-                $result.Source = 'Legacy'
+                [string] $legacyCheckDate = Convert-ToolkitDateDisplay -Value $regCheck.LastSuccessTime
+                if ($legacyCheckDate -ne 'Desconocida') {
+                    $result.LastCheck = $legacyCheckDate
+                    $result.Source = 'Legacy'
+                }
             }
         }
 
@@ -141,15 +194,21 @@ function Get-WindowsUpdateStatus {
                 if ($result.LastCheck -eq 'Desconocida') {
                     $pCheckFallback = $regUxFallback.PSObject.Properties['LastCheckedForUpdates']
                     if ($pCheckFallback -and -not [string]::IsNullOrWhiteSpace([string] $pCheckFallback.Value)) {
-                        $result.LastCheck = Convert-ToolkitDateDisplay -Value $pCheckFallback.Value
+                        [string] $fallbackCheck = Convert-ToolkitDateDisplay -Value $pCheckFallback.Value
+                        if ($fallbackCheck -ne 'Desconocida') {
+                            $result.LastCheck = $fallbackCheck
+                        }
                     }
                 }
                 if ($result.LastInstall -eq 'Desconocida') {
                     foreach ($propName in @('LastSuccessfulInstallTime', 'LastInstallTime')) {
                         $pInstallFallback = $regUxFallback.PSObject.Properties[$propName]
                         if ($pInstallFallback -and -not [string]::IsNullOrWhiteSpace([string] $pInstallFallback.Value)) {
-                            $result.LastInstall = Convert-ToolkitDateDisplay -Value $pInstallFallback.Value
-                            break
+                            [string] $fallbackInstall = Convert-ToolkitDateDisplay -Value $pInstallFallback.Value
+                            if ($fallbackInstall -ne 'Desconocida') {
+                                $result.LastInstall = $fallbackInstall
+                                break
+                            }
                         }
                     }
                 }
@@ -167,11 +226,17 @@ function Get-WindowsUpdateStatus {
                     $auResults = $au.Results
 
                     if ($result.LastCheck -eq 'Desconocida' -and $auResults.PSObject.Properties['LastSearchSuccessDate']) {
-                        $result.LastCheck = Convert-ToolkitDateDisplay -Value $auResults.LastSearchSuccessDate
+                        [string] $comLastCheck = Convert-ToolkitDateDisplay -Value $auResults.LastSearchSuccessDate
+                        if ($comLastCheck -ne 'Desconocida') {
+                            $result.LastCheck = $comLastCheck
+                        }
                     }
 
                     if ($result.LastInstall -eq 'Desconocida' -and $auResults.PSObject.Properties['LastInstallationSuccessDate']) {
-                        $result.LastInstall = Convert-ToolkitDateDisplay -Value $auResults.LastInstallationSuccessDate
+                        [string] $comLastInstall = Convert-ToolkitDateDisplay -Value $auResults.LastInstallationSuccessDate
+                        if ($comLastInstall -ne 'Desconocida') {
+                            $result.LastInstall = $comLastInstall
+                        }
                     }
 
                     if ($result.Source -eq 'Ninguna' -and ($result.LastInstall -ne 'Desconocida' -or $result.LastCheck -ne 'Desconocida')) {
@@ -193,9 +258,12 @@ function Get-WindowsUpdateStatus {
                         Sort-Object InstalledOn -Descending
                 )
                 if ($kbs.Count -gt 0) {
-                    $result.LastInstall = Convert-ToolkitDateDisplay -Value $kbs[0].InstalledOn
-                    if ($result.Source -eq 'Ninguna') {
-                        $result.Source = 'QFE'
+                    [string] $qfeDate = Convert-ToolkitDateDisplay -Value $kbs[0].InstalledOn
+                    if ($qfeDate -ne 'Desconocida') {
+                        $result.LastInstall = $qfeDate
+                        if ($result.Source -eq 'Ninguna') {
+                            $result.Source = 'QFE'
+                        }
                     }
                 }
             }
