@@ -103,13 +103,16 @@ function Get-InstalledUwpApps {
                 [string] $display = $_.Name -replace '^[A-Za-z0-9]+\.', ''
                 $display = [regex]::Replace($display, '([a-z])([A-Z])', '$1 $2')
                 if ([string]::IsNullOrWhiteSpace($display)) { $display = $_.Name }
+                # Evitar cortes de layout por caracteres de control en consola
+                $display = ($display -replace '[\r\n\t]', ' ')
+                $display = [regex]::Replace($display, '\s{2,}', ' ').Trim()
 
                 [PSCustomObject]@{
                     Name            = [string] $_.Name
                     DisplayName     = $display
                     PackageFullName = [string] $_.PackageFullName
                     Publisher       = [string] $_.Publisher
-                    Version         = [string] $_.Version
+                    Version         = [string] $_.Version.ToString()
                     IsMicrosoft     = ($_.Publisher -match 'CN=Microsoft Corporation' -or
                                        $_.Publisher -match 'CN=Microsoft Windows')
                 }
@@ -174,7 +177,7 @@ function Invoke-Win32Uninstall {
             }
         }
         catch {
-            return [PSCustomObject]@{ Success = $false; Method = 'MSI'; App = $App.Name; Error = $_.Exception.Message }
+            return [PSCustomObject]@{ Success = $false; Method = 'MSI'; App = $App.Name; Command = ''; ExitCode = $null; Error = $_.Exception.Message }
         }
     }
 
@@ -183,7 +186,7 @@ function Invoke-Win32Uninstall {
         return _Invoke-UninstallCommand -CmdStr $App.UninstallString -Method 'Interactive' -AppName $App.Name
     }
 
-    return [PSCustomObject]@{ Success = $false; Method = 'None'; App = $App.Name; Error = 'Sin UninstallString en el registro' }
+    return [PSCustomObject]@{ Success = $false; Method = 'None'; App = $App.Name; Command = ''; ExitCode = $null; Error = 'Sin UninstallString en el registro' }
 }
 
 function Get-Win32UninstallPreview {
@@ -264,7 +267,7 @@ function _Invoke-UninstallCommand {
 
     [PSCustomObject] $parsed = _Parse-UninstallCommand -CmdStr $CmdStr
     if (-not $parsed.Success) {
-        return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Error = $parsed.Error }
+        return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Command = $parsed.CommandLine; ExitCode = $null; Error = $parsed.Error }
     }
 
     try {
@@ -283,7 +286,7 @@ function _Invoke-UninstallCommand {
         }
     }
     catch {
-        return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Error = $_.Exception.Message }
+        return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Command = $parsed.CommandLine; ExitCode = $null; Error = $_.Exception.Message }
     }
 }
 

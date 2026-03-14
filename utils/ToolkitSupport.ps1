@@ -50,14 +50,32 @@ function Convert-ToolkitDateDisplay {
 
     if ($null -eq $Value) { return 'Desconocida' }
 
+    if ($Value -is [datetime]) {
+        return ([datetime]$Value).ToString('yyyy-MM-dd HH:mm')
+    }
+
+    if ($Value -is [double] -or $Value -is [float] -or $Value -is [decimal]) {
+        try {
+            return ([datetime]::FromOADate([double]$Value)).ToString('yyyy-MM-dd HH:mm')
+        }
+        catch {
+            # Continuar con parse de string
+        }
+    }
+
     [string] $raw = [string] $Value
     if ([string]::IsNullOrWhiteSpace($raw)) { return 'Desconocida' }
 
     try {
-        return ([datetime]::Parse($raw)).ToString('yyyy-MM-dd HH:mm')
+        return ([datetime]::Parse($raw, [System.Globalization.CultureInfo]::CurrentCulture)).ToString('yyyy-MM-dd HH:mm')
     }
     catch {
-        return $raw
+        try {
+            return ([datetime]::Parse($raw, [System.Globalization.CultureInfo]::InvariantCulture)).ToString('yyyy-MM-dd HH:mm')
+        }
+        catch {
+            return $raw
+        }
     }
 }
 
@@ -138,6 +156,59 @@ function Get-WindowsUpdateStatus {
                 if ($result.Source -eq 'Ninguna' -and ($result.LastInstall -ne 'Desconocida' -or $result.LastCheck -ne 'Desconocida')) {
                     $result.Source = 'UX'
                 }
+            }
+        }
+
+        # Fallback COM (WU API) para equipos donde el registro no trae timestamps confiables
+        if ($result.LastInstall -eq 'Desconocida' -or $result.LastCheck -eq 'Desconocida') {
+            try {
+                $au = New-Object -ComObject Microsoft.Update.AutoUpdate
+                if ($au -and $au.PSObject.Properties['Results']) {
+                    $auResults = $au.Results
+
+                    if ($result.LastCheck -eq 'Desconocida' -and $auResults.PSObject.Properties['LastSearchSuccessDate']) {
+                        $result.LastCheck = Convert-ToolkitDateDisplay -Value $auResults.LastSearchSuccessDate
+                    }
+
+                    if ($result.LastInstall -eq 'Desconocida' -and $auResults.PSObject.Properties['LastInstallationSuccessDate']) {
+                        $result.LastInstall = Convert-ToolkitDateDisplay -Value $auResults.LastInstallationSuccessDate
+                    }
+
+                    if ($result.Source -eq 'Ninguna' -and ($result.LastInstall -ne 'Desconocida' -or $result.LastCheck -ne 'Desconocida')) {
+                        $result.Source = 'COM'
+                    }
+                }
+            }
+            catch {
+                # Continuar con fallbacks adicionales
+            }
+        }
+
+        # Fallback por historial de KBs para ultima instalacion
+        if ($result.LastInstall -eq 'Desconocida') {
+            try {
+                [object[]] $kbs = @(
+                    Get-CimInstance -ClassName Win32_QuickFixEngineering -ErrorAction SilentlyContinue |
+                        Where-Object { $_.PSObject.Properties['InstalledOn'] -and $_.InstalledOn } |
+                        Sort-Object InstalledOn -Descending
+                )
+                if ($kbs.Count -gt 0) {
+                    $result.LastInstall = Convert-ToolkitDateDisplay -Value $kbs[0].InstalledOn
+                    if ($result.Source -eq 'Ninguna') {
+                        $result.Source = 'QFE'
+                    }
+                }
+            }
+            catch {
+                # Mantener valor actual
+            }
+        }
+
+        # Ultimo recurso para evitar salida vacia en ultima busqueda
+        if ($result.LastCheck -eq 'Desconocida' -and $result.LastInstall -ne 'Desconocida') {
+            $result.LastCheck = $result.LastInstall
+            if ($result.Source -eq 'Ninguna') {
+                $result.Source = 'ProxyInstallDate'
             }
         }
     }

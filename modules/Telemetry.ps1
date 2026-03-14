@@ -452,8 +452,8 @@ function Show-SnapshotComparison {
         Write-Host ''
     }
 
-    # Seguridad
-    Write-Host '  [SEGURIDAD]' -ForegroundColor DarkCyan
+    # Antivirus (auditoria de estado, no escaneo)
+    Write-Host '  [ANTIVIRUS]' -ForegroundColor DarkCyan
     if ($Diff.AvFixed) {
         Write-Host '    [+] Conflicto de antivirus resuelto' -ForegroundColor Green
     } else {
