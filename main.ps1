@@ -4,7 +4,7 @@ Set-StrictMode -Version Latest
 [System.Collections.Generic.List[string]] $script:_loadErrors = [System.Collections.Generic.List[string]]::new()
 foreach ($folder in @('core', 'utils', 'modules')) {
     $folderPath = Join-Path $PSScriptRoot $folder
-    $scripts = Get-ChildItem -Path $folderPath -Filter '*.ps1' -File -ErrorAction SilentlyContinue
+    $scripts = Get-ChildItem -Path $folderPath -Filter '*.ps1' -File -ErrorAction SilentlyContinue | Sort-Object Name
     foreach ($moduleScript in $scripts) {
         try   { . $moduleScript.FullName }
         catch { $script:_loadErrors.Add("$($moduleScript.Name): $($_.Exception.Message)") }
@@ -20,6 +20,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 $script:hwCached   = $false
 $script:hwComputer = $null
+$script:hwCpu      = @()
 $script:hwGPU      = @()
 
 function Show-MainMenu {
@@ -49,34 +50,47 @@ function Show-MainMenu {
             Write-Host ('  OS   : {0} {1}  Build {2}  {3}' -f $winVer, $edition.Trim(), $build, $arch) -ForegroundColor Green
             if (-not $script:hwCached) {
                 $script:hwComputer = Get-CimInstance -ClassName Win32_ComputerSystem    -ErrorAction SilentlyContinue
+                $script:hwCpu      = @(Get-CimInstance -ClassName Win32_Processor        -ErrorAction SilentlyContinue)
                 $script:hwGPU      = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
                 $script:hwCached   = $true
             }
             $csHw = $script:hwComputer
+            [object[]] $allCpu = @($script:hwCpu)
             [object[]] $allGpus = @($script:hwGPU)
             if ($csHw) {
-                [int]    $ramGb    = [int][math]::Ceiling($csHw.TotalPhysicalMemory / 1GB)
-                [string] $gpuShort = if ($allGpus.Count -eq 0) {
-                    'N/A'
-                } elseif ($allGpus.Count -eq 1) {
-                    $n = [string]$allGpus[0].Name
-                    if ($n.Length -gt 30) { $n.Substring(0, 28) + '..' } else { $n }
+                [double] $ramTotalGb = [math]::Round(($csHw.TotalPhysicalMemory / 1GB), 2)
+                $osMemory = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+                [double] $ramFreeGb = if ($osMemory -and $osMemory.FreePhysicalMemory) {
+                    [math]::Round((([double]$osMemory.FreePhysicalMemory * 1KB) / 1GB), 2)
                 } else {
-                    # GPU hibrida: priorizar dGPU (NVIDIA/AMD/Radeon/GeForce) para display principal
-                    $dGpu = $allGpus | Where-Object { $_.Name -match 'NVIDIA|AMD|Radeon|GeForce|RTX|GTX|RX\s' } | Select-Object -First 1
-                    $iGpu = $allGpus | Where-Object { $_.Name -match 'Intel|UHD|Iris|HD Graphics' } | Select-Object -First 1
-                    if ($dGpu -and $iGpu) {
-                        [string] $dName = [string]$dGpu.Name; if ($dName.Length -gt 22) { $dName = $dName.Substring(0, 20) + '..' }
-                        [string] $iName = [string]$iGpu.Name -replace 'Intel\s*(UHD|Iris|HD)?\s*Graphics\s*', 'iGPU '
-                        if ($iName.Length -gt 10) { $iName = $iName.Substring(0, 8).Trim() }
-                        '{0} + {1}' -f $dName, $iName
-                    } elseif ($dGpu) {
-                        $n = [string]$dGpu.Name; if ($n.Length -gt 30) { $n.Substring(0, 28) + '..' } else { $n }
-                    } else {
-                        $n = [string]$allGpus[0].Name; if ($n.Length -gt 30) { $n.Substring(0, 28) + '..' } else { $n }
+                    0
+                }
+
+                [string] $cpuName = 'N/A'
+                [int] $cpuCores = 0
+                [int] $cpuThreads = 0
+                if ($allCpu.Count -gt 0) {
+                    $cpuName = ([string]$allCpu[0].Name).Trim()
+                    $coreSum = ($allCpu | Measure-Object -Property NumberOfCores -Sum).Sum
+                    $threadSum = ($allCpu | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+                    if ($null -ne $coreSum) { $cpuCores = [int]$coreSum }
+                    if ($null -ne $threadSum) { $cpuThreads = [int]$threadSum }
+                }
+
+                Write-Host ('  CPU  : {0}' -f $cpuName) -ForegroundColor DarkGray
+                Write-Host ('  CPU  : {0} nucleos / {1} hilos' -f $cpuCores, $cpuThreads) -ForegroundColor DarkGray
+                Write-Host ('  RAM  : {0:N2} GB total  |  {1:N2} GB disponible' -f $ramTotalGb, $ramFreeGb) -ForegroundColor DarkGray
+
+                if ($allGpus.Count -eq 0) {
+                    Write-Host '  GPU  : N/A' -ForegroundColor DarkGray
+                } else {
+                    Write-Host ('  GPU  : {0} detectada(s)' -f $allGpus.Count) -ForegroundColor DarkGray
+                    foreach ($gpu in $allGpus) {
+                        [string] $gpuName = ([string]$gpu.Name).Trim()
+                        if ($gpuName.Length -gt 62) { $gpuName = $gpuName.Substring(0, 60) + '..' }
+                        Write-Host ('         - {0}' -f $gpuName) -ForegroundColor DarkGray
                     }
                 }
-                Write-Host ('  HW   : {0} GB RAM  |  GPU: {1}' -f $ramGb, $gpuShort) -ForegroundColor DarkGray
             }
         } else {
             Write-Host '  OS   : No disponible' -ForegroundColor DarkGray
@@ -234,6 +248,12 @@ function Show-MainMenu {
                         Write-Host ("    - {0}" -f $err) -ForegroundColor DarkYellow
                     }
                 }
+                Write-ToolkitAuditLog -Action 'DebloatServices' -Status $(if ($result.Failed -gt 0) { 'Warning' } else { 'Success' }) -Summary ('Servicios deshabilitados: {0}/{1}' -f $result.Disabled, $chosenNames.Count) -Details ([PSCustomObject]@{
+                    Selected = $chosenNames
+                    Disabled = $result.Disabled
+                    Failed   = $result.Failed
+                    Errors   = $result.Errors
+                })
                 Write-Host ''
                 Read-Host '  [Enter] para continuar' | Out-Null
             }
@@ -285,6 +305,11 @@ function Show-MainMenu {
                 if ($result.SoftErrors -gt 0) {
                     Write-Host ("  Advertencias      : {0} archivo(s) en uso o sin acceso." -f $result.SoftErrors) -ForegroundColor Yellow
                 }
+                Write-ToolkitAuditLog -Action 'CleanupTempFiles' -Status $(if ($result.SoftErrors -gt 0) { 'Warning' } else { 'Success' }) -Summary ('Espacio liberado: {0}' -f $freed) -Details ([PSCustomObject]@{
+                    FreedMB    = $result.FreedMB
+                    FreedGB    = $result.FreedGB
+                    SoftErrors = $result.SoftErrors
+                })
                 Write-Host ''
                 Read-Host '  [Enter] para continuar' | Out-Null
             }
@@ -325,6 +350,10 @@ function Show-MainMenu {
                 }
                 Write-Host ''
                 Write-Host '  Revisa C:\Windows\Logs\CBS\CBS.log para detalles completos.' -ForegroundColor DarkGray
+                Write-ToolkitAuditLog -Action 'MaintenanceRepair' -Status $(if ($result.DismExitCode -eq 0 -and $result.SfcExitCode -eq 0) { 'Success' } else { 'Warning' }) -Summary ('DISM={0} SFC={1}' -f $result.DismExitCode, $result.SfcExitCode) -Details ([PSCustomObject]@{
+                    DismExitCode = $result.DismExitCode
+                    SfcExitCode  = $result.SfcExitCode
+                })
                 Write-Host ''
                 Read-Host '  [Enter] para continuar' | Out-Null
             }
@@ -342,6 +371,7 @@ function Show-MainMenu {
                     Write-Host ("  Fallo: {0}" -f $result.Message) -ForegroundColor Red
                     Write-Host "  (Nota: Windows por defecto permite crear solo 1 punto cada 24 horas)" -ForegroundColor DarkGray
                 }
+                Write-ToolkitAuditLog -Action 'RestorePoint' -Status $(if ($result.Success) { 'Success' } elseif ($result.PSObject.Properties['Reason']) { 'Warning' } else { 'Error' }) -Summary $(if ($result.Success) { $result.Message } elseif ($result.PSObject.Properties['Reason']) { $result.Reason } else { $result.Message }) -Details $result
                 Write-Host ''
                 Read-Host '  [Enter] para continuar' | Out-Null
             }
@@ -462,6 +492,11 @@ function Show-MainMenu {
                     if (-not $result.Success) {
                         Write-Host '  [!] Alguno de los comandos globales requirio privilegios de administrador.' -ForegroundColor Yellow
                     }
+                    Write-ToolkitAuditLog -Action 'OptimizeNetwork' -Status $(if ($result.Success) { 'Success' } else { 'Warning' }) -Summary ('Adaptadores optimizados: {0}' -f $chosenAdapters.Count) -Details ([PSCustomObject]@{
+                        Adapters        = $chosenAdapters
+                        Success         = $result.Success
+                        AdaptersChanged = $result.AdaptersOptimized
+                    })
                     Write-Host ''
                     Read-Host '  [Enter] para continuar' | Out-Null
 
@@ -556,6 +591,12 @@ function Show-MainMenu {
 
                     Write-Host ''
                     Write-Host '  Nota: Cierra sesion o reinicia el Explorer para ver los cambios.' -ForegroundColor DarkGray
+                    Write-ToolkitAuditLog -Action 'PerformanceProfile' -Status 'Success' -Summary ('Perfil aplicado: {0}' -f $visualProfile) -Details ([PSCustomObject]@{
+                        Profile   = $visualProfile
+                        Visuals   = $result.Visuals
+                        Tweaks    = $result.Tweaks
+                        PowerPlan = $result.PowerPlan
+                    })
                     Write-Host ''
                     Read-Host '  [Enter] para continuar' | Out-Null
 
@@ -622,6 +663,7 @@ function Show-MainMenu {
                 } else {
                     Write-Host ("  Error: {0}" -f $result.Message) -ForegroundColor Red
                 }
+                Write-ToolkitAuditLog -Action 'DriverBackup' -Status $(if ($result.Success) { 'Success' } else { 'Error' }) -Summary ('Exportados: {0}/{1}' -f $result.Exported, $result.Total) -Details $result
                 Write-Host ''
                 Read-Host '  [Enter] para continuar' | Out-Null
             }
@@ -717,16 +759,9 @@ function Show-MainMenu {
                                     }
 
                                     [PSCustomObject] $selApp = $win32Apps[$selIdx - 1]
+                                    [PSCustomObject] $uninstallPreview = Get-Win32UninstallPreview -App $selApp
 
-                                    [string] $methodLabel = if (-not [string]::IsNullOrWhiteSpace($selApp.QuietUninstallString)) {
-                                        'Silencioso (QuietUninstallString)'
-                                    } elseif ($selApp.UninstallString -match 'MsiExec') {
-                                        'MSI silencioso (/qn /norestart)'
-                                    } elseif (-not [string]::IsNullOrWhiteSpace($selApp.UninstallString)) {
-                                        'Interactivo — se abrira el desinstalador'
-                                    } else {
-                                        'Sin metodo disponible'
-                                    }
+                                    [string] $methodLabel = $uninstallPreview.MethodLabel
 
                                     Write-Host ''
                                     Write-Host ('  Nombre    : {0}' -f $selApp.Name) -ForegroundColor White
@@ -734,7 +769,20 @@ function Show-MainMenu {
                                     if ($selApp.Publisher) { Write-Host ('  Publisher : {0}' -f $selApp.Publisher) -ForegroundColor DarkGray }
                                     if ($selApp.SizeMB)    { Write-Host ('  Tamano    : {0} MB' -f $selApp.SizeMB)  -ForegroundColor DarkGray }
                                     Write-Host ('  Metodo    : {0}' -f $methodLabel) -ForegroundColor $(if ($methodLabel -match 'Interactivo') { 'Yellow' } else { 'Cyan' })
+                                    if ($uninstallPreview.CommandLine) {
+                                        Write-Host ('  Comando   : {0}' -f $uninstallPreview.CommandLine) -ForegroundColor DarkGray
+                                    }
+                                    if (-not $uninstallPreview.ExecutableExists -and $uninstallPreview.Method -ne 'None') {
+                                        Write-Host ('  [!] Ejecutable no encontrado: {0}' -f $uninstallPreview.Executable) -ForegroundColor Yellow
+                                    }
                                     Write-Host ''
+
+                                    if (-not $uninstallPreview.Success) {
+                                        Write-Host ('  [!] No se puede ejecutar este desinstalador: {0}' -f $uninstallPreview.Error) -ForegroundColor Red
+                                        Write-Host ''
+                                        Read-Host '  Presione Enter para continuar'
+                                        continue win32Loop
+                                    }
 
                                     [string] $confirm = (Read-Host '  Confirmar desinstalacion? [s] Si  [q] Cancelar').Trim().ToLower()
                                     if ($confirm -ne 's') { continue win32Loop }
@@ -748,6 +796,13 @@ function Show-MainMenu {
                                         [string] $errMsg = if ($unResult.Error) { $unResult.Error } else { 'Codigo de salida: {0}' -f $unResult.ExitCode }
                                         Write-Host ('  [!]  Error: {0}' -f $errMsg) -ForegroundColor Red
                                     }
+                                    Write-ToolkitAuditLog -Action 'UninstallWin32App' -Status $(if ($unResult.Success) { 'Success' } else { 'Error' }) -Summary ('{0} via {1}' -f $selApp.Name, $unResult.Method) -Details ([PSCustomObject]@{
+                                        AppName   = $selApp.Name
+                                        Method    = $unResult.Method
+                                        Command   = $uninstallPreview.CommandLine
+                                        ExitCode  = $unResult.ExitCode
+                                        Error     = $unResult.Error
+                                    })
                                     Write-Host ''
                                     Read-Host '  Presione Enter para continuar'
                                 }
@@ -840,9 +895,14 @@ function Show-MainMenu {
                                     try {
                                         Remove-AppxPackage -Package $selUwp.PackageFullName -ErrorAction Stop
                                         Write-Host ('  [OK] {0} eliminado.' -f $selUwp.DisplayName) -ForegroundColor Green
+                                        Write-ToolkitAuditLog -Action 'UninstallUwpApp' -Status 'Success' -Summary ('{0} eliminado' -f $selUwp.DisplayName) -Details $selUwp
                                     }
                                     catch {
                                         Write-Host ('  [!]  Error: {0}' -f $_.Exception.Message) -ForegroundColor Red
+                                        Write-ToolkitAuditLog -Action 'UninstallUwpApp' -Status 'Error' -Summary ('Error al eliminar {0}' -f $selUwp.DisplayName) -Details ([PSCustomObject]@{
+                                            App   = $selUwp
+                                            Error = $_.Exception.Message
+                                        })
                                     }
                                     Write-Host ''
                                     Read-Host '  Presione Enter para continuar'
@@ -925,6 +985,7 @@ function Show-MainMenu {
                                     Write-Host ("    - {0}" -f $err) -ForegroundColor DarkYellow
                                 }
                             }
+                            Write-ToolkitAuditLog -Action 'PrivacyProfile' -Status $(if ($result.Errors.Count -gt 0) { 'Warning' } else { 'Success' }) -Summary ('Perfil {0}' -f $result.Profile) -Details $result
                             Write-Host ''
                             Read-Host '  [Enter] para continuar' | Out-Null
                             break privacyLoop
@@ -1039,6 +1100,12 @@ function Show-MainMenu {
                             Write-Host ('  [!] Error: {0}' -f $sr.Error) -ForegroundColor Red
                         }
 
+                        Write-ToolkitAuditLog -Action 'StartupToggle' -Status $(if ($sr.Success) { 'Success' } else { 'Error' }) -Summary ('{0} -> {1}' -f $target.Name, $(if ($setEnabled) { 'Enabled' } else { 'Disabled' })) -Details ([PSCustomObject]@{
+                            Entry   = $target
+                            Result  = $sr
+                            Enabled = $setEnabled
+                        })
+
                         Start-Sleep -Milliseconds 900
                         continue startupLoop
                     }
@@ -1058,53 +1125,9 @@ function Show-MainMenu {
                     # Fechas de ultima instalacion y revision desde registro
                     # Path moderno (W10 1903+ / W11): SOFTWARE\Microsoft\WindowsUpdate\UX\Settings
                     # Path legacy (W10 pre-1903 / LTSC): Auto Update\Results\{Detect|Install}
-                    [string] $lastInstall = 'Desconocida'
-                    [string] $lastCheck   = 'Desconocida'
-                    try {
-                        # ── Intento moderno primero ────────────────────────────────────────────
-                        $regUX = Get-ItemProperty `
-                            -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' `
-                            -ErrorAction SilentlyContinue
-
-                        if ($regUX) {
-                            # LastCheckedForUpdates: ISO 8601 string, ej "2026-03-10T14:30:00.0000000Z"
-                            $pCheck = $regUX.PSObject.Properties['LastCheckedForUpdates']
-                            if ($pCheck -and -not [string]::IsNullOrWhiteSpace($pCheck.Value)) {
-                                try {
-                                    $lastCheck = ([datetime]::Parse($pCheck.Value)).ToString('yyyy-MM-dd HH:mm')
-                                } catch { $lastCheck = [string]$pCheck.Value }
-                            }
-
-                            # Ultima instalacion exitosa
-                            foreach ($pName in @('LastSuccessfulInstallTime', 'LastInstallTime')) {
-                                $pInst = $regUX.PSObject.Properties[$pName]
-                                if ($pInst -and -not [string]::IsNullOrWhiteSpace($pInst.Value)) {
-                                    try {
-                                        $lastInstall = ([datetime]::Parse($pInst.Value)).ToString('yyyy-MM-dd HH:mm')
-                                    } catch { $lastInstall = [string]$pInst.Value }
-                                    break
-                                }
-                            }
-                        }
-
-                        # ── Fallback al path legacy si el moderno no retorno datos ────────────
-                        if ($lastInstall -eq 'Desconocida') {
-                            $regInstall = Get-ItemProperty `
-                                -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install' `
-                                -ErrorAction SilentlyContinue
-                            if ($regInstall -and $regInstall.PSObject.Properties['LastSuccessTime']) {
-                                $lastInstall = $regInstall.LastSuccessTime
-                            }
-                        }
-                        if ($lastCheck -eq 'Desconocida') {
-                            $regCheck = Get-ItemProperty `
-                                -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect' `
-                                -ErrorAction SilentlyContinue
-                            if ($regCheck -and $regCheck.PSObject.Properties['LastSuccessTime']) {
-                                $lastCheck = $regCheck.LastSuccessTime
-                            }
-                        }
-                    } catch { }
+                    [PSCustomObject] $wuStatus = Get-WindowsUpdateStatus -IsLtsc $isLtsc
+                    [string] $lastInstall = $wuStatus.LastInstall
+                    [string] $lastCheck = $wuStatus.LastCheck
 
                     [string] $installColor = if ($lastInstall -eq 'Desconocida') { 'DarkGray' } else { 'White' }
                     Write-Host ('  Ultima actualizacion instalada : {0}' -f $lastInstall) -ForegroundColor $installColor
