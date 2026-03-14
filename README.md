@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # PC Optimización Toolkit
 
 Toolkit de optimización y diagnóstico para Windows 10/11. Diseñado para uso técnico — servicio a PC de clientes, tanto local como vía AnyDesk.
@@ -50,7 +49,3 @@ Cada release genera también `dist\PCTk-YYYY.MM.DD.zip.sha256` y, con `-Publish`
 ## Licencia
 
 MIT — ver [LICENSE](LICENSE)
-=======
-# ServiceKit-Public
-Toolkit para optimización de win10/11.
->>>>>>> 5ae4142bd6e985eb9f62ad7ba481a2672921da89
