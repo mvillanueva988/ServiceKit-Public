@@ -33,6 +33,7 @@ dist/*.sha256
 .github/
 *.code-workspace
 GSD-STYLE.md
+_local-dev/
 # ==========================================
 # GSD Framework / Copilot AI
 # ==========================================
