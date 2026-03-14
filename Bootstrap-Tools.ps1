@@ -90,6 +90,35 @@ function Invoke-ToolDownload {
     }
 }
 
+function Test-DownloadedZipFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    if (-not (Test-Path $Path)) { return $false }
+
+    try {
+        [System.IO.FileStream] $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        try {
+            if ($stream.Length -lt 4) { return $false }
+
+            [byte[]] $sig = [byte[]]::new(4)
+            [void] $stream.Read($sig, 0, 4)
+
+            # ZIP local file headers/signatures start with PK
+            return ($sig[0] -eq 0x50 -and $sig[1] -eq 0x4B)
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    catch {
+        return $false
+    }
+}
+
 # ─── Verificar si una herramienta ya esta instalada ──────────────────────────
 function Test-ToolInstalled {
     param([object] $Tool)
@@ -154,12 +183,27 @@ foreach ($tool in $toolsToProcess) {
 
     [string] $destFile = Join-Path $binDir $tool.filename
 
-    try {
-        Invoke-ToolDownload -Url $tool.url -Dest $destFile -DisplayName $tool.name
+    $downloadSucceeded = $false
+    $lastDownloadError = ''
+    for ([int] $attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Invoke-ToolDownload -Url $tool.url -Dest $destFile -DisplayName $tool.name
+            $downloadSucceeded = $true
+            break
+        }
+        catch {
+            $lastDownloadError = $_.Exception.Message
+            if (Test-Path $destFile) { Remove-Item $destFile -Force -ErrorAction SilentlyContinue }
+            if ($attempt -lt 3) {
+                Write-Host ("  [~] Reintentando descarga ({0}/3) para {1}..." -f ($attempt + 1), $tool.name) -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 800
+            }
+        }
     }
-    catch {
-        Write-Host ("  [!] Error al descargar {0}: {1}" -f $tool.name, $_.Exception.Message) -ForegroundColor Red
-        if (Test-Path $destFile) { Remove-Item $destFile -Force }
+
+    if (-not $downloadSucceeded) {
+        Write-Host ("  [!] Error al descargar {0}: {1}" -f $tool.name, $lastDownloadError) -ForegroundColor Red
+        if (Test-Path $destFile) { Remove-Item $destFile -Force -ErrorAction SilentlyContinue }
         $failed++
         continue
     }
@@ -196,6 +240,10 @@ foreach ($tool in $toolsToProcess) {
 
         Write-Host ("  [~] Extrayendo {0}..." -f $tool.name) -ForegroundColor Cyan
         try {
+            if (-not (Test-DownloadedZipFile -Path $destFile)) {
+                throw 'Payload no es un ZIP valido (posible HTML/error remoto).'
+            }
+
             if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
             Expand-Archive -Path $destFile -DestinationPath $extractDir -Force
             Remove-Item $destFile -Force   # limpiar el zip
