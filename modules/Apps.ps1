@@ -170,6 +170,7 @@ function Invoke-Win32Uninstall {
                 Method   = 'MSI'
                 App      = $App.Name
                 ExitCode = $proc.ExitCode
+                Error    = ''
             }
         }
         catch {
@@ -278,6 +279,7 @@ function _Invoke-UninstallCommand {
             App      = $AppName
             Command  = $parsed.CommandLine
             ExitCode = $proc.ExitCode
+            Error    = ''
         }
     }
     catch {

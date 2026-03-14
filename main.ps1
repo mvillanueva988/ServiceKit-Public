@@ -789,11 +789,13 @@ function Show-MainMenu {
 
                                     Write-Host "`n  Desinstalando..." -ForegroundColor Cyan
                                     [PSCustomObject] $unResult = Invoke-Win32Uninstall -App $selApp
+                                    $unErrorProp = $unResult.PSObject.Properties['Error']
+                                    [string] $unError = if ($null -ne $unErrorProp) { [string] $unErrorProp.Value } else { '' }
 
                                     if ($unResult.Success) {
                                         Write-Host ('  [OK] {0} desinstalado correctamente.' -f $unResult.App) -ForegroundColor Green
                                     } else {
-                                        [string] $errMsg = if ($unResult.Error) { $unResult.Error } else { 'Codigo de salida: {0}' -f $unResult.ExitCode }
+                                        [string] $errMsg = if (-not [string]::IsNullOrWhiteSpace($unError)) { $unError } else { 'Codigo de salida: {0}' -f $unResult.ExitCode }
                                         Write-Host ('  [!]  Error: {0}' -f $errMsg) -ForegroundColor Red
                                     }
                                     Write-ToolkitAuditLog -Action 'UninstallWin32App' -Status $(if ($unResult.Success) { 'Success' } else { 'Error' }) -Summary ('{0} via {1}' -f $selApp.Name, $unResult.Method) -Details ([PSCustomObject]@{
@@ -801,7 +803,7 @@ function Show-MainMenu {
                                         Method    = $unResult.Method
                                         Command   = $uninstallPreview.CommandLine
                                         ExitCode  = $unResult.ExitCode
-                                        Error     = $unResult.Error
+                                        Error     = $unError
                                     })
                                     Write-Host ''
                                     Read-Host '  Presione Enter para continuar'
