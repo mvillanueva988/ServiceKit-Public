@@ -1329,6 +1329,45 @@ function Show-MainMenu {
                 [string] $manifestPath = Join-Path $PSScriptRoot 'tools\manifest.json'
                 [string] $binDir       = Join-Path $PSScriptRoot 'tools\bin'
 
+                function Resolve-ToolLaunchPath {
+                    param([object] $Tool, [string] $BinDir)
+
+                    [string] $declaredRel = if (
+                        $Tool.PSObject.Properties['launchExe'] -and
+                        -not [string]::IsNullOrWhiteSpace([string] $Tool.launchExe)
+                    ) { [string] $Tool.launchExe } else { [string] $Tool.filename }
+
+                    [string] $declaredPath = Join-Path $BinDir $declaredRel
+                    if (Test-Path $declaredPath) { return $declaredPath }
+
+                    # Fallback para ZIPs con carpeta/version dinámica
+                    [string] $leaf = Split-Path -Path $declaredRel -Leaf
+                    if (-not [string]::IsNullOrWhiteSpace($leaf)) {
+                        [object[]] $matches = @(
+                            Get-ChildItem -Path $BinDir -Recurse -File -Filter $leaf -ErrorAction SilentlyContinue |
+                                Select-Object -First 1
+                        )
+                        if ($matches.Count -gt 0 -and $matches[0]) {
+                            return [string] $matches[0].FullName
+                        }
+                    }
+
+                    return ''
+                }
+
+                function Test-ToolInstalledUi {
+                    param([object] $Tool, [string] $BinDir)
+
+                    [string] $resolvedLaunch = Resolve-ToolLaunchPath -Tool $Tool -BinDir $BinDir
+                    if (-not [string]::IsNullOrWhiteSpace($resolvedLaunch)) { return $true }
+
+                    if ($Tool.PSObject.Properties['extractDir'] -and -not [string]::IsNullOrWhiteSpace([string] $Tool.extractDir)) {
+                        return (Test-Path (Join-Path $BinDir ([string] $Tool.extractDir)))
+                    }
+
+                    return (Test-Path (Join-Path $BinDir ([string] $Tool.filename)))
+                }
+
                 if (-not (Test-Path $manifestPath)) {
                     Write-Host '  [!] tools\manifest.json no encontrado.' -ForegroundColor Red
                     break
@@ -1347,14 +1386,7 @@ function Show-MainMenu {
                     # Calcular estado de cada herramienta
                     [PSCustomObject[]] $toolRows = @($allTools | ForEach-Object {
                         $t = $_
-                        [bool] $installed = if (
-                            $t.PSObject.Properties['extractDir'] -and
-                            -not [string]::IsNullOrWhiteSpace($t.extractDir)
-                        ) {
-                            Test-Path (Join-Path $binDir $t.extractDir)
-                        } else {
-                            Test-Path (Join-Path $binDir $t.filename)
-                        }
+                        [bool] $installed = Test-ToolInstalledUi -Tool $t -BinDir $binDir
                         [PSCustomObject]@{ Tool = $t; Installed = $installed }
                     })
 
@@ -1481,20 +1513,15 @@ function Show-MainMenu {
                             continue toolsLoop
                         }
 
-                        [string] $exeRel = if (
-                            $orow.Tool.PSObject.Properties['launchExe'] -and
-                            -not [string]::IsNullOrWhiteSpace($orow.Tool.launchExe)
-                        ) { $orow.Tool.launchExe } else { $orow.Tool.filename }
+                        [string] $exePath = Resolve-ToolLaunchPath -Tool $orow.Tool -BinDir $binDir
 
-                        [string] $exePath = Join-Path $binDir $exeRel
-
-                        if (-not (Test-Path $exePath)) {
+                        if ([string]::IsNullOrWhiteSpace($exePath) -or -not (Test-Path $exePath)) {
                             Write-Host ('  Ejecutable no encontrado: {0}' -f $exePath) -ForegroundColor Red
                             Start-Sleep -Milliseconds 1200 ; continue toolsLoop
                         }
 
                         Write-Host ("  Abriendo {0}..." -f $orow.Tool.name) -ForegroundColor Cyan
-                        if ($exeRel -match '\.ps1$') {
+                        if ($exePath -match '\.ps1$') {
                             # Scripts PS1: lanzar en nueva ventana con ExecutionPolicy bypass
                             Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$exePath`""
                         } else {
