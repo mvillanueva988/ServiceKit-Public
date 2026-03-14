@@ -12,9 +12,9 @@ El toolkit arrancó con un motor asíncrono y fue creciendo módulo a módulo du
 - [x] **Phase 4a: Compatibility — Crash Guards** — 7 guards en Telemetry.ps1 + COMPATIBILITY.md
 - [x] **Phase 4b: Compatibility — UX Guards** — Banner OS/HW/Edition, x86 guard en Apps, LTSC en UWP, Privacy GPO note, PS1 launcher, instance mutex
 - [x] **Phase 5: Portable Executable** — Launch.ps1 (one-liner), Release.ps1 (build), Bootstrap integrity fix, README
-- [ ] **Phase 6: Network Module Review** — Diagnóstico de red (TCP/DNS/ping), verificación post-apply en Optimize-Network
-  - [ ] 06-01-PLAN.md — Get-NetworkDiagnostics + opción [d] en menú
-  - [ ] 06-02-PLAN.md — Verificación post-apply + UI con conteo de propiedades
+- [x] **Phase 6: Network Module Review** — Diagnóstico de red (TCP/DNS/ping), verificación post-apply en Optimize-Network
+  - [x] 06-01-PLAN.md — Get-NetworkDiagnostics + opción [d] en menú
+  - [x] 06-02-PLAN.md — Verificación post-apply + UI con conteo de propiedades
 - [x] **Phase 7: Auto-Cleanup / Self-Removal** — Opción [X] Limpiar y salir: confirmación explícita + deferred rmdir vía cmd.exe detachado
 - [x] **Phase 8: Codebase Polish** — Admin check, Spooler warning, restore cooldown, CIM cache, async apps/cleanup, DISM output, Launch.ps1 hardening (completed 2026-03-10)
 - [ ] **Phase 9: Deployment** — GitHub release, flujo de distribución, validación end-to-end del bootstrap
@@ -112,11 +112,13 @@ Plans:
 | 3. Polish & Production | 1/1 | ✅ Complete | 2026-03-10 |
 | 4a. Compatibility — Crash Guards | 1/1 | ✅ Complete | 2026-03-10 |
 | 4b. Compatibility — UX Guards | 1/1 | ✅ Complete | 2026-03-10 |
-| 5. Portable Executable | 0/? | 🔜 Pending | — |
-| 6. Network Module Review | 0/? | 🔜 Pending | — |
-| 7. Auto-Cleanup / Self-Removal | 0/? | 🔜 Pending | — |
+| 5. Portable Executable | 1/1 | ✅ Complete | 2026-03-10 |
+| 6. Network Module Review | 2/2 | ✅ Complete | 2026-03-10 |
+| 7. Auto-Cleanup / Self-Removal | 1/1 | ✅ Complete | 2026-03-10 |
+| 8. Codebase Polish | 3/3 | ✅ Complete | 2026-03-10 |
+| 9. Deployment | 0/2 | 🔜 Pending | — |
 
-**Overall:** 8/? plans complete — Fases 1-3 + 4a + 4b cerradas.
+**Overall:** 11+/? planes completados — Fases 1-8 cerradas. Solo queda deployment.
 
 ### Phase 4a: Compatibility — Crash Guards ✅ COMPLETE
 
@@ -152,7 +154,7 @@ Plans:
 - `main.ps1` Tool launcher — soporte para `launchExe` con extensión `.ps1`
 - `main.ps1` Instance mutex — `Local\PCOptimizacionToolkit` previene dos instancias
 - `modules/Apps.ps1` — WOW6432Node saltado en x86 puro
-- `tools/manifest.json` v4 — Sophia Script + WinSlop (18 herramientas total)
+- `tools/manifest.json` v4 — WinSlop agregado (18 herramientas total)
 
 Plans:
 - [x] 04b-01: UX guards

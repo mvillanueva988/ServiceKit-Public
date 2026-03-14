@@ -14,6 +14,8 @@ Set-StrictMode -Version Latest
 [string] $outDir  = Join-Path $PSScriptRoot 'dist'
 [string] $zipName = "PCTk-$Version.zip"
 [string] $zipPath = Join-Path $outDir $zipName
+[string] $shaName = "$zipName.sha256"
+[string] $shaPath = Join-Path $outDir $shaName
 
 # ── Limpiar y crear staging ───────────────────────────────────────────────────
 Write-Host "  Preparando staging..." -ForegroundColor Cyan
@@ -43,9 +45,15 @@ Get-ChildItem -Path $staging -Filter '*.code-workspace' -File | Remove-Item -For
 # ── Generar ZIP ───────────────────────────────────────────────────────────────
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+if (Test-Path $shaPath) { Remove-Item $shaPath -Force }
 
 Write-Host "  Comprimiendo..." -ForegroundColor Cyan
 Compress-Archive -Path "$staging\*" -DestinationPath $zipPath
+
+# ── Generar checksum SHA-256 del ZIP ─────────────────────────────────────────
+[string] $zipSha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToUpperInvariant()
+[string] $shaLine   = '{0} *{1}' -f $zipSha256, $zipName
+[System.IO.File]::WriteAllText($shaPath, $shaLine + [Environment]::NewLine)
 
 # ── Limpiar staging ───────────────────────────────────────────────────────────
 Remove-Item $staging -Recurse -Force
@@ -54,6 +62,8 @@ Remove-Item $staging -Recurse -Force
 [double] $sizeMB = (Get-Item $zipPath).Length / 1MB
 Write-Host ("  [v] {0}  ({1:N1} MB)" -f $zipName, $sizeMB) -ForegroundColor Green
 Write-Host "      $zipPath" -ForegroundColor DarkGray
+Write-Host ("  [v] {0}" -f $shaName) -ForegroundColor Green
+Write-Host "      $shaPath" -ForegroundColor DarkGray
 
 # ── Publicar a GitHub Releases (opcional) ────────────────────────────────────
 if ($Publish) {
@@ -111,6 +121,17 @@ if ($Publish) {
             -Headers $headers `
             -ContentType 'application/zip' `
             -Body $zipBytes `
+            -ErrorAction Stop | Out-Null
+
+        # Subir checksum SHA-256
+        Write-Host "  Subiendo $shaName..." -ForegroundColor Cyan
+        [byte[]] $shaBytes = [System.IO.File]::ReadAllBytes($shaPath)
+        Invoke-RestMethod `
+            -Uri "${uploadUrl}?name=$shaName" `
+            -Method Post `
+            -Headers $headers `
+            -ContentType 'text/plain' `
+            -Body $shaBytes `
             -ErrorAction Stop | Out-Null
 
         Write-Host "  [v] Release publicado: https://github.com/$Repo/releases/tag/v$Version" -ForegroundColor Green

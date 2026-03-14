@@ -32,7 +32,6 @@ Binary tools are NOT bundled. `Bootstrap-Tools.ps1` downloads them on demand to 
 **GitHub Releases (third-party):**
 - `https://github.com/Klocman/Bulk-Crap-Uninstaller/releases/download/v5.7/BCUninstaller_5.7_portable.zip` — BCUninstaller
 - `https://github.com/ChrisTitusTech/winutil/releases/latest/download/winutil.exe` — WinUtil
-- `https://github.com/farag2/Sophia-Script-for-Windows/releases/latest/download/Sophia.Script.for.Windows.11.zip` — Sophia Script
 
 **SourceForge:**
 - `https://sourceforge.net/projects/crystaldiskinfo/files/latest/download` — CrystalDiskInfo

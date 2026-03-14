@@ -1,0 +1,128 @@
+﻿{
+    "Phase":  "Post",
+    "Timestamp":  "2026-03-11 01:09:42",
+    "ComputerName":  "MATEO-NOTEBOOK",
+    "CPU":  {
+                "Name":  "AMD Ryzen 7 5800H with Radeon Graphics",
+                "Cores":  8,
+                "Threads":  16
+            },
+    "GPU":  [
+                {
+                    "Name":  "AMD Radeon(TM) Graphics",
+                    "Type":  "Integrated",
+                    "DriverVersion":  "31.0.21923.11000"
+                },
+                {
+                    "Name":  "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+                    "Type":  "Dedicated",
+                    "DriverVersion":  "32.0.15.9571"
+                }
+            ],
+    "RamTotalGb":  14.86,
+    "RamSlots":  [
+                     {
+                         "Slot":  "DIMM 0",
+                         "CapacityGb":  8,
+                         "SpeedMhz":  3200,
+                         "Manufacturer":  "Samsung"
+                     },
+                     {
+                         "Slot":  "DIMM 0",
+                         "CapacityGb":  8,
+                         "SpeedMhz":  3200,
+                         "Manufacturer":  "Samsung"
+                     }
+                 ],
+    "Disks":  [
+                  {
+                      "Name":  "HGST HTS545050A7E380",
+                      "MediaType":  "HDD",
+                      "SizeGb":  465.76,
+                      "HealthStatus":  "Healthy",
+                      "TempC":  32,
+                      "WearPct":  0,
+                      "ReadErrors":  0,
+                      "WriteErrors":  null
+                  },
+                  {
+                      "Name":  "SAMSUNG MZALQ512HBLU-00BL2",
+                      "MediaType":  "SSD",
+                      "SizeGb":  476.94,
+                      "HealthStatus":  "Healthy",
+                      "TempC":  46,
+                      "WearPct":  0,
+                      "ReadErrors":  null,
+                      "WriteErrors":  null
+                  }
+              ],
+    "Volumes":  [
+                    {
+                        "Letter":  "C",
+                        "Label":  "",
+                        "SizeGb":  476.92,
+                        "FreeGb":  130.97,
+                        "UsedPct":  72.5
+                    },
+                    {
+                        "Letter":  "D",
+                        "Label":  "Disco Extra Backup",
+                        "SizeGb":  463.43,
+                        "FreeGb":  238.27,
+                        "UsedPct":  48.6
+                    }
+                ],
+    "PageFile":  {
+                     "CurrentUsageMb":  0,
+                     "PeakUsageMb":  0
+                 },
+    "Services":  {
+                     "RunningCount":  101,
+                     "BloatRunning":  [
+
+                                      ]
+                 },
+    "StartupCount":  8,
+    "TopProcesses":  [
+                         {
+                             "Name":  "brave",
+                             "WorkingSetMb":  349.1
+                         },
+                         {
+                             "Name":  "NVIDIA Broadcast",
+                             "WorkingSetMb":  317.6
+                         },
+                         {
+                             "Name":  "brave",
+                             "WorkingSetMb":  262.3
+                         },
+                         {
+                             "Name":  "MsMpEng",
+                             "WorkingSetMb":  256.5
+                         },
+                         {
+                             "Name":  "SearchApp",
+                             "WorkingSetMb":  234.3
+                         }
+                     ],
+    "Battery":  {
+                    "ChargePercent":  28,
+                    "HealthPercent":  null,
+                    "Status":  "AC"
+                },
+    "Antivirus":  [
+                      {
+                          "Name":  "Windows Defender",
+                          "Enabled":  false,
+                          "IsNative":  false
+                      },
+                      {
+                          "Name":  "Windows Defender",
+                          "Enabled":  true,
+                          "IsNative":  true
+                      }
+                  ],
+    "MultipleAvProblem":  false,
+    "CpuTempC":  56,
+    "UptimeHours":  0.4
+}

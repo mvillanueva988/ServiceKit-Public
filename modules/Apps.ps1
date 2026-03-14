@@ -142,6 +142,17 @@ function Invoke-Win32Uninstall {
         [PSCustomObject] $App
     )
 
+    [PSCustomObject] $preview = Get-Win32UninstallPreview -App $App
+    if (-not $preview.Success) {
+        return [PSCustomObject]@{
+            Success  = $false
+            Method   = $preview.Method
+            App      = $App.Name
+            Error    = $preview.Error
+            ExitCode = $null
+        }
+    }
+
     # ── Prioridad 1: QuietUninstallString ────────────────────────────────────
     if (-not [string]::IsNullOrWhiteSpace($App.QuietUninstallString)) {
         return _Invoke-UninstallCommand -CmdStr $App.QuietUninstallString -Method 'Quiet' -AppName $App.Name
@@ -174,6 +185,73 @@ function Invoke-Win32Uninstall {
     return [PSCustomObject]@{ Success = $false; Method = 'None'; App = $App.Name; Error = 'Sin UninstallString en el registro' }
 }
 
+function Get-Win32UninstallPreview {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject] $App
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($App.QuietUninstallString)) {
+        $parsedQuiet = _Parse-UninstallCommand -CmdStr $App.QuietUninstallString
+        return [PSCustomObject]@{
+            Success          = $parsedQuiet.Success
+            Method           = 'Quiet'
+            MethodLabel      = 'Silencioso (QuietUninstallString)'
+            Executable       = $parsedQuiet.Executable
+            ResolvedPath     = $parsedQuiet.ResolvedPath
+            Arguments        = $parsedQuiet.Arguments
+            CommandLine      = $parsedQuiet.CommandLine
+            ExecutableExists = $parsedQuiet.ExecutableExists
+            Error            = $parsedQuiet.Error
+        }
+    }
+
+    if ($App.UninstallString -match 'MsiExec\.exe\s+/[IXx]\{([^}]+)\}') {
+        [string] $guid = $Matches[1]
+        [string] $msiPath = _Resolve-ExecutablePath -Executable 'msiexec.exe'
+        [string] $args = "/X{$guid} /qn /norestart"
+        return [PSCustomObject]@{
+            Success          = (-not [string]::IsNullOrWhiteSpace($msiPath))
+            Method           = 'MSI'
+            MethodLabel      = 'MSI silencioso (/qn /norestart)'
+            Executable       = 'msiexec.exe'
+            ResolvedPath     = $msiPath
+            Arguments        = $args
+            CommandLine      = ('msiexec.exe {0}' -f $args)
+            ExecutableExists = (-not [string]::IsNullOrWhiteSpace($msiPath))
+            Error            = if ([string]::IsNullOrWhiteSpace($msiPath)) { 'msiexec.exe no fue encontrado en el sistema.' } else { '' }
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($App.UninstallString)) {
+        $parsedInteractive = _Parse-UninstallCommand -CmdStr $App.UninstallString
+        return [PSCustomObject]@{
+            Success          = $parsedInteractive.Success
+            Method           = 'Interactive'
+            MethodLabel      = 'Interactivo - se abrira el desinstalador'
+            Executable       = $parsedInteractive.Executable
+            ResolvedPath     = $parsedInteractive.ResolvedPath
+            Arguments        = $parsedInteractive.Arguments
+            CommandLine      = $parsedInteractive.CommandLine
+            ExecutableExists = $parsedInteractive.ExecutableExists
+            Error            = $parsedInteractive.Error
+        }
+    }
+
+    return [PSCustomObject]@{
+        Success          = $false
+        Method           = 'None'
+        MethodLabel      = 'Sin metodo disponible'
+        Executable       = ''
+        ResolvedPath     = ''
+        Arguments        = ''
+        CommandLine      = ''
+        ExecutableExists = $false
+        Error            = 'Sin UninstallString en el registro'
+    }
+}
+
 # Helper privado — parsea "exe args" y ejecuta
 function _Invoke-UninstallCommand {
     [CmdletBinding()]
@@ -183,24 +261,14 @@ function _Invoke-UninstallCommand {
         [string] $AppName
     )
 
-    [string] $exe     = ''
-    [string] $cmdArgs = ''
-
-    if ($CmdStr -match '^"([^"]+)"\s*(.*)$') {
-        $exe     = $Matches[1]
-        $cmdArgs = $Matches[2].Trim()
-    }
-    elseif ($CmdStr -match '^(\S+)\s*(.*)$') {
-        $exe     = $Matches[1]
-        $cmdArgs = $Matches[2].Trim()
-    }
-    else {
-        return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Error = "No se pudo parsear: $CmdStr" }
+    [PSCustomObject] $parsed = _Parse-UninstallCommand -CmdStr $CmdStr
+    if (-not $parsed.Success) {
+        return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Error = $parsed.Error }
     }
 
     try {
-        $startParams = @{ FilePath = $exe; Wait = $true; PassThru = $true }
-        if ($cmdArgs)                { $startParams['ArgumentList'] = $cmdArgs }
+        $startParams = @{ FilePath = $parsed.ResolvedPath; Wait = $true; PassThru = $true }
+        if ($parsed.Arguments)       { $startParams['ArgumentList'] = $parsed.Arguments }
         if ($Method -eq 'Quiet')     { $startParams['NoNewWindow']  = $true }
 
         $proc = Start-Process @startParams
@@ -208,12 +276,78 @@ function _Invoke-UninstallCommand {
             Success  = ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 1605)
             Method   = $Method
             App      = $AppName
+            Command  = $parsed.CommandLine
             ExitCode = $proc.ExitCode
         }
     }
     catch {
         return [PSCustomObject]@{ Success = $false; Method = $Method; App = $AppName; Error = $_.Exception.Message }
     }
+}
+
+function _Parse-UninstallCommand {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $CmdStr
+    )
+
+    [string] $exe = ''
+    [string] $cmdArgs = ''
+
+    if ($CmdStr -match '^"([^"]+)"\s*(.*)$') {
+        $exe = $Matches[1]
+        $cmdArgs = $Matches[2].Trim()
+    }
+    elseif ($CmdStr -match '^(\S+)\s*(.*)$') {
+        $exe = $Matches[1]
+        $cmdArgs = $Matches[2].Trim()
+    }
+    else {
+        return [PSCustomObject]@{
+            Success          = $false
+            Executable       = ''
+            ResolvedPath     = ''
+            Arguments        = ''
+            CommandLine      = $CmdStr
+            ExecutableExists = $false
+            Error            = "No se pudo parsear: $CmdStr"
+        }
+    }
+
+    [string] $resolvedPath = _Resolve-ExecutablePath -Executable $exe
+    return [PSCustomObject]@{
+        Success          = (-not [string]::IsNullOrWhiteSpace($resolvedPath))
+        Executable       = $exe
+        ResolvedPath     = $resolvedPath
+        Arguments        = $cmdArgs
+        CommandLine      = if ([string]::IsNullOrWhiteSpace($cmdArgs)) { $exe } else { ('{0} {1}' -f $exe, $cmdArgs) }
+        ExecutableExists = (-not [string]::IsNullOrWhiteSpace($resolvedPath))
+        Error            = if ([string]::IsNullOrWhiteSpace($resolvedPath)) { ('Ejecutable no encontrado: {0}' -f $exe) } else { '' }
+    }
+}
+
+function _Resolve-ExecutablePath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Executable
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Executable)) {
+        return ''
+    }
+
+    if (Test-Path -LiteralPath $Executable -ErrorAction SilentlyContinue) {
+        return (Resolve-Path -LiteralPath $Executable -ErrorAction SilentlyContinue).Path
+    }
+
+    $command = Get-Command -Name $Executable -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) {
+        return $command.Source
+    }
+
+    return ''
 }
 
 # ─── Start-Win32AppsJob ───────────────────────────────────────────────────────

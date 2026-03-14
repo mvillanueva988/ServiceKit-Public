@@ -9,12 +9,14 @@ Set-StrictMode -Version Latest
     .\Bootstrap-Tools.ps1                      # descarga todas
     .\Bootstrap-Tools.ps1 -ToolName shutup10   # descarga solo una
     .\Bootstrap-Tools.ps1 -Force               # re-descarga aunque ya existan
+    .\Bootstrap-Tools.ps1 -RequireHash         # exige SHA-256 en manifest para cada descarga
 #>
 
 [CmdletBinding()]
 param(
     [switch] $Force,
-    [string] $ToolName = ''
+    [string] $ToolName = '',
+    [switch] $RequireHash
 )
 
 [string] $manifestPath = Join-Path $PSScriptRoot 'tools\manifest.json'
@@ -163,14 +165,24 @@ foreach ($tool in $toolsToProcess) {
 
     # Verificar SHA-256 si el manifest lo define
     if (-not [string]::IsNullOrWhiteSpace($tool.sha256)) {
-        [string] $actual = (Get-FileHash -Path $destFile -Algorithm SHA256).Hash
-        if ($actual -ne $tool.sha256.ToUpper()) {
+        [string] $expected = $tool.sha256.Trim().ToUpperInvariant()
+        [string] $actual = (Get-FileHash -Path $destFile -Algorithm SHA256).Hash.ToUpperInvariant()
+        if ($actual -ne $expected) {
             Write-Host ("  [!] {0}: hash no coincide. Esperado: {1}  Obtenido: {2}" -f $tool.name, $tool.sha256.ToUpper(), $actual) -ForegroundColor Red
             Remove-Item $destFile -Force
             $failed++
             continue
         }
         Write-Host ("  [v] {0}: hash OK" -f $tool.name) -ForegroundColor Green
+    }
+    elseif ($RequireHash) {
+        Write-Host ("  [!] {0}: hash requerido pero no definido en manifest.json" -f $tool.name) -ForegroundColor Red
+        if (Test-Path $destFile) { Remove-Item $destFile -Force }
+        $failed++
+        continue
+    }
+    else {
+        Write-Host ("  [~] {0}: sin SHA-256 en manifest (descarga no verificada)" -f $tool.name) -ForegroundColor Yellow
     }
 
     # Extraer ZIP si corresponde
@@ -204,3 +216,6 @@ Write-Host ''
 Write-Host ("  Resultado: {0} descargado(s), {1} omitido(s), {2} fallido(s)." -f $ok, $skipped, $failed) `
            -ForegroundColor $(if ($failed -gt 0) { 'Yellow' } else { 'Green' })
 Write-Host ("  Binarios en: {0}" -f $binDir) -ForegroundColor DarkGray
+if ($RequireHash) {
+    Write-Host '  Modo estricto SHA-256: activo.' -ForegroundColor DarkGray
+}

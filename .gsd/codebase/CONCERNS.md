@@ -18,25 +18,11 @@
 - Impact: If a function calls a private helper (e.g., `_Invoke-UninstallCommand` in `Apps.ps1`), that helper is silently absent in the job runspace and will throw `CommandNotFoundException` at runtime. Changes to a function require updating both the function and every serialization site.
 - Fix approach: Use a `-InitializationScript` scriptblock that dot-sources the module file inside the job, or use `[System.Management.Automation.Runspaces.RunspacePool]` with proper module loading.
 
-**`Launch.ps1` Uses Deprecated `WebClient`:**
-- Issue: `[System.Net.WebClient]::new()` is used for the ZIP download. `WebClient` is deprecated in .NET 6+.
-- Files: `Launch.ps1` line 42
-- Impact: No timeout control on the download stream. `WebClient` does not honor system proxy settings consistently. Will generate deprecation warnings on .NET 7+ runtimes.
-- Fix approach: Replace with `Invoke-WebRequest -OutFile` or `[System.Net.Http.HttpClient]`.
-
-**`Launch.ps1` Repo Placeholder Never Configured:**
-- Issue: `[string] $GitHubRepo = 'TU_USUARIO/TU_REPO'` is a hardcoded placeholder.
-- Files: `Launch.ps1` line 4
-- Impact: Any user running `Launch.ps1` unmodified will hit a GitHub API 404 and fall through to the "no local version" error path. The auto-update feature is completely non-functional out of the box.
-- Fix approach: Read repo from a config file, an environment variable, or add a pre-flight check that aborts with a clear setup message when the placeholder value is detected.
-
-**`Sophia` Tool URL Hard-Coded to Windows 11:**
-- Issue: `tools/manifest.json` entry for `sophia` points to `Sophia.Script.for.Windows.11.zip` with a comment saying "replace with Windows.10.And.11 for W10". The download script does not check OS version.
-- Files: `tools/manifest.json` line ~175
-- Impact: On a Windows 10 machine, `Bootstrap-Tools.ps1` silently downloads the wrong Sophia Script variant.
-- Fix approach: Either detect OS version in `Bootstrap-Tools.ps1` and select the correct URL, or replace with the universal `Windows.10.And.11` URL.
-
----
+**`Launch.ps1` Still Requires Manual Repo Configuration:**
+- Issue: `[string] $GitHubRepo = 'TU_USUARIO/TU_REPO'` remains a placeholder until the maintainer sets the real `usuario/repo`.
+- Files: `Launch.ps1` line 5
+- Impact: Distribution is intentionally blocked until the repo is configured. The pre-flight check now fails fast with a clear message, but end-to-end deployment cannot proceed yet.
+- Fix approach: Set the real GitHub repository before Phase 9 and, if desired later, move this value to a config file or release-time substitution.
 
 ## Security Considerations
 
@@ -55,8 +41,8 @@
 **`_Invoke-UninstallCommand` Executes Registry Uninstall Strings Directly:**
 - Risk: The function parses `UninstallString` from the registry and passes it to `Start-Process` with extracted arguments. Maliciously crafted registry entries (possible after malware infection) could cause arbitrary command execution.
 - Files: `modules/Apps.ps1` lines ~180–215
-- Current mitigation: Only runs on explicit user confirmation per app. Registry values come from `HKLM:\SOFTWARE` requiring admin write access to tamper.
-- Recommendations: Add a `Test-Path` check on the resolved executable before launching. Display the full parsed command to the user in the confirmation prompt so they can verify it.
+- Current mitigation: Only runs on explicit user confirmation per app. The UI now shows the parsed command before execution and validates that the target executable exists. Registry values come from `HKLM:\SOFTWARE` requiring admin write access to tamper.
+- Recommendations: Current mitigation is acceptable for local technical use. If this ever becomes unattended or remotely orchestrated, add an allowlist for trusted uninstall executables.
 
 **`Release.ps1` Reads GitHub Token from Environment Variable:**
 - Risk: `$env:GITHUB_TOKEN` is used directly in an `Authorization: token ...` header. On shared machines or CI environments that log environment variables, this can lead to token exposure.
@@ -68,51 +54,13 @@
 
 ## Known Bugs
 
-**`Wait-ToolkitJobs` Silently Drops Job Errors:**
-- Symptoms: If a `Start-Job` scriptblock throws an unhandled exception, the job transitions to `Failed` state. `Receive-Job -AutoRemoveJob -Wait` on a failed job returns no output (not the exception). The caller in `main.ps1` then accesses properties on `$null` (e.g., `$result.Disabled`) and gets no error, just empty output.
-- Files: `core/JobManager.ps1` lines 55–65, all callers in `main.ps1`
-- Trigger: Any unhandled exception inside an async job (e.g., missing cmdlet in job runspace, access denied).
-- Workaround: None visible to the end user — operation silently appears to succeed with zero results.
-
-**`Get-InstalledWin32Apps` and `Get-InstalledUwpApps` Block the Main UI Thread:**
-- Symptoms: Menu options 12 (Apps Win32) and 12→2 (UWP) call these functions synchronously inside the main menu loop. On systems with 200+ installed apps, the screen freezes for 2–5 seconds with no spinner or feedback.
-- Files: `main.ps1` lines ~610–620 and ~730–740; `modules/Apps.ps1`
-- Trigger: Any use of the Apps menu on a system with many installed apps or slow disk.
-- Workaround: None currently. The pattern is inconsistent — all other heavy operations use `Start-Job`.
-
-**`Spooler` in Bloat Catalog Without Printer Warning:**
-- Symptoms: `Spooler` (Print Spooler) appears in the bloat catalog with `Risk = 'Medio'`. Disabling it permanently breaks all local and network printing. There is no warning in the UI that this service is required for printing.
-- Files: `main.ps1` lines ~133–144, `modules/Debloat.ps1` lines ~18–30
-- Trigger: User selects Spooler for disabling.
-- Workaround: Re-enable via `Set-Service Spooler -StartupType Automatic; Start-Service Spooler`.
-
-**`Repair-WindowsSystem` Silences All DISM/SFC Output:**
-- Symptoms: `DISM /Online /Cleanup-Image /RestoreHealth *> $null` and `sfc /scannow *> $null` discard ALL output including actionable error messages. Exit code interpretation is too coarse — DISM exit code 87 (invalid parameter) is reported the same as a real repair failure.
-- Files: `modules/Maintenance.ps1` lines 14–17
-- Trigger: DISM or SFC fails with a non-standard error (e.g., network unavailable for WU source).
-- Workaround: User is referred to `C:\Windows\Logs\CBS\CBS.log` but not in a way they can act on programmatically.
-
-**`Checkpoint-Computer` 24-Hour Cooldown Not Detected:**
-- Symptoms: Windows enforces a 24-hour minimum between restore points. When the cooldown is active, `Checkpoint-Computer` throws an exception that `New-RestorePoint` catches and returns as `Success = $false`. This looks identical to a permissions failure in the UI output.
-- Files: `modules/RestorePoint.ps1` lines 9–20
-- Trigger: Running restore point creation twice within 24 hours.
-- Workaround: Check existing restore points via `Get-ComputerRestorePoint` before attempting creation and display a helpful message.
+No high-confidence runtime bugs remain listed after Phase 8. The main residual concerns are architectural and security-related rather than confirmed user-facing defects.
 
 ---
 
 ## Performance Bottlenecks
 
-**CIM Queries on Every Menu Redraw:**
-- Problem: `Show-MainMenu` queries `Win32_ComputerSystem` and `Win32_VideoController` via CIM on every iteration of the main `:mainLoop`. Clearing the screen and typing a number immediately triggers new WMI calls.
-- Files: `main.ps1` lines ~40–60
-- Cause: Hardware info is displayed in the menu header, and the entire header is redrawn each loop iteration with no caching.
-- Improvement path: Cache the hardware info in `$script:` scope variables on first load. Only refresh if explicitly requested (e.g., by the user pressing a dedicated key).
-
-**`Get-CleanupPreview` Scans All User Profile Temp Dirs Synchronously:**
-- Problem: Before showing the cleanup preview, the function enumerates all user profiles via CIM and scans browser cache directories for each profile. On machines with multiple users and heavy browser usage, this can take 5–15 seconds in the foreground.
-- Files: `modules/Cleanup.ps1` (the `_Get-CleanupPaths` function)
-- Cause: Called directly in main.ps1 before displaying any output, with only a "Escaneando..." message and no progress display.
-- Improvement path: Move the preview scan into an async job like all other heavy operations, showing the spinner during the scan.
+No major UI-thread bottlenecks remain documented after the async work completed in Phase 8. Remaining performance risk is concentrated in the serialization-heavy async architecture itself, not in a specific menu action.
 
 ---
 
@@ -120,7 +68,7 @@
 
 **Module Loading via Blind Dot-Sourcing:**
 - Files: `main.ps1` lines 5–11
-- Why fragile: All scripts in `core/`, `utils/`, and `modules/` are dot-sourced in a `foreach` loop. Load order is filesystem-determined (alphabetical by `Get-ChildItem`). If any module requires another module's functions to be available at dot-source time (not just at call time), load order dependency bugs will appear intermittently.
+- Why fragile: All scripts in `core/`, `utils/`, and `modules/` are dot-sourced in a `foreach` loop. The load order is now deterministic (`Sort-Object Name`), but top-level dependencies between modules would still be brittle.
 - Safe modification: Keep all module-level code side-effect free at load time. Only define functions and declare `$script:` variables. Do not call functions from other modules at the top-level of a module file.
 - Test coverage: None — no test for load order correctness.
 
@@ -134,30 +82,11 @@
 - Why fragile: The serialization pattern only copies one function body into the job scriptblock. If `Disable-BloatServices` or `Invoke-PrivacyTweaks` are ever refactored to call a shared helper, the job will fail with `CommandNotFoundException` at runtime — not at authoring time. There is no test that the job actually runs successfully end-to-end.
 - Test coverage: None.
 
-**Windows Update Info Reads From Two Different Registry Paths:**
-- Files: `main.ps1` lines ~995–1040
-- Why fragile: The code tries a "modern" registry path first (`WindowsUpdate\UX\Settings`) then falls back to a legacy path. The fallback is necessary for LTSC and pre-1903 builds, but `$lastInstall` / `$lastCheck` remain `'Desconocida'` silently if neither path has data. No diagnostic is shown to explain why dates are unknown.
-- Safe modification: Add a check for `$isLtsc` (already computed at menu level) to branch directly to the correct path rather than trying both.
-
 ---
 
 ## Missing Critical Features
 
-**No Admin Elevation Check at Startup:**
-- Problem: Many operations (disabling services, registry writes to HKLM, DISM/SFC, network adapter registry, restore points) require elevation. There is no check for admin rights at startup or before each operation.
-- Blocks: Silent failures when run without elevation — the user sees vague error messages instead of "re-run as Administrator."
-- Recommended fix: Add at the top of `main.ps1`:
-  ```powershell
-  if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-      Write-Host '  [!] Requiere privilegios de Administrador. Ejecuta como Admin.' -ForegroundColor Red
-      exit 1
-  }
-  ```
-
-**No Audit Log for Applied Changes:**
-- Problem: There is no persistent log of what the toolkit changed: which services were disabled, which registry keys were modified, which apps were uninstalled. If something breaks after a session, there is no trail to follow.
-- Blocks: Troubleshooting and reversibility — user cannot know what was changed without manually checking.
-- Note: The `output/` directory exists and driver backup writes to it, but no general change log is written there.
+No missing critical features remain before Phase 9 deployment. The main pending work is release/distribution setup rather than core runtime capability.
 
 ---
 

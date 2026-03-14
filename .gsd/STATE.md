@@ -57,8 +57,6 @@ Recent decisions affecting current work:
 - [x] Ejecutar Phase 6 Plan 2: Verificación post-apply en Optimize-Network ✓
 - [x] Ejecutar Phase 7: Auto-Cleanup / Self-Removal (limpieza al salir, self-destruct EXE)
 - [ ] WinSlop URL está vacía en manifest.json — usuario necesita proveer URL privada cuando quiera usarlo
-- [ ] Sophia Script URL apunta a versión W11 — cambiar a `Windows.10.And.11` para W10
-
 ### Blockers/Concerns
 
 - `OOSU10.exe` no tiene SHA-256 en manifest (URL apunta a "latest" siempre). Aplicar en Phase 3 o documentar como decisión explícita.
@@ -66,4 +64,4 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-10 ART
-Stopped at: Phase 7 complete (07-01 committed as 2176d57). Ready for Phase 8 execution.
+Stopped at: Phase 8 complete. Esperando repositorio GitHub real para Phase 9 deployment.
