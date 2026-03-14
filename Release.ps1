@@ -1,12 +1,28 @@
 #Requires -Version 5.1
 
 param(
-    [string] $Version = (Get-Date -Format 'yyyy.MM.dd'),
+    [string] $Version = '',
     [string] $Repo    = '',       # e.g. 'TU_USUARIO/TU_REPO' — si se omite, se lee de Launch.ps1
     [switch] $Publish             # Si se pasa: sube el ZIP a GitHub Releases (requiere $env:GITHUB_TOKEN)
 )
 
 Set-StrictMode -Version Latest
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    [string] $versionFile = Join-Path $PSScriptRoot 'VERSION'
+    if (Test-Path $versionFile) {
+        [string] $fileVersion = (Get-Content -LiteralPath $versionFile -Raw -ErrorAction SilentlyContinue).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($fileVersion)) {
+            $Version = $fileVersion
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        # Fallback legacy para no romper uso existente
+        $Version = (Get-Date -Format 'yyyy.MM.dd')
+        Write-Host "  [~] VERSION no definido; usando formato legacy $Version" -ForegroundColor Yellow
+    }
+}
 
 # ── Rutas ─────────────────────────────────────────────────────────────────────
 [string] $source  = $PSScriptRoot
