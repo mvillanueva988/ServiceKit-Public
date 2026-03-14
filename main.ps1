@@ -824,10 +824,16 @@ function Show-MainMenu {
                             }
                         }
                         '2' {
-                            Write-Host "`n  Cargando lista de paquetes AppX..." -ForegroundColor Cyan
-                            [PSCustomObject[]] $allUwpApps = @(Wait-ToolkitJobs -Jobs @(Start-UwpAppsJob))
+                            [PSCustomObject[]] $allUwpApps = @()
+                            [bool] $reloadUwpList = $true
                             [string] $uwpFilter = ''
                             :uwpLoop while ($true) {
+                                if ($reloadUwpList) {
+                                    Write-Host "`n  Cargando lista de paquetes AppX..." -ForegroundColor Cyan
+                                    $allUwpApps = @(Wait-ToolkitJobs -Jobs @(Start-UwpAppsJob))
+                                    $reloadUwpList = $false
+                                }
+
                                 Clear-Host
                                 Write-Host '================================================' -ForegroundColor DarkCyan
                                 Write-Host '        APPS UWP / MICROSOFT STORE              ' -ForegroundColor Cyan
@@ -913,12 +919,22 @@ function Show-MainMenu {
                                     [string] $confirm = (Read-Host '  Confirmar eliminacion? [s] Si  [q] Cancelar').Trim().ToLower()
                                     if ($confirm -ne 's') { continue uwpLoop }
 
+                                    [string] $oldProgressPreference = [string] $ProgressPreference
                                     try {
+                                        $ProgressPreference = 'SilentlyContinue'
                                         Remove-AppxPackage -Package $selUwp.PackageFullName -ErrorAction Stop
+                                        $ProgressPreference = $oldProgressPreference
+
                                         Write-Host ('  [OK] {0} eliminado.' -f $selUwp.DisplayName) -ForegroundColor Green
                                         Write-ToolkitAuditLog -Action 'UninstallUwpApp' -Status 'Success' -Summary ('{0} eliminado' -f $selUwp.DisplayName) -Details $selUwp
+
+                                        # Recargar para evitar entries stale y mantener indices correctos
+                                        $reloadUwpList = $true
                                     }
                                     catch {
+                                        if ($null -ne $oldProgressPreference) {
+                                            $ProgressPreference = $oldProgressPreference
+                                        }
                                         Write-Host ('  [!]  Error: {0}' -f $_.Exception.Message) -ForegroundColor Red
                                         Write-ToolkitAuditLog -Action 'UninstallUwpApp' -Status 'Error' -Summary ('Error al eliminar {0}' -f $selUwp.DisplayName) -Details ([PSCustomObject]@{
                                             App   = $selUwp

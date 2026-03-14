@@ -50,14 +50,32 @@ function Convert-ToolkitDateDisplay {
 
     if ($null -eq $Value) { return 'Desconocida' }
 
+    if ($Value -is [datetime]) {
+        return ([datetime]$Value).ToString('yyyy-MM-dd HH:mm')
+    }
+
+    if ($Value -is [double] -or $Value -is [float] -or $Value -is [decimal]) {
+        try {
+            return ([datetime]::FromOADate([double]$Value)).ToString('yyyy-MM-dd HH:mm')
+        }
+        catch {
+            # Continuar con parse de string
+        }
+    }
+
     [string] $raw = [string] $Value
     if ([string]::IsNullOrWhiteSpace($raw)) { return 'Desconocida' }
 
     try {
-        return ([datetime]::Parse($raw)).ToString('yyyy-MM-dd HH:mm')
+        return ([datetime]::Parse($raw, [System.Globalization.CultureInfo]::CurrentCulture)).ToString('yyyy-MM-dd HH:mm')
     }
     catch {
-        return $raw
+        try {
+            return ([datetime]::Parse($raw, [System.Globalization.CultureInfo]::InvariantCulture)).ToString('yyyy-MM-dd HH:mm')
+        }
+        catch {
+            return $raw
+        }
     }
 }
 
