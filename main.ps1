@@ -23,6 +23,79 @@ $script:hwComputer = $null
 $script:hwCpu      = @()
 $script:hwGPU      = @()
 
+function Test-BootstrapPs51Parser {
+    [CmdletBinding()]
+    param()
+
+    [string] $bootstrapPath = Join-Path $PSScriptRoot 'Bootstrap-Tools.ps1'
+    if (-not (Test-Path $bootstrapPath)) {
+        return [PSCustomObject]@{
+            Success = $false
+            Error   = 'Bootstrap-Tools.ps1 no encontrado.'
+        }
+    }
+
+    [string] $ps51Path = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $ps51Path)) {
+        return [PSCustomObject]@{
+            Success = $false
+            Error   = 'No se encontro powershell.exe 5.1 para validar parser compatibility.'
+        }
+    }
+
+    [string] $escapedPath = $bootstrapPath.Replace("'", "''")
+    [string] $parserCommand = [string]::Format(@'
+$tokens = $null
+$errors = $null
+[System.Management.Automation.Language.Parser]::ParseFile('{0}', [ref]$tokens, [ref]$errors) | Out-Null
+if ($errors -and $errors.Count -gt 0) {{
+    $errors | ForEach-Object {{ $_.Message }}
+    exit 1
+}}
+exit 0
+'@, $escapedPath)
+
+    [string] $stdoutPath = Join-Path $env:TEMP ('pctk_bootstrap_parse_stdout_{0}.log' -f [guid]::NewGuid().ToString('N'))
+    [string] $stderrPath = Join-Path $env:TEMP ('pctk_bootstrap_parse_stderr_{0}.log' -f [guid]::NewGuid().ToString('N'))
+
+    try {
+        $proc = Start-Process -FilePath $ps51Path `
+                              -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $parserCommand) `
+                              -Wait -PassThru -WindowStyle Hidden `
+                              -RedirectStandardOutput $stdoutPath `
+                              -RedirectStandardError $stderrPath
+
+        [string] $stdout = if (Test-Path $stdoutPath) { Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue } else { '' }
+        [string] $stderr = if (Test-Path $stderrPath) { Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue } else { '' }
+        [string] $details = (($stdout + [Environment]::NewLine + $stderr).Trim())
+
+        if ($proc.ExitCode -eq 0) {
+            return [PSCustomObject]@{
+                Success = $true
+                Error   = ''
+            }
+        }
+
+        return [PSCustomObject]@{
+            Success = $false
+            Error   = if ([string]::IsNullOrWhiteSpace($details)) { 'ParserError en Bootstrap-Tools.ps1 (sin detalle).' } else { $details }
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success = $false
+            Error   = $_.Exception.Message
+        }
+    }
+    finally {
+        foreach ($tmp in @($stdoutPath, $stderrPath)) {
+            if (Test-Path $tmp) {
+                Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 function Show-MainMenu {
     :mainLoop while ($true) {
         Clear-Host
@@ -863,20 +936,44 @@ function Show-MainMenu {
                                 Write-Host ''
 
                                 if ($uwpApps.Count -gt 0) {
-                                    [int] $pkgColWidth = [math]::Max(24, [math]::Min(48, [console]::WindowWidth - 24))
-                                    [string] $rowFmt = ('  {0,-4} {1,-' + $pkgColWidth + '} {2,-14}')
-                                    Write-Host ($rowFmt -f '#', 'Paquete', 'Version') -ForegroundColor DarkCyan
-                                    Write-Host ('  {0}' -f ('-' * ($pkgColWidth + 22))) -ForegroundColor DarkCyan
-                                    [int] $idx = 0
-                                    foreach ($app in $uwpApps) {
-                                        $idx++
-                                        [string] $cleanDisplay = [regex]::Replace(([string]$app.DisplayName), '[\r\n\t]', ' ')
-                                        $cleanDisplay = [regex]::Replace($cleanDisplay, '\s{2,}', ' ').Trim()
-                                        [string] $shortDisplay = if ($cleanDisplay.Length -gt $pkgColWidth) { $cleanDisplay.Substring(0, [math]::Max(1, $pkgColWidth - 3)) + '...' } else { $cleanDisplay }
-                                        [string] $verStr = [string] $app.Version
-                                        if ($verStr.Length -gt 14) { $verStr = $verStr.Substring(0, 14) }
-                                        [string] $rowColor     = if ($app.IsMicrosoft) { 'DarkGray' } else { 'White' }
-                                        Write-Host ($rowFmt -f $idx, $shortDisplay, $verStr) -ForegroundColor $rowColor
+                                    [int] $windowWidth = [math]::Max(20, [console]::WindowWidth)
+                                    [bool] $compactUwpLayout = ($windowWidth -lt 54)
+
+                                    if ($compactUwpLayout) {
+                                        [int] $nameColWidthCompact = [math]::Max(10, $windowWidth - 9)
+                                        [string] $rowFmtCompact = ('  {0,-4} {1,-' + $nameColWidthCompact + '}')
+                                        Write-Host ($rowFmtCompact -f '#', 'Paquete') -ForegroundColor DarkCyan
+                                        Write-Host ('  {0}' -f ('-' * [math]::Max(12, ($nameColWidthCompact + 5)))) -ForegroundColor DarkCyan
+
+                                        [int] $idx = 0
+                                        foreach ($app in $uwpApps) {
+                                            $idx++
+                                            [string] $cleanDisplay = [regex]::Replace(([string]$app.DisplayName), '[\r\n\t]', ' ')
+                                            $cleanDisplay = [regex]::Replace($cleanDisplay, '\s{2,}', ' ').Trim()
+                                            [string] $shortDisplay = if ($cleanDisplay.Length -gt $nameColWidthCompact) { $cleanDisplay.Substring(0, [math]::Max(1, $nameColWidthCompact - 3)) + '...' } else { $cleanDisplay }
+                                            [string] $rowColor     = if ($app.IsMicrosoft) { 'DarkGray' } else { 'White' }
+                                            Write-Host ($rowFmtCompact -f $idx, $shortDisplay) -ForegroundColor $rowColor
+                                        }
+
+                                        Write-Host ''
+                                        Write-Host '  [i] Modo compacto activo (consola angosta): se oculta Version para evitar solapado.' -ForegroundColor DarkGray
+                                    } else {
+                                        [int] $pkgColWidth = [math]::Min(48, [math]::Max(18, $windowWidth - 23))
+                                        [string] $rowFmt = ('  {0,-4} {1,-' + $pkgColWidth + '} {2,-14}')
+                                        Write-Host ($rowFmt -f '#', 'Paquete', 'Version') -ForegroundColor DarkCyan
+                                        Write-Host ('  {0}' -f ('-' * ($pkgColWidth + 22))) -ForegroundColor DarkCyan
+
+                                        [int] $idx = 0
+                                        foreach ($app in $uwpApps) {
+                                            $idx++
+                                            [string] $cleanDisplay = [regex]::Replace(([string]$app.DisplayName), '[\r\n\t]', ' ')
+                                            $cleanDisplay = [regex]::Replace($cleanDisplay, '\s{2,}', ' ').Trim()
+                                            [string] $shortDisplay = if ($cleanDisplay.Length -gt $pkgColWidth) { $cleanDisplay.Substring(0, [math]::Max(1, $pkgColWidth - 3)) + '...' } else { $cleanDisplay }
+                                            [string] $verStr = [string] $app.Version
+                                            if ($verStr.Length -gt 14) { $verStr = $verStr.Substring(0, 14) }
+                                            [string] $rowColor     = if ($app.IsMicrosoft) { 'DarkGray' } else { 'White' }
+                                            Write-Host ($rowFmt -f $idx, $shortDisplay, $verStr) -ForegroundColor $rowColor
+                                        }
                                     }
                                 } else {
                                     Write-Host '  Sin resultados.' -ForegroundColor DarkYellow
@@ -1294,6 +1391,7 @@ function Show-MainMenu {
                     Write-Host ''
                     Write-Host '  [numero]    Abrir herramienta (requiere estar descargada)' -ForegroundColor DarkGray
                     Write-Host '  [D numero]  Descargar herramienta especifica'              -ForegroundColor DarkGray
+                    Write-Host '  [D numero -f]  Forzar re-descarga de herramienta'         -ForegroundColor DarkGray
                     Write-Host '  [DA]        Descargar todas las faltantes'                -ForegroundColor DarkGray
                     Write-Host '  [q]         Volver'                                       -ForegroundColor DarkGray
                     Write-Host ''
@@ -1301,7 +1399,8 @@ function Show-MainMenu {
 
                     [string] $tc = (Read-Host '  Selecciona').Trim().ToLower()
 
-                    if ($tc -eq 'q' -or [string]::IsNullOrWhiteSpace($tc)) { break toolsLoop }
+                    if ($tc -eq 'q') { break toolsLoop }
+                    if ([string]::IsNullOrWhiteSpace($tc)) { continue toolsLoop }
 
                     # [DA] — descargar todas las faltantes
                     if ($tc -eq 'da') {
@@ -1310,6 +1409,15 @@ function Show-MainMenu {
                             Write-Host "`n  Todas las herramientas ya estan descargadas." -ForegroundColor Green
                             Start-Sleep -Milliseconds 1200
                         } else {
+                            [PSCustomObject] $bootstrapCheck = Test-BootstrapPs51Parser
+                            if (-not $bootstrapCheck.Success) {
+                                Write-Host "`n  [!] Bootstrap bloqueado por parser compatibility (PS 5.1)." -ForegroundColor Red
+                                Write-Host ("      {0}" -f $bootstrapCheck.Error) -ForegroundColor DarkYellow
+                                Write-Host ''
+                                Read-Host '  Presione Enter para continuar'
+                                continue toolsLoop
+                            }
+
                             foreach ($row in $missing) {
                                 Write-Host ("`n  [{0}/{1}] Descargando: {2}" -f ($missing.IndexOf($row) + 1), $missing.Count, $row.Tool.name) -ForegroundColor Cyan
                                 try {
@@ -1326,15 +1434,31 @@ function Show-MainMenu {
                     }
 
                     # [D numero] — descargar una especifica
-                    if ($tc -match '^d\s*(\d+)$') {
+                    if ($tc -match '^d\s*(\d+)(\s+-f)?$') {
                         [int] $didx = [int]$Matches[1]
+                        [bool] $forceDownload = ($Matches[2] -eq ' -f')
                         [PSCustomObject] $drow = $toolRows | Where-Object { $_.Index -eq $didx } | Select-Object -First 1
                         if (-not $drow) {
                             Write-Host '  Numero invalido.' -ForegroundColor Red ; Start-Sleep -Milliseconds 700 ; continue toolsLoop
                         }
+
+                        [PSCustomObject] $bootstrapCheck = Test-BootstrapPs51Parser
+                        if (-not $bootstrapCheck.Success) {
+                            Write-Host "`n  [!] Bootstrap bloqueado por parser compatibility (PS 5.1)." -ForegroundColor Red
+                            Write-Host ("      {0}" -f $bootstrapCheck.Error) -ForegroundColor DarkYellow
+                            Write-Host ''
+                            Read-Host '  Presione Enter para continuar'
+                            continue toolsLoop
+                        }
+
                         Write-Host ("`n  Descargando: {0}..." -f $drow.Tool.name) -ForegroundColor Cyan
                         try {
-                            & (Join-Path $PSScriptRoot 'Bootstrap-Tools.ps1') -ToolName $drow.Tool.name -Force -ErrorAction Stop
+                            if ($forceDownload) {
+                                & (Join-Path $PSScriptRoot 'Bootstrap-Tools.ps1') -ToolName $drow.Tool.name -Force -ErrorAction Stop
+                            }
+                            else {
+                                & (Join-Path $PSScriptRoot 'Bootstrap-Tools.ps1') -ToolName $drow.Tool.name -ErrorAction Stop
+                            }
                         }
                         catch {
                             Write-Host ('  [!] Error al descargar {0}: {1}' -f $drow.Tool.name, $_.Exception.Message) -ForegroundColor Red

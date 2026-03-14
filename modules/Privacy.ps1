@@ -125,11 +125,28 @@ Invoke-PrivacyTweaks -Profile `$args[0]
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName "Privacy_$Profile" -ArgumentList @($Profile)
 }
 
+function Get-ShutUp10Path {
+    [CmdletBinding()]
+    param()
+
+    [string] $bundledPath = Join-Path $PSScriptRoot '..\tools\bin\OOSU10.exe'
+    if (Test-Path $bundledPath) {
+        return $bundledPath
+    }
+
+    $cmd = Get-Command -Name 'OOSU10.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) {
+        return [string] $cmd.Source
+    }
+
+    return ''
+}
+
 # --- Test-ShutUp10Available --------------------------------------------------
 function Test-ShutUp10Available {
     [CmdletBinding()]
     param()
-    return (Test-Path (Join-Path $PSScriptRoot '..\tools\bin\OOSU10.exe'))
+    return (-not [string]::IsNullOrWhiteSpace((Get-ShutUp10Path)))
 }
 
 # --- Open-ShutUp10 -----------------------------------------------------------
@@ -137,17 +154,17 @@ function Open-ShutUp10 {
     [CmdletBinding()]
     param()
 
-    [string] $exePath = Join-Path $PSScriptRoot '..\tools\bin\OOSU10.exe'
+    [string] $exePath = Get-ShutUp10Path
 
-    if (-not (Test-Path $exePath)) {
+    if ([string]::IsNullOrWhiteSpace($exePath) -or -not (Test-Path $exePath)) {
         return [PSCustomObject]@{ Success = $false; Error = 'OOSU10.exe no encontrado. Descargalo desde [T] Herramientas.' }
     }
 
     try {
         Start-Process -FilePath $exePath
-        return [PSCustomObject]@{ Success = $true }
+        return [PSCustomObject]@{ Success = $true; Path = $exePath }
     }
     catch {
-        return [PSCustomObject]@{ Success = $false; Error = $_.Exception.Message }
+        return [PSCustomObject]@{ Success = $false; Error = $_.Exception.Message; Path = $exePath }
     }
 }
