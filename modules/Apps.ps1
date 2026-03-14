@@ -210,15 +210,15 @@ function Get-Win32UninstallPreview {
     if ($App.UninstallString -match 'MsiExec\.exe\s+/[IXx]\{([^}]+)\}') {
         [string] $guid = $Matches[1]
         [string] $msiPath = _Resolve-ExecutablePath -Executable 'msiexec.exe'
-        [string] $args = "/X{$guid} /qn /norestart"
+        [string] $msiArgs = "/X{$guid} /qn /norestart"
         return [PSCustomObject]@{
             Success          = (-not [string]::IsNullOrWhiteSpace($msiPath))
             Method           = 'MSI'
             MethodLabel      = 'MSI silencioso (/qn /norestart)'
             Executable       = 'msiexec.exe'
             ResolvedPath     = $msiPath
-            Arguments        = $args
-            CommandLine      = ('msiexec.exe {0}' -f $args)
+            Arguments        = $msiArgs
+            CommandLine      = ('msiexec.exe {0}' -f $msiArgs)
             ExecutableExists = (-not [string]::IsNullOrWhiteSpace($msiPath))
             Error            = if ([string]::IsNullOrWhiteSpace($msiPath)) { 'msiexec.exe no fue encontrado en el sistema.' } else { '' }
         }
