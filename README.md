@@ -34,6 +34,20 @@ El launcher valida el SHA-256 del ZIP antes de instalar (requiere asset `.sha256
 - PowerShell 5.1 (incluido en Windows)
 - Permisos de administrador
 
+## Versionado
+
+El toolkit usa versionado semantico (`MAJOR.MINOR.PATCH`) definido en `VERSION`.
+
+- `MAJOR`: cambios grandes o incompatibles (ejemplo: inicio de Toolkit v2 = `2.0.0`)
+- `MINOR`: mejoras funcionales compatibles
+- `PATCH`: hotfixes y correcciones sin cambios de flujo
+
+Reglas:
+
+- El tag/release publicado en GitHub es `v<VERSION>`.
+- `Release.ps1` toma `VERSION` por defecto si no pasas `-Version`.
+- Si necesitas un candidato de release, usar sufijo prerelease (ej: `2.0.0-rc.1`).
+
 ## Estructura de carpetas (que se publica vs que se genera)
 
 ### Toolkit funcional (se publica)
@@ -78,9 +92,10 @@ Este paso es obligatorio como **ultimo paso antes de cada push a GitHub** (relea
 Desde la raíz del repositorio:
 
 ```powershell
-.\Release.ps1                         # genera dist\PCTk-YYYY.MM.DD.zip
+Get-Content .\VERSION                 # ver version actual
+.\Release.ps1                         # genera dist\PCTk-<VERSION>.zip
 .\Release.ps1 -Publish                # genera + sube a GitHub Releases (requiere $env:GITHUB_TOKEN)
-.\Release.ps1 -Version '2026.03.10'   # versión manual
+.\Release.ps1 -Version '1.0.1'        # override manual puntual
 ```
 
 Cada release genera también `dist\PCTk-YYYY.MM.DD.zip.sha256` y, con `-Publish`, se sube como asset para validación en `Launch.ps1`.

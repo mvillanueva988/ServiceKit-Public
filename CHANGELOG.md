@@ -2,6 +2,14 @@
 
 Registro de cambios del Toolkit de optimizacion para Windows.
 
+Formato: Keep a Changelog + versionado semantico.
+
+## [Unreleased]
+
+### Notes
+- A partir de este punto, las versiones se toman desde `VERSION` (`MAJOR.MINOR.PATCH`).
+- Los releases historicos con fecha (`v2026.03.xx`) se mantienen como legado de transicion.
+
 ## [v2026.03.14] - 2026-03-14
 
 ### Added
