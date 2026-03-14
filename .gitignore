@@ -21,11 +21,18 @@ tools/bin/
 
 # Salidas generadas en tiempo de ejecucion (snapshots, driver backups, etc.)
 output/
+Logs/
 
 # Build artifacts de Release.ps1
 dist/
 dist/*.zip
 dist/*.sha256
+
+# Artifacts de trabajo interno (no publicar en repo toolkit)
+.gsd/
+.github/
+*.code-workspace
+GSD-STYLE.md
 # ==========================================
 # GSD Framework / Copilot AI
 # ==========================================
