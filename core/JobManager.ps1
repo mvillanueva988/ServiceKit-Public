@@ -1,10 +1,6 @@
 Set-StrictMode -Version Latest
 
 function Invoke-AsyncToolkitJob {
-    <#
-    .SYNOPSIS
-        Inicia un scriptblock de forma asíncrona mediante Start-Job y retorna el objeto del trabajo.
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -17,40 +13,41 @@ function Invoke-AsyncToolkitJob {
         [object[]] $ArgumentList
     )
 
-    $params = @{ ScriptBlock = $ScriptBlock }
+    $startJobParams = @{ ScriptBlock = $ScriptBlock }
 
     if ($PSBoundParameters.ContainsKey('JobName') -and -not [string]::IsNullOrWhiteSpace($JobName)) {
-        $params['Name'] = $JobName
+        $startJobParams['Name'] = $JobName
     }
 
-    if ($PSBoundParameters.ContainsKey('ArgumentList') -and $ArgumentList.Count -gt 0) {
-        $params['ArgumentList'] = $ArgumentList
+    if ($PSBoundParameters.ContainsKey('ArgumentList') -and $null -ne $ArgumentList -and $ArgumentList.Count -gt 0) {
+        $startJobParams['ArgumentList'] = $ArgumentList
     }
 
-    return Start-Job @params
+    return Start-Job @startJobParams
 }
 
 function Wait-ToolkitJobs {
-    <#
-    .SYNOPSIS
-        Espera a que un array de jobs finalice, mostrando un spinner visual en consola.
-        Retorna la salida agregada de todos los trabajos al completarse.
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [System.Management.Automation.Job[]] $Jobs
+        [System.Management.Automation.Job[]] $Jobs,
+
+        [Parameter()]
+        [int] $TimeoutSeconds = 300
     )
 
-    while ($true) {
-        [System.Management.Automation.Job[]] $runningJobs = @($Jobs | Where-Object { $_.State -eq 'Running' })
-        if ($runningJobs.Count -eq 0) {
-            break
-        }
+    if ($null -eq $Jobs -or $Jobs.Count -eq 0) {
+        return @()
+    }
 
-        # Evitar render dinamico (spinner/progress) porque en algunas consolas VM
-        # produce solapado visual con los menus y tablas.
-        Start-Sleep -Milliseconds 120
+    $null = $Jobs | Wait-Job -Timeout $TimeoutSeconds
+
+    [System.Management.Automation.Job[]] $unfinishedJobs = @($Jobs | Where-Object { $_.State -eq 'Running' -or $_.State -eq 'NotStarted' })
+    if ($unfinishedJobs.Count -gt 0) {
+        foreach ($job in $unfinishedJobs) {
+            Write-Host ("  [!] Trabajo '{0}' excedio el timeout ({1}s) y sera detenido." -f $job.Name, $TimeoutSeconds) -ForegroundColor Yellow
+            Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
     }
 
     $results = foreach ($job in $Jobs) {
@@ -59,10 +56,98 @@ function Wait-ToolkitJobs {
             [string] $errMsg = if ($childErrors.Count -gt 0) { $childErrors[0].Exception.Message } else { 'Error desconocido' }
             Write-Host ("  [!] Trabajo '{0}' fallo: {1}" -f $job.Name, $errMsg) -ForegroundColor Red
             Receive-Job -Job $job -AutoRemoveJob -Wait -ErrorAction SilentlyContinue
-        } else {
+        }
+        elseif ($job.State -eq 'Stopped') {
+            Receive-Job -Job $job -AutoRemoveJob -Wait -ErrorAction SilentlyContinue
+        }
+        else {
             Receive-Job -Job $job -AutoRemoveJob -Wait
         }
     }
 
     return $results
+}
+
+function Invoke-ModuleJob {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $EntryPoint,
+
+        [Parameter(Mandatory)]
+        [scriptblock[]] $Functions,
+
+        [Parameter()]
+        [hashtable] $Params = @{},
+
+        [Parameter()]
+        [string] $JobName = $EntryPoint
+    )
+
+    if ([string]::IsNullOrWhiteSpace($EntryPoint)) {
+        throw 'EntryPoint no puede estar vacio.'
+    }
+
+    if ($null -eq $Functions -or $Functions.Count -eq 0) {
+        throw 'Debe proveer al menos una funcion para serializar en el job.'
+    }
+
+    [string[]] $functionDefinitions = @()
+
+    for ($i = 0; $i -lt $Functions.Count; $i++) {
+        [scriptblock] $fn = $Functions[$i]
+        if ($null -eq $fn) {
+            continue
+        }
+
+        [string] $fnText = $fn.ToString().Trim()
+        if ([string]::IsNullOrWhiteSpace($fnText)) {
+            continue
+        }
+
+        # Si ya viene como definicion completa (function Nombre { ... }), se usa tal cual.
+        if ($fnText -match '^\s*function\s+[A-Za-z_][A-Za-z0-9_-]*\s*\{') {
+            $functionDefinitions += $fnText
+            continue
+        }
+
+        # Para compatibilidad con ${Function:Nombre}, ToString() devuelve el body.
+        # El primer bloque se envuelve con el nombre del EntryPoint.
+        if ($i -eq 0) {
+            $functionDefinitions += ("function {0} {{`n{1}`n}}" -f $EntryPoint, $fnText)
+            continue
+        }
+
+        throw 'Solo la primera funcion puede venir como body suelto. Las funciones auxiliares deben incluir declaracion completa: function Nombre { ... }'
+    }
+
+    if ($functionDefinitions.Count -eq 0) {
+        throw 'No se pudo construir ninguna definicion de funcion valida para el job.'
+    }
+
+    $jobScript = {
+        param(
+            [string[]] $SerializedFunctions,
+            [string] $SerializedEntryPoint,
+            [hashtable] $SerializedParams
+        )
+
+        Set-StrictMode -Version Latest
+
+        foreach ($fnDef in $SerializedFunctions) {
+            Invoke-Expression $fnDef
+        }
+
+        if (-not (Get-Command -Name $SerializedEntryPoint -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw ("EntryPoint '{0}' no existe dentro del job." -f $SerializedEntryPoint)
+        }
+
+        if ($null -eq $SerializedParams) {
+            $SerializedParams = @{}
+        }
+
+        return & $SerializedEntryPoint @SerializedParams
+    }
+
+    return Invoke-AsyncToolkitJob -ScriptBlock $jobScript -JobName $JobName -ArgumentList @($functionDefinitions, $EntryPoint, $Params)
 }
