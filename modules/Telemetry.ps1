@@ -3,11 +3,160 @@
 # Captura la ruta del módulo durante el dot-sourcing para usarla en jobs asincrónicos
 [string] $script:TelemetryModulePath = $PSCommandPath
 
+# ─── Invoke-WithTimeout ───────────────────────────────────────────────────────
+# Helper interno (T-N1): DEBE vivir en Telemetry.ps1 porque el runspace del job
+# de telemetría solo dot-sourcea este archivo. NO mover a ToolkitSupport ni afuera.
+# Para queries no-CIM que no soportan -OperationTimeoutSec nativo.
+function Invoke-WithTimeout {
+    <#
+    .SYNOPSIS
+        Ejecuta un ScriptBlock en un runspace separado con timeout.
+        Retorna el resultado del ScriptBlock, o $Default si vence el timeout o lanza.
+    .NOTES
+        T-N3: el ScriptBlock debe ser autocontenido (solo cmdlets built-in, args
+        explícitos via -ArgumentList). No puede hacer closure sobre el scope padre.
+        T-N4: Stop()+Dispose() garantizan que el snapshot siga; NO garantizan que
+        el hilo WMI nativo muera inmediatamente. Defensa primaria = VM-skip (§3a).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock] $ScriptBlock,
+
+        [Parameter(Mandatory)]
+        [int] $TimeoutSeconds,
+
+        [Parameter()]
+        [object] $Default = $null,
+
+        [Parameter()]
+        [object[]] $ArgumentList = @()
+    )
+
+    $ps = $null
+    try {
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        $null = $ps.AddScript($ScriptBlock.ToString())
+        foreach ($arg in $ArgumentList) {
+            $null = $ps.AddArgument($arg)
+        }
+
+        $async = $ps.BeginInvoke()
+        if ($async.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))) {
+            try {
+                $out = @($ps.EndInvoke($async))
+                if ($out.Count -eq 1) { return $out[0] }
+                return $out
+            } catch {
+                return $Default
+            }
+        } else {
+            # Timeout: detener y retornar Default (T-N4: el hilo nativo puede seguir)
+            try { $ps.Stop() } catch { }
+            return $Default
+        }
+    } catch {
+        return $Default
+    } finally {
+        if ($null -ne $ps) { $ps.Dispose() }
+    }
+}
+
+# ─── Test-IsVirtualMachine ────────────────────────────────────────────────────
+# Helper interno (T-N1): DEBE vivir en Telemetry.ps1. MachineProfile.ps1 tiene
+# su propia detección thin con la misma lista de firmas (DD4 / T-N1 — duplicación
+# intencional y acotada, mismo patrón que DeviceGuard inline).
+function Test-IsVirtualMachine {
+    <#
+    .SYNOPSIS
+        Detecta si el sistema corre en una máquina virtual usando firmas CIM.
+        Retorna PSCustomObject @{ IsVirtual = [bool]; Vendor = [string] }.
+        Defensivo: cualquier error → IsVirtual=$false (asumir físico).
+    .PARAMETER ComputerSystem
+        Win32_ComputerSystem ya consultado (opcional, evita re-query).
+    .PARAMETER Bios
+        Win32_BIOS ya consultado (opcional, evita re-query).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object] $ComputerSystem = $null,
+        [Parameter()] [object] $Bios           = $null
+    )
+
+    try {
+        if ($null -eq $ComputerSystem) {
+            $ComputerSystem = Get-CimInstance -ClassName Win32_ComputerSystem `
+                -OperationTimeoutSec 5 -ErrorAction SilentlyContinue
+        }
+        if ($null -eq $Bios) {
+            $Bios = Get-CimInstance -ClassName Win32_BIOS `
+                -OperationTimeoutSec 5 -ErrorAction SilentlyContinue
+        }
+
+        [string] $csManufacturer = if ($ComputerSystem) { [string]$ComputerSystem.Manufacturer } else { '' }
+        [string] $csModel        = if ($ComputerSystem) { [string]$ComputerSystem.Model }        else { '' }
+        [string] $biosManuf      = if ($Bios)           { [string]$Bios.Manufacturer }           else { '' }
+        [string] $biosSerial     = if ($Bios)           { [string]$Bios.SerialNumber }           else { '' }
+        [string] $biosVersion    = if ($Bios)           { [string]$Bios.Version }                else { '' }
+
+        # ── Tabla de firmas §3a (case-insensitive) ─────────────────────────────
+        # Hyper-V / Windows Sandbox
+        if ($csModel -match '(?i)Virtual Machine' -and $csManufacturer -match '(?i)Microsoft') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Hyper-V' }
+        }
+        if ($csModel -match '(?i)Virtual Machine') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Hyper-V' }
+        }
+
+        # VMware
+        if ($csManufacturer -match '(?i)VMware' -or $csModel -match '(?i)VMware' -or
+            $biosManuf -match '(?i)VMware') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'VMware' }
+        }
+
+        # VirtualBox
+        if ($csManufacturer -match '(?i)innotek' -or $csModel -match '(?i)VirtualBox' -or
+            $biosManuf -match '(?i)VBOX' -or $biosVersion -match '(?i)VBOX') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'VirtualBox' }
+        }
+
+        # KVM/QEMU
+        if ($csManufacturer -match '(?i)QEMU' -or
+            $csModel -match '(?i)Standard PC \(Q35|(?i)KVM' -or
+            $biosManuf -match '(?i)SeaBIOS') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'KVM/QEMU' }
+        }
+
+        # Xen
+        if ($csManufacturer -match '(?i)Xen' -or $csModel -match '(?i)Xen') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Xen' }
+        }
+
+        # Parallels
+        if ($csManufacturer -match '(?i)Parallels' -or $csModel -match '(?i)Parallels') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Parallels' }
+        }
+
+        # Fallback genérico — model matchea \bvirtual\b y ninguna firma anterior
+        if ($csModel -match '(?i)\bvirtual\b') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Virtual' }
+        }
+
+        return [PSCustomObject]@{ IsVirtual = $false; Vendor = '' }
+
+    } catch {
+        # Defensivo: asumir físico ante incertidumbre
+        return [PSCustomObject]@{ IsVirtual = $false; Vendor = '' }
+    }
+}
+
 # ─── Get-SystemSnapshot ───────────────────────────────────────────────────────
 function Get-SystemSnapshot {
     <#
     .SYNOPSIS
         Recopila el estado del sistema vía CIM/WMI y retorna un PSCustomObject estructurado.
+        Garantía de partial-snapshot (§3c): SIEMPRE retorna aunque alguna query falle/timeout/skip.
+        Campos nuevos: IsVirtualMachine, VmVendor, QueryTimings (§5).
     #>
     [CmdletBinding()]
     param(
@@ -16,60 +165,109 @@ function Get-SystemSnapshot {
         [string] $Phase
     )
 
-    # CPU
-    $cpuRaw = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
-    $cpu = if ($cpuRaw) {
-        [PSCustomObject]@{
-            Name    = [string] $cpuRaw.Name.Trim()
-            Cores   = [int]    $cpuRaw.NumberOfCores
-            Threads = [int]    $cpuRaw.NumberOfLogicalProcessors
-        }
-    } else {
-        [PSCustomObject]@{ Name = 'Unknown'; Cores = 0; Threads = 0 }
-    }
+    # ── QueryTimings: hashtable para registrar ms / 'timeout' / 'skipped' por query ──
+    [hashtable] $qt = @{}
+    [System.Diagnostics.Stopwatch] $sw = [System.Diagnostics.Stopwatch]::new()
 
-    # GPU — detecta dedicada vs integrada desde el nombre
-    $gpus = @(
-        Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object {
-            [PSCustomObject]@{
-                Name          = [string] $_.Name
-                Type          = [string] $(if ($_.Name -match 'NVIDIA|GeForce|RTX|GTX|Radeon RX|Radeon VII|Arc') { 'Dedicated' } else { 'Integrated' })
-                DriverVersion = [string] $_.DriverVersion
+    # ── VM detection (usa Win32_ComputerSystem que consultamos de todos modos) ──
+    # T-N1: Test-IsVirtualMachine esta definida en este mismo archivo.
+    $csRaw = $null
+    try {
+        $sw.Restart()
+        $csRaw = Get-CimInstance -ClassName Win32_ComputerSystem -OperationTimeoutSec 2 -ErrorAction SilentlyContinue
+        $qt['Win32_ComputerSystem'] = [int] $sw.ElapsedMilliseconds
+    } catch { $qt['Win32_ComputerSystem'] = 'timeout' }
+
+    $vmInfo = Test-IsVirtualMachine -ComputerSystem $csRaw
+    [bool]   $isVM    = $vmInfo.IsVirtual
+    [string] $vmVendor = $vmInfo.Vendor
+
+    # ── CPU (keep — CIM rapido) ──────────────────────────────────────────────
+    $cpu = [PSCustomObject]@{ Name = 'Unknown'; Cores = 0; Threads = 0 }
+    try {
+        $sw.Restart()
+        $cpuRaw = Get-CimInstance -ClassName Win32_Processor -OperationTimeoutSec 2 -ErrorAction Stop | Select-Object -First 1
+        $qt['Win32_Processor'] = [int] $sw.ElapsedMilliseconds
+        if ($cpuRaw) {
+            $cpu = [PSCustomObject]@{
+                Name    = [string] $cpuRaw.Name.Trim()
+                Cores   = [int]    $cpuRaw.NumberOfCores
+                Threads = [int]    $cpuRaw.NumberOfLogicalProcessors
             }
         }
-    )
+    } catch { $qt['Win32_Processor'] = 'timeout' }
 
-    # RAM total
-    $csRaw = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
-    $ramTotalGb = if ($csRaw) { [math]::Round($csRaw.TotalPhysicalMemory / 1GB, 2) } else { [double]0 }
-
-    # RAM slots — excluye slots vacios
-    $ramSlots = @(
-        Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Capacity -gt 0 } |
-            ForEach-Object {
+    # ── GPU (keep — CIM rapido) ───────────────────────────────────────────────
+    $gpus = @()
+    try {
+        $sw.Restart()
+        $gpus = @(
+            Get-CimInstance -ClassName Win32_VideoController -OperationTimeoutSec 2 -ErrorAction Stop | ForEach-Object {
                 [PSCustomObject]@{
-                    Slot         = [string] $_.DeviceLocator
-                    CapacityGb   = [double] [math]::Round($_.Capacity / 1GB, 2)
-                    SpeedMhz     = [int]    $_.Speed
-                    Manufacturer = [string] $_.Manufacturer
+                    Name          = [string] $_.Name
+                    Type          = [string] $(if ($_.Name -match 'NVIDIA|GeForce|RTX|GTX|Radeon RX|Radeon VII|Arc') { 'Dedicated' } else { 'Integrated' })
+                    DriverVersion = [string] $_.DriverVersion
                 }
             }
-    )
+        )
+        $qt['Win32_VideoController'] = [int] $sw.ElapsedMilliseconds
+    } catch { $qt['Win32_VideoController'] = 'timeout' }
 
-    # Discos físicos + contadores SMART
+    # ── RAM total (reusar $csRaw ya consultado) ───────────────────────────────
+    $ramTotalGb = if ($csRaw) { [math]::Round($csRaw.TotalPhysicalMemory / 1GB, 2) } else { [double]0 }
+
+    # ── RAM slots (keep — CIM rapido) ─────────────────────────────────────────
+    $ramSlots = @()
+    try {
+        $sw.Restart()
+        $ramSlots = @(
+            Get-CimInstance -ClassName Win32_PhysicalMemory -OperationTimeoutSec 2 -ErrorAction Stop |
+                Where-Object { $_.Capacity -gt 0 } |
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        Slot         = [string] $_.DeviceLocator
+                        CapacityGb   = [double] [math]::Round($_.Capacity / 1GB, 2)
+                        SpeedMhz     = [int]    $_.Speed
+                        Manufacturer = [string] $_.Manufacturer
+                    }
+                }
+        )
+        $qt['Win32_PhysicalMemory'] = [int] $sw.ElapsedMilliseconds
+    } catch { $qt['Win32_PhysicalMemory'] = 'timeout' }
+
+    # ── Discos físicos (keep — Get-PhysicalDisk anda en VM) ───────────────────
+    # SMART (Get-StorageReliabilityCounter) skip en VM (§3d): cuelga en disco virtual.
     $diskList = [System.Collections.Generic.List[PSCustomObject]]::new()
-    foreach ($physDisk in @(Get-PhysicalDisk -ErrorAction SilentlyContinue)) {
-        $rel      = $physDisk | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
+    $sw.Restart()
+    $physDisks = Invoke-WithTimeout -TimeoutSeconds 10 -Default @() -ScriptBlock {
+        @(Get-PhysicalDisk -ErrorAction SilentlyContinue)
+    }
+    $qt['Get-PhysicalDisk'] = [int] $sw.ElapsedMilliseconds
+    foreach ($physDisk in @($physDisks)) {
         $tempC    = $null
         $wearPct  = $null
         $readErr  = $null
         $writeErr = $null
-        if ($rel) {
-            if ([int]$rel.Temperature -gt 0) { $tempC   = [int]$rel.Temperature }
-            if ($null -ne $rel.Wear)          { $wearPct = [int]$rel.Wear }
-            $readErr  = $rel.ReadErrorsTotal
-            $writeErr = $rel.WriteErrorsTotal
+        if (-not $isVM) {
+            # SMART solo en HW físico
+            $sw.Restart()
+            $rel = Invoke-WithTimeout -TimeoutSeconds 8 -Default $null -ScriptBlock {
+                param($d)
+                $d | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
+            } -ArgumentList @($physDisk)
+            $qt['Get-StorageReliabilityCounter'] = [int] $sw.ElapsedMilliseconds
+            if ($rel) {
+                if ($null -ne $rel.PSObject.Properties['Temperature'] -and [int]$rel.Temperature -gt 0) {
+                    $tempC = [int]$rel.Temperature
+                }
+                if ($null -ne $rel.PSObject.Properties['Wear'] -and $null -ne $rel.Wear) {
+                    $wearPct = [int]$rel.Wear
+                }
+                $readErr  = if ($null -ne $rel.PSObject.Properties['ReadErrorsTotal'])  { $rel.ReadErrorsTotal  } else { $null }
+                $writeErr = if ($null -ne $rel.PSObject.Properties['WriteErrorsTotal']) { $rel.WriteErrorsTotal } else { $null }
+            }
+        } else {
+            $qt['Get-StorageReliabilityCounter'] = 'skipped'
         }
         $diskList.Add([PSCustomObject]@{
             Name         = [string] $physDisk.FriendlyName
@@ -84,100 +282,133 @@ function Get-SystemSnapshot {
     }
     [PSCustomObject[]] $disks = $diskList.ToArray()
 
-    # Volumenes — solo particiones fijas con letra, excluye EFI
-    $volumes = @(
-        Get-Volume |
-            Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.FileSystem -ne 'FAT32' } |
-            ForEach-Object {
-                [double] $sizeGb = [math]::Round($_.Size / 1GB, 2)
-                [double] $freeGb = [math]::Round($_.SizeRemaining / 1GB, 2)
-                [PSCustomObject]@{
-                    Letter  = [string] $_.DriveLetter
-                    Label   = [string] $_.FileSystemLabel
-                    SizeGb  = $sizeGb
-                    FreeGb  = $freeGb
-                    UsedPct = if ($sizeGb -gt 0) {
-                        [double] [math]::Round((($sizeGb - $freeGb) / $sizeGb) * 100, 1)
-                    } else { [double]0 }
+    # ── Volumenes (keep — no se cuelga, base del Compare) ────────────────────
+    $volumes = @()
+    $sw.Restart()
+    $volumes = Invoke-WithTimeout -TimeoutSeconds 5 -Default @() -ScriptBlock {
+        @(
+            Get-Volume |
+                Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.FileSystem -ne 'FAT32' } |
+                ForEach-Object {
+                    [double] $sizeGb = [math]::Round($_.Size / 1GB, 2)
+                    [double] $freeGb = [math]::Round($_.SizeRemaining / 1GB, 2)
+                    [PSCustomObject]@{
+                        Letter  = [string] $_.DriveLetter
+                        Label   = [string] $_.FileSystemLabel
+                        SizeGb  = $sizeGb
+                        FreeGb  = $freeGb
+                        UsedPct = if ($sizeGb -gt 0) {
+                            [double] [math]::Round((($sizeGb - $freeGb) / $sizeGb) * 100, 1)
+                        } else { [double]0 }
+                    }
                 }
-            }
-    )
-
-    # Page File — CurrentUsage y PeakUsage ya están en MB
-    [object] $pfRaw = Get-CimInstance -ClassName Win32_PageFileUsage -ErrorAction SilentlyContinue
-    [PSCustomObject] $pageFile = [PSCustomObject]@{
-        CurrentUsageMb = if ($pfRaw) { [int]$pfRaw.CurrentUsage } else { $null }
-        PeakUsageMb    = if ($pfRaw) { [int]$pfRaw.PeakUsage }    else { $null }
+        )
     }
+    $qt['Get-Volume'] = [int] $sw.ElapsedMilliseconds
 
-    # Servicios en ejecución + detección de bloat
+    # ── Page File (keep — CIM rapido) ─────────────────────────────────────────
+    [PSCustomObject] $pageFile = [PSCustomObject]@{ CurrentUsageMb = $null; PeakUsageMb = $null }
+    try {
+        $sw.Restart()
+        [object] $pfRaw = Get-CimInstance -ClassName Win32_PageFileUsage -OperationTimeoutSec 2 -ErrorAction Stop
+        $qt['Win32_PageFileUsage'] = [int] $sw.ElapsedMilliseconds
+        $pageFile = [PSCustomObject]@{
+            CurrentUsageMb = if ($pfRaw) { [int]$pfRaw.CurrentUsage } else { $null }
+            PeakUsageMb    = if ($pfRaw) { [int]$pfRaw.PeakUsage }    else { $null }
+        }
+    } catch { $qt['Win32_PageFileUsage'] = 'timeout' }
+
+    # ── Servicios (keep — base del Compare) ───────────────────────────────────
     [string[]] $bloatNames = @(
         'XblAuthManager', 'XblGameSave', 'XboxNetApiSvc', 'XboxGipSvc',
         'Spooler', 'PrintNotify', 'Fax', 'WMPNetworkSvc',
         'RemoteRegistry', 'RemoteAccess', 'DiagTrack', 'dmwappushservice'
     )
-    [object[]] $runningSvcs  = @(Get-Service | Where-Object { $_.Status -eq 'Running' })
-    [string[]] $bloatRunning = @(
-        $runningSvcs | Where-Object { $_.Name -in $bloatNames } | Select-Object -ExpandProperty Name
-    )
-    [PSCustomObject] $services = [PSCustomObject]@{
-        RunningCount = [int]      $runningSvcs.Count
-        BloatRunning = [string[]] $bloatRunning
-    }
+    [PSCustomObject] $services = [PSCustomObject]@{ RunningCount = 0; BloatRunning = [string[]]@() }
+    $sw.Restart()
+    $svcResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+        param([string[]] $bNames)
+        $running = @(Get-Service | Where-Object { $_.Status -eq 'Running' })
+        $bloat   = @($running | Where-Object { $_.Name -in $bNames } | Select-Object -ExpandProperty Name)
+        [PSCustomObject]@{ RunningCount = [int]$running.Count; BloatRunning = [string[]]$bloat }
+    } -ArgumentList @(,$bloatNames)
+    $qt['Get-Service'] = [int] $sw.ElapsedMilliseconds
+    if ($null -ne $svcResult) { $services = $svcResult }
 
-    # Startup — solo registry y carpetas (sin scheduled tasks para velocidad)
+    # ── Startup (keep — registry, rapido) ─────────────────────────────────────
     [int] $startupCount = 0
-    foreach ($key in @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
-        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
-    )) {
-        if (Test-Path $key) {
-            $startupCount += @(
-                (Get-ItemProperty $key).PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' }
-            ).Count
+    try {
+        foreach ($key in @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+        )) {
+            if (Test-Path $key) {
+                $startupCount += @(
+                    (Get-ItemProperty $key).PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' }
+                ).Count
+            }
         }
-    }
-    foreach ($folder in @(
-        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup",
-        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
-    )) {
-        if (Test-Path $folder) { $startupCount += @(Get-ChildItem $folder -File -ErrorAction SilentlyContinue).Count }
-    }
+        foreach ($folder in @(
+            "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup",
+            "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
+        )) {
+            if (Test-Path $folder) { $startupCount += @(Get-ChildItem $folder -File -ErrorAction SilentlyContinue).Count }
+        }
+    } catch { }
 
-    # Top 5 procesos por WorkingSet
-    [PSCustomObject[]] $topProcs = @(
-        Get-Process |
-            Sort-Object WorkingSet64 -Descending |
-            Select-Object -First 5 |
-            ForEach-Object {
-                [PSCustomObject]@{
-                    Name         = [string] $_.Name
-                    WorkingSetMb = [double] [math]::Round($_.WorkingSet64 / 1MB, 1)
+    # ── Top procesos (keep) ───────────────────────────────────────────────────
+    [PSCustomObject[]] $topProcs = @()
+    $sw.Restart()
+    $procsResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default @() -ScriptBlock {
+        @(
+            Get-Process |
+                Sort-Object WorkingSet64 -Descending |
+                Select-Object -First 5 |
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        Name         = [string] $_.Name
+                        WorkingSetMb = [double] [math]::Round($_.WorkingSet64 / 1MB, 1)
+                    }
+                }
+        )
+    }
+    $qt['Get-Process'] = [int] $sw.ElapsedMilliseconds
+    $topProcs = @($procsResult)
+
+    # ── Chassis / Batería ─────────────────────────────────────────────────────
+    # Chassis: keep (CIM rapido). Batería: skip en VM (§3d).
+    [PSCustomObject] $battery = $null
+    $encRaw = $null
+    try {
+        $sw.Restart()
+        $encRaw = Get-CimInstance -ClassName Win32_SystemEnclosure -OperationTimeoutSec 2 -ErrorAction Stop
+        $qt['Win32_SystemEnclosure'] = [int] $sw.ElapsedMilliseconds
+    } catch { $qt['Win32_SystemEnclosure'] = 'timeout' }
+
+    [int] $chassisType = if ($encRaw -and $encRaw.ChassisTypes.Count -gt 0) { [int]$encRaw.ChassisTypes[0] } else { 0 }
+    if (-not $isVM -and $chassisType -in @(8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32)) {
+        try {
+            $sw.Restart()
+            [object] $bat = Get-CimInstance -ClassName Win32_Battery -OperationTimeoutSec 2 -ErrorAction Stop
+            $qt['Win32_Battery'] = [int] $sw.ElapsedMilliseconds
+            if ($bat) {
+                $battery = [PSCustomObject]@{
+                    ChargePercent = [int] $bat.EstimatedChargeRemaining
+                    HealthPercent = if ($bat.DesignCapacity -gt 0) {
+                        [double] [math]::Round(($bat.FullChargeCapacity / $bat.DesignCapacity) * 100, 1)
+                    } else { $null }
+                    Status        = [string] $(switch ($bat.BatteryStatus) {
+                        1 { 'Discharging' }  2 { 'AC' }  3 { 'FullyCharged' }
+                        4 { 'Low' }          5 { 'Critical' }  default { 'Unknown' }
+                    })
                 }
             }
-    )
-
-    # Batería — solo en laptops (chassis types portátiles)
-    [PSCustomObject] $battery = $null
-    $encRaw = Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction SilentlyContinue
-    [int] $chassisType = if ($encRaw -and $encRaw.ChassisTypes.Count -gt 0) { [int]$encRaw.ChassisTypes[0] } else { 0 }
-    if ($chassisType -in @(8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32)) {
-        [object] $bat = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue
-        if ($bat) {
-            $battery = [PSCustomObject]@{
-                ChargePercent = [int] $bat.EstimatedChargeRemaining
-                HealthPercent = if ($bat.DesignCapacity -gt 0) {
-                    [double] [math]::Round(($bat.FullChargeCapacity / $bat.DesignCapacity) * 100, 1)
-                } else { $null }
-                Status        = [string] $(switch ($bat.BatteryStatus) {
-                    1 { 'Discharging' }  2 { 'AC' }  3 { 'FullyCharged' }
-                    4 { 'Low' }          5 { 'Critical' }  default { 'Unknown' }
-                })
-            }
-        }
+        } catch { $qt['Win32_Battery'] = 'timeout' }
+    } else {
+        if ($isVM) { $qt['Win32_Battery'] = 'skipped' }
     }
 
-    # Antivirus — SecurityCenter2 (terceros) + Windows Defender.
+    # ── Antivirus — SecurityCenter2 (skip en VM) + Defender (skip en VM) ─────
     # IsActive es lo que cuenta para detectar conflictos: cuando hay un AV
     # de terceros corriendo, Defender entra automaticamente en Passive Mode
     # y sigue reportando AntivirusEnabled=$true pero NO escanea activamente.
@@ -192,81 +423,118 @@ function Get-SystemSnapshot {
     # (AMRunningMode) y debe ser la fuente unica de verdad para Defender.
     [System.Collections.Generic.List[PSCustomObject]] $avList =
         [System.Collections.Generic.List[PSCustomObject]]::new()
-    try {
-        foreach ($av in @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop)) {
-            [string] $displayName = [string] $av.displayName
-            [string] $exePath = ''
-            if ($null -ne $av.PSObject.Properties['pathToSignedReportingExe']) {
-                $exePath = [string] $av.pathToSignedReportingExe
-            }
-            # Skip Defender — sera agregado abajo con info detallada.
-            if ($displayName -match '(?i)Windows\s*Defender|Microsoft\s*Defender' -or
-                $exePath -match '(?i)\\Windows Defender\\|\\MsMpeng\.exe') {
-                continue
-            }
+    if (-not $isVM) {
+        try {
+            $sw.Restart()
+            foreach ($av in @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiVirusProduct `
+                              -OperationTimeoutSec 5 -ErrorAction Stop)) {
+                [string] $displayName = [string] $av.displayName
+                [string] $exePath = ''
+                if ($null -ne $av.PSObject.Properties['pathToSignedReportingExe']) {
+                    $exePath = [string] $av.pathToSignedReportingExe
+                }
+                # Skip Defender — sera agregado abajo con info detallada.
+                if ($displayName -match '(?i)Windows\s*Defender|Microsoft\s*Defender' -or
+                    $exePath -match '(?i)\\Windows Defender\\|\\MsMpeng\.exe') {
+                    continue
+                }
 
-            # Decode productState para AVs de terceros:
-            # bit 0x1000 del DWORD = "product enabled". Mas confiable que el
-            # substring approach previo, que asumia un nibble especifico.
-            [bool] $enabled = (([int64] $av.productState -band 0x1000) -ne 0)
+                # Decode productState para AVs de terceros:
+                # bit 0x1000 del DWORD = "product enabled". Mas confiable que el
+                # substring approach previo, que asumia un nibble especifico.
+                [bool] $enabled = (([int64] $av.productState -band 0x1000) -ne 0)
 
+                $avList.Add([PSCustomObject]@{
+                    Name           = $displayName
+                    Enabled        = $enabled
+                    IsActive       = $enabled
+                    IsNative       = $false
+                    AMRunningMode  = $null
+                })
+            }
+            $qt['root/SecurityCenter2'] = [int] $sw.ElapsedMilliseconds
+        } catch { $qt['root/SecurityCenter2'] = 'timeout' }
+
+        # Defender
+        $sw.Restart()
+        $defResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+            Get-MpComputerStatus -ErrorAction Stop
+        }
+        $qt['Get-MpComputerStatus'] = [int] $sw.ElapsedMilliseconds
+        if ($null -ne $defResult) {
+            # AMRunningMode: 'Normal' | 'Passive Mode' | 'SxS Passive Mode' |
+            # 'EDR Block Mode'. Solo 'Normal' significa que Defender esta
+            # escaneando en tiempo real; los modos pasivos son explicitos
+            # "otro AV se hizo cargo".
+            [string] $runningMode = ''
+            if ($null -ne $defResult.PSObject.Properties['AMRunningMode']) {
+                $runningMode = [string] $defResult.AMRunningMode
+            }
+            [bool] $defEnabled = [bool] $defResult.AntivirusEnabled
+            [bool] $defActive  = $defEnabled -and ($runningMode -eq 'Normal' -or [string]::IsNullOrEmpty($runningMode))
             $avList.Add([PSCustomObject]@{
-                Name           = $displayName
-                Enabled        = $enabled
-                IsActive       = $enabled
-                IsNative       = $false
-                AMRunningMode  = $null
+                Name           = 'Windows Defender'
+                Enabled        = $defEnabled
+                IsActive       = $defActive
+                IsNative       = [bool] $true
+                AMRunningMode  = $runningMode
             })
         }
-    } catch { }
-    try {
-        [object] $def = Get-MpComputerStatus -ErrorAction Stop
-        # AMRunningMode: 'Normal' | 'Passive Mode' | 'SxS Passive Mode' |
-        # 'EDR Block Mode'. Solo 'Normal' significa que Defender esta
-        # escaneando en tiempo real; los modos pasivos son explicitos
-        # "otro AV se hizo cargo".
-        [string] $runningMode = ''
-        if ($null -ne $def.PSObject.Properties['AMRunningMode']) {
-            $runningMode = [string] $def.AMRunningMode
-        }
-        [bool] $defEnabled = [bool] $def.AntivirusEnabled
-        [bool] $defActive  = $defEnabled -and ($runningMode -eq 'Normal' -or [string]::IsNullOrEmpty($runningMode))
-        $avList.Add([PSCustomObject]@{
-            Name           = 'Windows Defender'
-            Enabled        = $defEnabled
-            IsActive       = $defActive
-            IsNative       = [bool] $true
-            AMRunningMode  = $runningMode
-        })
-    } catch { }
+    } else {
+        $qt['root/SecurityCenter2']  = 'skipped'
+        $qt['Get-MpComputerStatus']  = 'skipped'
+    }
 
-    # Temperatura CPU — best-effort via ACPI (décimas de Kelvin → Celsius)
+    # ── Temperatura CPU + Thermal zones — DEDUPE: 1 sola query, derivar ambos campos ──
+    # Skip en VM (§3d): sin ACPI thermal en VM.
     [object] $cpuTempC = $null
+    [PSCustomObject[]] $thermalZones = @()
+    if (-not $isVM) {
+        try {
+            $sw.Restart()
+            [object[]] $zones = @(
+                Get-CimInstance -Namespace 'root/wmi' -ClassName MSAcpi_ThermalZoneTemperature `
+                    -OperationTimeoutSec 5 -ErrorAction Stop
+            )
+            $qt['MSAcpi_ThermalZoneTemperature'] = [int] $sw.ElapsedMilliseconds
+            if ($zones.Count -gt 0) {
+                $cpuTempC = [math]::Round(($zones[0].CurrentTemperature - 2732) / 10.0, 1)
+                $thermalZones = @(
+                    $zones | ForEach-Object {
+                        [PSCustomObject]@{
+                            Zone  = [string] $_.InstanceName
+                            TempC = [double] [math]::Round(($_.CurrentTemperature - 2732) / 10.0, 1)
+                        }
+                    }
+                )
+            }
+        } catch { $qt['MSAcpi_ThermalZoneTemperature'] = 'timeout' }
+    } else {
+        $qt['MSAcpi_ThermalZoneTemperature'] = 'skipped'
+    }
+
+    # ── Uptime (keep — CIM rapido) ─────────────────────────────────────────────
+    [double] $uptimeHours = 0
     try {
-        [object[]] $zones = @(
-            Get-CimInstance -Namespace 'root/wmi' -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop
-        )
-        if ($zones.Count -gt 0) {
-            $cpuTempC = [math]::Round(($zones[0].CurrentTemperature - 2732) / 10.0, 1)
-        }
-    } catch { }
+        $sw.Restart()
+        [object] $os = Get-CimInstance -ClassName Win32_OperatingSystem -OperationTimeoutSec 2 -ErrorAction Stop
+        $qt['Win32_OperatingSystem'] = [int] $sw.ElapsedMilliseconds
+        if ($os) { $uptimeHours = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 1) }
+    } catch { $qt['Win32_OperatingSystem'] = 'timeout' }
 
-    # Uptime
-    [object] $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
-    [double] $uptimeHours = if ($os) { [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 1) } else { [double]0 }
-
-    # Multiple AV problem real = mas de un motor escaneando ACTIVAMENTE.
-    # Defender en Passive Mode no cuenta: es el comportamiento esperado
-    # cuando hay un AV de terceros instalado y no genera conflicto.
+    # ── Multiple AV ───────────────────────────────────────────────────────────
     [bool] $multipleAv = (@($avList | Where-Object { $_.IsActive }).Count -gt 1)
 
     # ── Device Guard / VBS / HVCI status (inline, sin dependency externa) ─────
     # Se inlinea aca en lugar de llamar a Get-CoreIsolationStatus porque
     # Start-TelemetryJob solo dot-sourcea Telemetry.ps1 en el job runspace.
+    # keep en VM (DeviceGuard puede estar configurado incluso en VM).
     [PSCustomObject] $deviceGuard = $null
     try {
+        $sw.Restart()
         $dg = Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' `
-                              -ClassName Win32_DeviceGuard -ErrorAction Stop
+                              -ClassName Win32_DeviceGuard -OperationTimeoutSec 2 -ErrorAction Stop
+        $qt['Win32_DeviceGuard'] = [int] $sw.ElapsedMilliseconds
         if ($null -ne $dg) {
             [int] $vbsStatus = 0
             if ($null -ne $dg.PSObject.Properties['VirtualizationBasedSecurityStatus']) {
@@ -277,79 +545,84 @@ function Get-SystemSnapshot {
                 $svcRunning = @($dg.SecurityServicesRunning | ForEach-Object { [int] $_ })
             }
             $deviceGuard = [PSCustomObject]@{
-                VbsConfigured     = ($vbsStatus -ge 1)
-                VbsRunning        = ($vbsStatus -eq 2)
-                HvciRunning       = ($svcRunning -contains 2)
+                VbsConfigured          = ($vbsStatus -ge 1)
+                VbsRunning             = ($vbsStatus -eq 2)
+                HvciRunning            = ($svcRunning -contains 2)
                 CredentialGuardRunning = ($svcRunning -contains 1)
             }
         }
-    } catch { }
+    } catch { $qt['Win32_DeviceGuard'] = 'timeout' }
 
-    # ── USB + HID devices (categoria, no enumeracion completa) ────────────────
+    # ── USB + HID devices (skip en VM — §3d) ─────────────────────────────────
     [PSCustomObject[]] $usbDevices = @()
     [PSCustomObject[]] $hidDevices = @()
-    try {
-        $usbDevices = @(
-            Get-PnpDevice -Class USB -Status OK -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                    [PSCustomObject]@{
-                        FriendlyName = [string] $_.FriendlyName
-                        InstanceId   = [string] $_.InstanceId
+    if (-not $isVM) {
+        $sw.Restart()
+        $usbResult = Invoke-WithTimeout -TimeoutSeconds 6 -Default @() -ScriptBlock {
+            @(
+                Get-PnpDevice -Class USB -Status OK -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [PSCustomObject]@{
+                            FriendlyName = [string] $_.FriendlyName
+                            InstanceId   = [string] $_.InstanceId
+                        }
                     }
-                }
-        )
-    } catch { }
-    try {
-        $hidDevices = @(
-            Get-PnpDevice -Class HIDClass -Status OK -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                    [PSCustomObject]@{
-                        FriendlyName = [string] $_.FriendlyName
-                        Manufacturer = [string] $_.Manufacturer
-                    }
-                }
-        )
-    } catch { }
+            )
+        }
+        $qt['Get-PnpDevice-USB'] = [int] $sw.ElapsedMilliseconds
+        $usbDevices = @($usbResult)
 
-    # ── DNS servers IPv4 por adapter activo ───────────────────────────────────
+        $sw.Restart()
+        $hidResult = Invoke-WithTimeout -TimeoutSeconds 6 -Default @() -ScriptBlock {
+            @(
+                Get-PnpDevice -Class HIDClass -Status OK -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [PSCustomObject]@{
+                            FriendlyName = [string] $_.FriendlyName
+                            Manufacturer = [string] $_.Manufacturer
+                        }
+                    }
+            )
+        }
+        $qt['Get-PnpDevice-HID'] = [int] $sw.ElapsedMilliseconds
+        $hidDevices = @($hidResult)
+    } else {
+        $qt['Get-PnpDevice-USB'] = 'skipped'
+        $qt['Get-PnpDevice-HID'] = 'skipped'
+    }
+
+    # ── DNS servers IPv4 por adapter activo (keep) ────────────────────────────
     [hashtable] $dnsServers = @{}
-    try {
+    $sw.Restart()
+    $dnsResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+        $h = @{}
         foreach ($entry in @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
                               Where-Object { $_.AddressFamily -eq 2 -and $_.ServerAddresses.Count -gt 0 })) {
-            $dnsServers[$entry.InterfaceAlias] = [string[]] @($entry.ServerAddresses)
+            $h[$entry.InterfaceAlias] = [string[]] @($entry.ServerAddresses)
         }
-    } catch { }
+        $h
+    }
+    $qt['Get-DnsClientServerAddress'] = [int] $sw.ElapsedMilliseconds
+    if ($null -ne $dnsResult) { $dnsServers = $dnsResult }
 
-    # ── Thermal zones detalladas (no solo CPU temp) ──────────────────────────
-    [PSCustomObject[]] $thermalZones = @()
-    try {
-        $thermalZones = @(
-            Get-CimInstance -Namespace 'root/wmi' -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop |
-                ForEach-Object {
-                    [PSCustomObject]@{
-                        Zone  = [string] $_.InstanceName
-                        TempC = [double] [math]::Round(($_.CurrentTemperature - 2732) / 10.0, 1)
-                    }
-                }
-        )
-    } catch { }
-
-    # ── Programas instalados — filtrados por vendors relevantes ───────────────
+    # ── Programas instalados (keep) ───────────────────────────────────────────
     # Filter regex matches OEM utilities, drivers, dev tools, gaming clients,
     # browsers, hardware monitors — todo lo que un tecnico de service quiere ver.
     [string] $vendorFilter = 'AMD|NVIDIA|Intel|Steam|Discord|Chrome|Edge|Firefox|HP|Lenovo|Dell|Asus|MSI|Logitech|Razer|Realtek|Visual Studio|Office|WhatsApp|OBS|7-Zip|WinRAR|Notepad\+\+|Git for|Docker|Python|Node|VLC|Spotify|Adobe'
     [PSCustomObject[]] $installedRelevant = @()
-    try {
-        [string[]] $uninstallHives = @(
+    $sw.Restart()
+    $installedResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default @() -ScriptBlock {
+        param([string] $vFilter)
+        [string[]] $hives = @(
             'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
         )
-        $installedRelevant = @(
-            Get-ItemProperty $uninstallHives -ErrorAction SilentlyContinue |
+        @(
+            Get-ItemProperty $hives -ErrorAction SilentlyContinue |
                 Where-Object {
                     $null -ne $_.PSObject.Properties['DisplayName'] -and
                     -not [string]::IsNullOrWhiteSpace($_.DisplayName) -and
-                    $_.DisplayName -match $vendorFilter
+                    $_.DisplayName -match $vFilter
                 } |
                 ForEach-Object {
                     [PSCustomObject]@{
@@ -360,52 +633,58 @@ function Get-SystemSnapshot {
                 } |
                 Sort-Object Name -Unique
         )
-    } catch { }
+    } -ArgumentList @($vendorFilter)
+    $qt['InstalledPrograms'] = [int] $sw.ElapsedMilliseconds
+    $installedRelevant = @($installedResult)
 
-    # ── Steam / CS2 detection + cfg parsing ───────────────────────────────────
+    # ── Steam / CS2 detection + cfg parsing (keep — condicional) ─────────────
     [PSCustomObject] $steam = $null
-    try {
-        $steamReg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam' -ErrorAction SilentlyContinue
-        if ($null -ne $steamReg -and $null -ne $steamReg.PSObject.Properties['InstallPath']) {
-            [string] $steamPath = [string] $steamReg.InstallPath
-            [string] $cs2Path = Join-Path $steamPath 'steamapps\common\Counter-Strike Global Offensive'
-            [bool] $cs2Installed = Test-Path -Path $cs2Path -PathType Container
+    $sw.Restart()
+    $steamResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+        try {
+            $reg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam' -ErrorAction SilentlyContinue
+            if ($null -eq $reg -or $null -eq $reg.PSObject.Properties['InstallPath']) { return $null }
+            [string] $sp = [string] $reg.InstallPath
+            [string] $cs2p = Join-Path $sp 'steamapps\common\Counter-Strike Global Offensive'
+            [bool] $cs2i = Test-Path -Path $cs2p -PathType Container
 
-            [string[]] $autoexecLines = @()
-            if ($cs2Installed) {
-                [string] $autoexecPath = Join-Path $cs2Path 'game\csgo\cfg\autoexec.cfg'
-                if (Test-Path $autoexecPath) {
-                    $autoexecLines = @(Get-Content -LiteralPath $autoexecPath -ErrorAction SilentlyContinue)
+            [string[]] $autoLines = @()
+            if ($cs2i) {
+                [string] $aePath = Join-Path $cs2p 'game\csgo\cfg\autoexec.cfg'
+                if (Test-Path $aePath) {
+                    $autoLines = @(Get-Content -LiteralPath $aePath -ErrorAction SilentlyContinue)
                 }
             }
 
-            [string] $launchOptions = ''
-            [string] $userdataDir = Join-Path $steamPath 'userdata'
-            if (Test-Path $userdataDir) {
-                foreach ($userDir in @(Get-ChildItem -Path $userdataDir -Directory -ErrorAction SilentlyContinue)) {
-                    [string] $localCfg = Join-Path $userDir.FullName 'config\localconfig.vdf'
-                    if (Test-Path $localCfg) {
-                        [string] $raw = Get-Content -LiteralPath $localCfg -Raw -ErrorAction SilentlyContinue
+            [string] $launchOpts = ''
+            [string] $udDir = Join-Path $sp 'userdata'
+            if (Test-Path $udDir) {
+                foreach ($uDir in @(Get-ChildItem -Path $udDir -Directory -ErrorAction SilentlyContinue)) {
+                    [string] $lcfg = Join-Path $uDir.FullName 'config\localconfig.vdf'
+                    if (Test-Path $lcfg) {
+                        [string] $raw = Get-Content -LiteralPath $lcfg -Raw -ErrorAction SilentlyContinue
                         if ($raw -match '"730"\s*\{[^}]*"LaunchOptions"\s*"([^"]*)"') {
-                            $launchOptions = $Matches[1]
+                            $launchOpts = $Matches[1]
                             break
                         }
                     }
                 }
             }
 
-            $steam = [PSCustomObject]@{
-                Installed       = $true
-                Path            = $steamPath
-                Cs2Installed    = $cs2Installed
-                Cs2Path         = if ($cs2Installed) { $cs2Path } else { '' }
-                AutoexecLines   = $autoexecLines
-                Cs2LaunchOptions = $launchOptions
+            [PSCustomObject]@{
+                Installed        = $true
+                Path             = $sp
+                Cs2Installed     = $cs2i
+                Cs2Path          = if ($cs2i) { $cs2p } else { '' }
+                AutoexecLines    = $autoLines
+                Cs2LaunchOptions = $launchOpts
             }
-        }
-    } catch { }
+        } catch { $null }
+    }
+    $qt['Steam'] = [int] $sw.ElapsedMilliseconds
+    $steam = $steamResult
 
-    # ── Power plan activo ────────────────────────────────────────────────────
+    # ── Power plan activo (keep) ──────────────────────────────────────────────
     # El header de "powercfg /getactivescheme" varia por locale:
     #   en-US: "Power Scheme GUID:"
     #   es-AR: "GUID de plan de energía:"  (NO "esquema" como en versiones viejas)
@@ -413,20 +692,25 @@ function Get-SystemSnapshot {
     # En vez de listar todas, usamos regex agnostico al idioma que matchea el
     # formato comun: cualquier texto antes de ":" seguido del GUID con paren.
     [PSCustomObject] $powerPlan = $null
-    try {
-        [string] $activeOut = (& powercfg /getactivescheme 2>&1) -join "`n"
-        [string] $activeGuid = ''
-        [string] $activeName = ''
-        if ($activeOut -match ':\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*\(([^)]+)\)') {
-            $activeGuid = $Matches[1]
-            $activeName = $Matches[2].Trim()
-        }
-        $powerPlan = [PSCustomObject]@{
-            ActiveGuid = $activeGuid
-            ActiveName = $activeName
-        }
-    } catch { }
+    $sw.Restart()
+    $ppResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+        try {
+            [string] $out = (& powercfg /getactivescheme 2>&1) -join "`n"
+            [string] $guid = ''
+            [string] $name = ''
+            if ($out -match ':\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*\(([^)]+)\)') {
+                $guid = $Matches[1]
+                $name = $Matches[2].Trim()
+            }
+            [PSCustomObject]@{ ActiveGuid = $guid; ActiveName = $name }
+        } catch { $null }
+    }
+    $qt['powercfg'] = [int] $sw.ElapsedMilliseconds
+    $powerPlan = $ppResult
 
+    # ── Retorno garantizado (§3c: partial-snapshot invariant) ─────────────────
+    # T-N2: shape invariante — NUNCA renombrar ni remover campos existentes.
+    # Campos nuevos agregados al final.
     return [PSCustomObject]@{
         Phase             = [string]   $Phase
         Timestamp         = [string]   (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
@@ -455,6 +739,10 @@ function Get-SystemSnapshot {
         InstalledPrograms = $installedRelevant
         Steam             = $steam
         PowerPlan         = $powerPlan
+        # ── Campos nuevos snapshot-vm-plan §5 ─────────────────────────────────
+        IsVirtualMachine  = [bool]      $isVM
+        VmVendor          = [string]    $vmVendor
+        QueryTimings      = [hashtable] $qt
     }
 }
 

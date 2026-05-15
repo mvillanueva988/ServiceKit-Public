@@ -127,6 +127,13 @@ function Show-MachineBanner {
     Write-Host ("  GPU  : {0}" -f $gpuLabel)
     Write-Host ("  OEM  : {0}{1}" -f $manufacturer, $oemSuffix)
     Write-Host ("  TIER : {0}" -f $tierLabel) -ForegroundColor Yellow
+    # Banner VM — solo si IsVirtualMachine (no ruido en HW real)
+    if ($MachineProfile.PSObject.Properties['IsVirtualMachine'] -and [bool]$MachineProfile.IsVirtualMachine) {
+        [string] $vmVendorLabel = if ($MachineProfile.PSObject.Properties['VmVendor'] -and -not [string]::IsNullOrWhiteSpace([string]$MachineProfile.VmVendor)) {
+            [string]$MachineProfile.VmVendor
+        } else { 'VM' }
+        Write-Host ("  VM   : {0}  [snapshot en modo VM — SMART/PnP/ACPI omitidos]" -f $vmVendorLabel) -ForegroundColor Yellow
+    }
     Write-Host '================================================' -ForegroundColor DarkCyan
     Write-Host ''
 }

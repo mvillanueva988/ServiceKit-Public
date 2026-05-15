@@ -105,6 +105,9 @@ Test-SmokeFunction 'StaticCheck' 'BomRegression' { Test-BomRegression }
 
 # ─── core ─────────────────────────────────────────────────────────────────────
 Test-SmokeFunction 'MachineProfile' 'Get-MachineProfile' { Get-MachineProfile }
+Test-SmokeFunction 'MachineProfile' 'IsVirtualMachine field' {
+    (Get-MachineProfile).PSObject.Properties['IsVirtualMachine']
+}
 
 # ─── modules: solo funciones read-only / preview ──────────────────────────────
 Test-SmokeFunction 'Apps' 'Get-InstalledWin32Apps' { Get-InstalledWin32Apps }
@@ -121,7 +124,33 @@ Test-SmokeFunction 'Privacy' 'Get-ShutUp10Path'       { Get-ShutUp10Path }
 
 Test-SmokeFunction 'StartupManager' 'Get-StartupEntries' { Get-StartupEntries }
 
-Test-SmokeFunction 'Telemetry' 'Get-SystemSnapshot' { Get-SystemSnapshot -Phase Pre }
+Test-SmokeFunction 'Telemetry' 'Test-IsVirtualMachine' { Test-IsVirtualMachine }
+Test-SmokeFunction 'Telemetry' 'Invoke-WithTimeout returns on time' {
+    Invoke-WithTimeout -ScriptBlock { 42 } -TimeoutSeconds 5
+}
+Test-SmokeFunction 'Telemetry' 'Invoke-WithTimeout honors timeout' {
+    # debe devolver el Default sin colgar el smoke (~2s, no el sleep)
+    Invoke-WithTimeout -ScriptBlock { Start-Sleep 30; 'NO' } -TimeoutSeconds 2 -Default 'TIMEOUT'
+}
+
+$script:_snapshotResult = $null
+Test-SmokeFunction 'Telemetry' 'Get-SystemSnapshot' {
+    $script:_snapshotResult = Get-SystemSnapshot -Phase Pre
+    $script:_snapshotResult
+}
+Test-SmokeFunction 'Telemetry' 'Snapshot has IsVirtualMachine field' {
+    if ($null -eq $script:_snapshotResult) { throw 'Snapshot no disponible (test previo fallo)' }
+    $script:_snapshotResult.PSObject.Properties['IsVirtualMachine'] | Out-Null
+    if ($null -eq $script:_snapshotResult.PSObject.Properties['IsVirtualMachine']) {
+        throw 'Campo IsVirtualMachine ausente en snapshot'
+    }
+    if ($null -eq $script:_snapshotResult.PSObject.Properties['VmVendor']) {
+        throw 'Campo VmVendor ausente en snapshot'
+    }
+    if ($null -eq $script:_snapshotResult.PSObject.Properties['QueryTimings']) {
+        throw 'Campo QueryTimings ausente en snapshot'
+    }
+}
 
 Test-SmokeFunction 'ToolkitSupport' 'Get-WindowsUpdateStatus' {
     Get-WindowsUpdateStatus -IsLtsc $false

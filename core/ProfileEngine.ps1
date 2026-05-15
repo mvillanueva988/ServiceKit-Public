@@ -330,7 +330,7 @@ function Invoke-AutoProfile {
     # ── 2. Snapshot PRE ───────────────────────────────────────────────────────
     Write-Host '  Capturando snapshot PRE...' -ForegroundColor Cyan
     $preJob  = Start-TelemetryJob -Phase Pre
-    $preArr  = Wait-ToolkitJobs -Jobs @($preJob) -TimeoutSeconds 180
+    $preArr  = Wait-ToolkitJobs -Jobs @($preJob) -TimeoutSeconds 90
     $preRaw  = if ($preArr.Count -gt 0) { $preArr[0] } else { $null }
     if ($null -ne $preRaw -and $preRaw.PSObject.Properties['FileName'] -and -not [string]::IsNullOrWhiteSpace([string]$preRaw.FileName)) {
         $preSnap = [PSCustomObject]@{ Ok = $true; FileName = [string]$preRaw.FileName; FilePath = [string]$preRaw.FilePath }
@@ -371,7 +371,7 @@ function Invoke-AutoProfile {
     # ── 4. Snapshot POST ──────────────────────────────────────────────────────
     Write-Host '  Capturando snapshot POST...' -ForegroundColor Cyan
     $postJob = Start-TelemetryJob -Phase Post
-    $postArr = Wait-ToolkitJobs -Jobs @($postJob) -TimeoutSeconds 180
+    $postArr = Wait-ToolkitJobs -Jobs @($postJob) -TimeoutSeconds 90
     $postRaw = if ($postArr.Count -gt 0) { $postArr[0] } else { $null }
     if ($null -ne $postRaw -and $postRaw.PSObject.Properties['FileName'] -and -not [string]::IsNullOrWhiteSpace([string]$postRaw.FileName)) {
         $postSnap = [PSCustomObject]@{ Ok = $true; FileName = [string]$postRaw.FileName; FilePath = [string]$postRaw.FilePath }

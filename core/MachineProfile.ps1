@@ -191,11 +191,75 @@ function Get-TierResolved {
     return 'Low'
 }
 
+function Test-IsVirtualMachine-MachineProfile {
+    <#
+    .SYNOPSIS
+        Detección thin de VM para MachineProfile. Duplicación intencional de
+        Test-IsVirtualMachine en Telemetry.ps1 (T-N1 / DD4): el job de telemetría
+        solo dot-sourcea Telemetry.ps1; NO llamar al helper de Telemetry desde acá.
+        Misma lista de firmas §3a del plan snapshot-vm-plan.md.
+    .NOTES
+        Acepta los CIM ya consultados para no re-query. Defensivo: error → IsVirtual=$false.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object] $ComputerSystem = $null,
+        [Parameter()] [object] $Bios           = $null
+    )
+
+    try {
+        [string] $csManufacturer = if ($ComputerSystem) { [string]$ComputerSystem.Manufacturer } else { '' }
+        [string] $csModel        = if ($ComputerSystem) { [string]$ComputerSystem.Model }        else { '' }
+        [string] $biosManuf      = if ($Bios)           { [string]$Bios.Manufacturer }           else { '' }
+        [string] $biosVersion    = if ($Bios)           { [string]$Bios.Version }                else { '' }
+
+        # Hyper-V / Windows Sandbox
+        if ($csModel -match '(?i)Virtual Machine' -and $csManufacturer -match '(?i)Microsoft') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Hyper-V' }
+        }
+        if ($csModel -match '(?i)Virtual Machine') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Hyper-V' }
+        }
+        # VMware
+        if ($csManufacturer -match '(?i)VMware' -or $csModel -match '(?i)VMware' -or
+            $biosManuf -match '(?i)VMware') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'VMware' }
+        }
+        # VirtualBox
+        if ($csManufacturer -match '(?i)innotek' -or $csModel -match '(?i)VirtualBox' -or
+            $biosManuf -match '(?i)VBOX' -or $biosVersion -match '(?i)VBOX') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'VirtualBox' }
+        }
+        # KVM/QEMU
+        if ($csManufacturer -match '(?i)QEMU' -or
+            $csModel -match '(?i)Standard PC \(Q35|(?i)KVM' -or
+            $biosManuf -match '(?i)SeaBIOS') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'KVM/QEMU' }
+        }
+        # Xen
+        if ($csManufacturer -match '(?i)Xen' -or $csModel -match '(?i)Xen') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Xen' }
+        }
+        # Parallels
+        if ($csManufacturer -match '(?i)Parallels' -or $csModel -match '(?i)Parallels') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Parallels' }
+        }
+        # Fallback genérico
+        if ($csModel -match '(?i)\bvirtual\b') {
+            return [PSCustomObject]@{ IsVirtual = $true; Vendor = 'Virtual' }
+        }
+        return [PSCustomObject]@{ IsVirtual = $false; Vendor = '' }
+    } catch {
+        return [PSCustomObject]@{ IsVirtual = $false; Vendor = '' }
+    }
+}
+
 function Get-MachineProfile {
     [CmdletBinding()]
     param()
 
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue
     $enclosure = Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction SilentlyContinue
     $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
     $osReg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
@@ -253,21 +317,29 @@ function Get-MachineProfile {
 
     [string] $tier = Get-TierResolved -RamMB $ramMB -CpuClass $cpuClass -DGpuVramMb $dGpuVramMb
 
+    # VM detection thin (T-N1 / DD4): usando $cs y $bios ya consultados.
+    # La lógica es una copia de §3a de snapshot-vm-plan.md — duplicación intencional
+    # (no puede llamar a Test-IsVirtualMachine de Telemetry.ps1 por el límite de job).
+    $vmInfo = Test-IsVirtualMachine-MachineProfile -ComputerSystem $cs -Bios $bios
+
     return [PSCustomObject]@{
-        IsLaptop      = $isLaptop
-        RamMB         = $ramMB
-        IsLowRam      = ($ramMB -le 8192)
-        HasDGpu       = $hasDGpu
-        HasIGpuOnly   = $hasIGpuOnly
-        GpuNames      = $gpuNames
-        DGpuVramMb    = $dGpuVramMb
-        CpuName       = $cpuName
-        CpuClass      = $cpuClass
-        Tier          = $tier
-        Manufacturer  = $manufacturer
-        IsWin11       = ($build -ge 22000)
-        IsHome        = ($osReg -and ([string]$osReg.ProductName -match '\bHome\b'))
-        Build         = $build
-        OemCatalogPath= $oemCatalogPath
+        IsLaptop         = $isLaptop
+        RamMB            = $ramMB
+        IsLowRam         = ($ramMB -le 8192)
+        HasDGpu          = $hasDGpu
+        HasIGpuOnly      = $hasIGpuOnly
+        GpuNames         = $gpuNames
+        DGpuVramMb       = $dGpuVramMb
+        CpuName          = $cpuName
+        CpuClass         = $cpuClass
+        Tier             = $tier
+        Manufacturer     = $manufacturer
+        IsWin11          = ($build -ge 22000)
+        IsHome           = ($osReg -and ([string]$osReg.ProductName -match '\bHome\b'))
+        Build            = $build
+        OemCatalogPath   = $oemCatalogPath
+        # ── Campos nuevos snapshot-vm-plan §5 ─────────────────────────────────
+        IsVirtualMachine = [bool]   $vmInfo.IsVirtual
+        VmVendor         = [string] $vmInfo.Vendor
     }
 }
