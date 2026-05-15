@@ -1,5 +1,26 @@
 ﻿Set-StrictMode -Version Latest
 
+# ─── Write-ActionAudit (helper centralizado) ──────────────────────────────────
+function Write-ActionAudit {
+    <#
+    .SYNOPSIS
+        Wrapper sobre Write-ToolkitAuditLog para handlers del Router.
+        Marca cada accion del menu en output/audit/<date>.jsonl. Defensivo:
+        si ToolkitSupport no esta dot-sourced (caso edge), no rompe.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Action,
+        [Parameter()]          [string] $Status = 'Started',
+        [Parameter()]          [string] $Summary = '',
+        [Parameter()]          [object] $Details = $null
+    )
+
+    if (Get-Command -Name 'Write-ToolkitAuditLog' -CommandType Function -ErrorAction SilentlyContinue) {
+        Write-ToolkitAuditLog -Action $Action -Status $Status -Summary $Summary -Details $Details
+    }
+}
+
 # ─── Show-MachineBanner ───────────────────────────────────────────────────────
 function Show-MachineBanner {
     [CmdletBinding()]
@@ -176,6 +197,8 @@ function Invoke-DiagnosticSnapshot {
         [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
     )
     $null = $MachineProfile
+    [string] $action = "Snapshot.$Phase"
+    Write-ActionAudit -Action $action -Status 'Started'
     Write-Host ('  Capturando snapshot {0}-service...' -f $Phase) -ForegroundColor Cyan
     $job = Start-TelemetryJob -Phase $Phase
     $results = Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180
@@ -183,8 +206,10 @@ function Invoke-DiagnosticSnapshot {
         $r = $results[0]
         Write-Host ('  [OK] Snapshot guardado: {0}' -f $r.FileName) -ForegroundColor Green
         Write-Host ('       {0}' -f $r.FilePath) -ForegroundColor DarkGray
+        Write-ActionAudit -Action $action -Status 'Success' -Summary $r.FileName -Details $r
     } else {
         Write-Host '  [!] No se obtuvo resultado del snapshot.' -ForegroundColor Yellow
+        Write-ActionAudit -Action $action -Status 'Failed' -Summary 'No result'
     }
 }
 
@@ -192,12 +217,15 @@ function Invoke-DiagnosticCompare {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+    Write-ActionAudit -Action 'Snapshot.Compare' -Status 'Started'
     try {
         $diff = Compare-Snapshot
         Show-SnapshotComparison -Diff $diff
+        Write-ActionAudit -Action 'Snapshot.Compare' -Status 'Success' -Summary ('Score {0}/{1}' -f $diff.Score, $diff.ScoreMax) -Details $diff
     }
     catch {
         Write-Host ('  [!] {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-ActionAudit -Action 'Snapshot.Compare' -Status 'Failed' -Summary $_.Exception.Message
     }
 }
 
@@ -205,13 +233,16 @@ function Invoke-DiagnosticBsod {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+    Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Started'
     Write-Host '  Analizando Event Log (ultimos 90 dias)...' -ForegroundColor Cyan
     $job = Start-BsodHistoryJob -Days 90
     $results = Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120
     if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
         Show-BsodHistory -Data $results[0]
+        Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Success' -Summary ('{0} eventos en {1} dias' -f $results[0].TotalCrashes, $results[0].DaysScanned)
     } else {
         Write-Host '  [!] No se pudo leer el Event Log.' -ForegroundColor Yellow
+        Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Failed' -Summary 'No result'
     }
 }
 
@@ -342,15 +373,21 @@ function Invoke-ActionDebloat {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+    Write-ActionAudit -Action 'Debloat' -Status 'Started'
     Write-Host '  Deshabilitando servicios bloat...' -ForegroundColor Cyan
     $job = Start-DebloatProcess
     $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($null -eq $r) {
+        Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow
+        Write-ActionAudit -Action 'Debloat' -Status 'Failed' -Summary 'No result'
+        return
+    }
     Write-Host ('  [OK] Deshabilitados: {0}  |  Fallaron: {1}' -f $r.Disabled, $r.Failed) -ForegroundColor Green
     if ($r.Errors.Count -gt 0) {
         Write-Host '  Errores:' -ForegroundColor Yellow
         foreach ($e in $r.Errors) { Write-Host ('    - {0}' -f $e) -ForegroundColor DarkGray }
     }
+    Write-ActionAudit -Action 'Debloat' -Status 'Success' -Summary ('Disabled={0} Failed={1}' -f $r.Disabled, $r.Failed) -Details $r
 }
 
 function Invoke-ActionCleanup {
@@ -362,22 +399,26 @@ function Invoke-ActionCleanup {
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
 
     if ($sub -eq 'P') {
+        Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Started'
         Write-Host '  Escaneando rutas de limpieza...' -ForegroundColor Cyan
         $job = Start-CleanupPreviewJob
         $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180)[0]
-        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Failed'; return }
         Write-Host ('  Total a liberar: {0} MB ({1} GB)' -f $r.TotalMB, $r.TotalGB) -ForegroundColor Green
         foreach ($f in $r.Folders) {
             Write-Host ('    {0,-50}  {1,8} MB' -f $f.Label, $f.SizeMB)
         }
+        Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Success' -Summary ('Estimate {0} MB' -f $r.TotalMB) -Details $r
         return
     }
     if ($sub -eq 'R') {
+        Write-ActionAudit -Action 'Cleanup.Run' -Status 'Started'
         Write-Host '  Limpiando temporales y caches...' -ForegroundColor Cyan
         $job = Start-CleanupProcess
         $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 300)[0]
-        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Cleanup.Run' -Status 'Failed'; return }
         Write-Host ('  [OK] Liberado: {0} MB ({1} GB)  |  Errores: {2}' -f $r.FreedMB, $r.FreedGB, $r.SoftErrors) -ForegroundColor Green
+        Write-ActionAudit -Action 'Cleanup.Run' -Status 'Success' -Summary ('Freed {0} MB' -f $r.FreedMB) -Details $r
         return
     }
 }
@@ -388,27 +429,32 @@ function Invoke-ActionMaintenance {
     $null = $MachineProfile
     Write-Host '  DISM + SFC toma 10-20 minutos. Confirma [S/n]:' -ForegroundColor Yellow
     [string] $ans = (Read-Host).Trim().ToUpperInvariant()
-    if ($ans -ne 'S' -and $ans -ne '') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+    if ($ans -ne 'S' -and $ans -ne '') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; Write-ActionAudit -Action 'Maintenance' -Status 'Cancelled'; return }
+    Write-ActionAudit -Action 'Maintenance' -Status 'Started'
     Write-Host '  Ejecutando DISM RestoreHealth + SFC scannow...' -ForegroundColor Cyan
     $job = Start-MaintenanceProcess
     $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 1800)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Maintenance' -Status 'Failed'; return }
     Write-Host ('  [OK] DISM exit={0}  SFC exit={1}' -f $r.DismExitCode, $r.SfcExitCode) -ForegroundColor Green
+    Write-ActionAudit -Action 'Maintenance' -Status 'Success' -Summary ('DISM={0} SFC={1}' -f $r.DismExitCode, $r.SfcExitCode)
 }
 
 function Invoke-ActionRestorePoint {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+    Write-ActionAudit -Action 'RestorePoint' -Status 'Started'
     Write-Host '  Creando punto de restauracion...' -ForegroundColor Cyan
     $job = Start-RestorePointProcess
     $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'RestorePoint' -Status 'Failed'; return }
     if ($r.Success) {
         Write-Host ('  [OK] {0}' -f $r.Message) -ForegroundColor Green
+        Write-ActionAudit -Action 'RestorePoint' -Status 'Success' -Summary $r.Message
     } else {
         [string] $msg = if ($r.PSObject.Properties['Reason']) { $r.Reason } else { $r.Message }
         Write-Host ('  [!] {0}' -f $msg) -ForegroundColor Yellow
+        Write-ActionAudit -Action 'RestorePoint' -Status 'Failed' -Summary $msg
     }
 }
 
@@ -421,27 +467,31 @@ function Invoke-ActionNetwork {
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
 
     if ($sub -eq 'D') {
+        Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Started'
         Write-Host '  Recopilando diagnostico de red...' -ForegroundColor Cyan
         $job = Start-NetworkDiagnosticsProcess
         $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 60)[0]
-        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Failed'; return }
         Write-Host ('  TCP AutoTuning : {0}' -f $r.TcpAutoTuning)
         Write-Host ('  Ping 8.8.8.8   : {0} ms' -f $r.PingMs)
         foreach ($a in $r.Adapters) { Write-Host ('  Adapter        : {0,-25} {1,-15} [{2}]' -f $a.Name, $a.LinkSpeed, $a.MediaType) }
         foreach ($k in $r.DnsServers.Keys) { Write-Host ('  DNS {0,-15}: {1}' -f $k, ($r.DnsServers[$k] -join ', ')) }
+        Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Success' -Summary ('Tuning={0} Ping={1}ms' -f $r.TcpAutoTuning, $r.PingMs) -Details $r
         return
     }
     if ($sub -eq 'O') {
+        Write-ActionAudit -Action 'Network.Optimize' -Status 'Started'
         Write-Host '  Optimizando red (NIC power props + TCP global)...' -ForegroundColor Cyan
         $job = Start-NetworkProcess
         $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
-        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Network.Optimize' -Status 'Failed'; return }
         foreach ($a in $r.AdaptersOptimized) {
             Write-Host ('  [{0}] {1}  changes={2}' -f $(if ($a.ChangesMade -gt 0) { 'OK' } else { '--' }), $a.Name, $a.ChangesMade)
         }
         if ($r.PSObject.Properties['NetshIssues'] -and $r.NetshIssues.Count -gt 0) {
             foreach ($i in $r.NetshIssues) { Write-Host ('  [!] {0}' -f $i) -ForegroundColor Yellow }
         }
+        Write-ActionAudit -Action 'Network.Optimize' -Status 'Success' -Summary ('{0} adapters' -f $r.AdaptersOptimized.Count) -Details $r
         return
     }
 }
@@ -463,13 +513,15 @@ function Invoke-ActionPerformance {
     }
     if ([string]::IsNullOrWhiteSpace($vp)) { Write-Host '  Opcion invalida o cancelada.' -ForegroundColor DarkGray; return }
 
+    Write-ActionAudit -Action 'Performance' -Status 'Started' -Summary ('Profile={0}' -f $vp)
     Write-Host ('  Aplicando perfil {0} + power plan + system tweaks...' -f $vp) -ForegroundColor Cyan
     $job = Start-PerformanceProcess -VisualProfile $vp
     $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Performance' -Status 'Failed'; return }
     if ($null -ne $r.Visuals)    { Write-Host ('  Visuales:  Success={0}  Applied={1}' -f $r.Visuals.Success, $r.Visuals.Applied.Count) }
     if ($null -ne $r.PowerPlan)  { Write-Host ('  PowerPlan: {0}  ({1})' -f $r.PowerPlan.PlanName, $r.PowerPlan.Reason) }
     if ($null -ne $r.Tweaks)     { Write-Host ('  Tweaks:    Success={0}  Applied={1}' -f $r.Tweaks.Success, $r.Tweaks.Applied.Count) }
+    Write-ActionAudit -Action 'Performance' -Status 'Success' -Summary $vp -Details $r
 }
 
 function Invoke-ActionDriverBackup {
@@ -478,15 +530,18 @@ function Invoke-ActionDriverBackup {
     $null = $MachineProfile
     [string] $toolkitRoot = Split-Path -Parent $PSScriptRoot
     [string] $outDir = Join-Path $toolkitRoot 'output\driver_backup'
+    Write-ActionAudit -Action 'Drivers.Backup' -Status 'Started'
     Write-Host ('  Exportando drivers a {0}...' -f $outDir) -ForegroundColor Cyan
     $job = Start-DriverBackupJob -OutputRoot $outDir
     $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 600)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed'; return }
     if ($r.Success) {
         Write-Host ('  [OK] {0} drivers exportados de {1} candidatos. {2}' -f $r.Exported, $r.Total, $r.Message) -ForegroundColor Green
         Write-Host ('       {0}' -f $r.Destination) -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'Drivers.Backup' -Status 'Success' -Summary ('{0}/{1} drivers' -f $r.Exported, $r.Total) -Details $r
     } else {
         Write-Host ('  [!] {0}' -f $r.Message) -ForegroundColor Yellow
+        Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed' -Summary $r.Message
     }
 }
 
@@ -494,6 +549,7 @@ function Invoke-ActionApps {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+    Write-ActionAudit -Action 'Apps.List' -Status 'Started'
     Write-Host '  Listando apps Win32 + UWP (puede tardar)...' -ForegroundColor Cyan
     $win32Job = Start-Win32AppsJob
     $uwpJob   = Start-UwpAppsJob
@@ -504,6 +560,7 @@ function Invoke-ActionApps {
     Write-Host ('  Win32 instaladas: {0}' -f $win32.Count) -ForegroundColor Green
     Write-Host ('  UWP   instaladas: {0}' -f $uwp.Count)   -ForegroundColor Green
     Write-Host '  (UI completa de uninstall: Stage 2+ extiende este handler)'
+    Write-ActionAudit -Action 'Apps.List' -Status 'Success' -Summary ('Win32={0} UWP={1}' -f $win32.Count, $uwp.Count)
 }
 
 function Invoke-ActionPrivacy {
@@ -514,12 +571,14 @@ function Invoke-ActionPrivacy {
     Write-Host '  Modo: [B]asic  [M]edium  [A]ggressive  [O]OSU10 GUI  [V]olver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
     if ($sub -eq 'O') {
+        Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Started'
         if (Test-ShutUp10Available) {
             $r = Open-ShutUp10
-            if ($r.Success) { Write-Host ('  [OK] OOSU10 abierto: {0}' -f $r.Path) -ForegroundColor Green }
-            else            { Write-Host ('  [!] {0}' -f $r.Error) -ForegroundColor Yellow }
+            if ($r.Success) { Write-Host ('  [OK] OOSU10 abierto: {0}' -f $r.Path) -ForegroundColor Green; Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Success' -Summary $r.Path }
+            else            { Write-Host ('  [!] {0}' -f $r.Error) -ForegroundColor Yellow; Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary $r.Error }
         } else {
             Write-Host '  [!] OOSU10.exe no esta descargado. Usa [T] Herramientas para bajarlo.' -ForegroundColor Yellow
+            Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary 'OOSU10 not installed'
         }
         return
     }
@@ -530,19 +589,22 @@ function Invoke-ActionPrivacy {
         default { '' }
     }
     if ([string]::IsNullOrWhiteSpace($profile)) { return }
+    Write-ActionAudit -Action 'Privacy.Apply' -Status 'Started' -Summary ('Profile={0}' -f $profile)
     Write-Host ('  Aplicando perfil {0} (registry tweaks)...' -f $profile) -ForegroundColor Cyan
     $job = Start-PrivacyJob -Profile $profile
     $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Privacy.Apply' -Status 'Failed'; return }
     Write-Host ('  [OK] Aplicados: {0}  |  Errores: {1}' -f $r.Applied.Count, $r.Errors.Count) -ForegroundColor Green
+    Write-ActionAudit -Action 'Privacy.Apply' -Status 'Success' -Summary ('{0}: Applied={1} Errors={2}' -f $profile, $r.Applied.Count, $r.Errors.Count) -Details $r
 }
 
 function Invoke-ActionStartup {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+    Write-ActionAudit -Action 'Startup.List' -Status 'Started'
     [object[]] $entries = @(Get-StartupEntries)
-    if ($entries.Count -eq 0) { Write-Host '  Sin entradas de inicio.' -ForegroundColor DarkGray; return }
+    if ($entries.Count -eq 0) { Write-Host '  Sin entradas de inicio.' -ForegroundColor DarkGray; Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary '0 entries'; return }
     Write-Host ('  Entradas de inicio detectadas: {0}' -f $entries.Count) -ForegroundColor Green
     for ([int] $i = 0; $i -lt $entries.Count; $i++) {
         $e = $entries[$i]
@@ -551,6 +613,7 @@ function Invoke-ActionStartup {
     }
     Write-Host ''
     Write-Host '  (Toggle interactivo: Stage 2+ extiende este handler)'
+    Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary ('{0} entries' -f $entries.Count)
 }
 
 function Invoke-ActionWindowsUpdate {
@@ -558,9 +621,11 @@ function Invoke-ActionWindowsUpdate {
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     [bool] $isLtsc = $false
     if ($MachineProfile.PSObject.Properties['IsHome']) { $isLtsc = $false }
+    Write-ActionAudit -Action 'WindowsUpdate.Status' -Status 'Started'
     $status = Get-WindowsUpdateStatus -IsLtsc $isLtsc
     Write-Host '  ESTADO DE WINDOWS UPDATE' -ForegroundColor DarkCyan
     Write-Host ('  Ultima instalacion: {0}' -f $status.LastInstall)
     Write-Host ('  Ultima busqueda  : {0}' -f $status.LastCheck)
     Write-Host ('  Fuente           : {0}' -f $status.Source)
+    Write-ActionAudit -Action 'WindowsUpdate.Status' -Status 'Success' -Summary ('LastInstall={0}' -f $status.LastInstall) -Details $status
 }
