@@ -38,6 +38,32 @@ foreach ($folder in @($utilsDir, $coreDir, $modulesDir)) {
 [System.Collections.Generic.List[PSCustomObject]] $results =
     [System.Collections.Generic.List[PSCustomObject]]::new()
 
+# ─── Static check: BOM regression detector ────────────────────────────────────
+# Cuando un .ps1 tiene bytes no-ASCII (em-dash, tildes en string literals) y
+# está guardado sin BOM, PowerShell 5.1 en locale es-AR lo lee como CP-1252 y
+# revienta el parser. Este es un bug que ya nos mordió 2 veces (Stage 0 PR0
+# y Stage 1 cuando edité MachineProfile/Privacy). Lo chequeamos cada smoke run.
+function Test-BomRegression {
+    [string] $rRoot = (Split-Path -Parent $PSScriptRoot)
+    [string[]] $patterns = @('core\*.ps1', 'modules\*.ps1', 'utils\*.ps1', 'tools\*.ps1', 'main.ps1', 'Launch.ps1', 'Release.ps1', 'Bootstrap-Tools.ps1')
+    [System.Collections.Generic.List[string]] $atRisk = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in $patterns) {
+        foreach ($f in @(Get-ChildItem -Path (Join-Path $rRoot $p) -File -ErrorAction SilentlyContinue)) {
+            $b = [System.IO.File]::ReadAllBytes($f.FullName)
+            [bool] $hasBom = $b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF
+            if ($hasBom) { continue }
+            [bool] $hasNonAscii = $false
+            foreach ($byte in $b) { if ($byte -gt 127) { $hasNonAscii = $true; break } }
+            if ($hasNonAscii) {
+                $atRisk.Add($f.FullName.Substring($rRoot.Length + 1))
+            }
+        }
+    }
+    if ($atRisk.Count -gt 0) {
+        throw ('BOM missing en {0} archivo(s) con bytes non-ASCII: {1}. Aplicar BOM UTF-8 antes de commit.' -f $atRisk.Count, ($atRisk -join ', '))
+    }
+}
+
 function Test-SmokeFunction {
     param(
         [string] $ModuleName,
@@ -73,6 +99,9 @@ function Test-SmokeFunction {
         Error      = $errMsg
     })
 }
+
+# ─── static checks ────────────────────────────────────────────────────────────
+Test-SmokeFunction 'StaticCheck' 'BomRegression' { Test-BomRegression }
 
 # ─── core ─────────────────────────────────────────────────────────────────────
 Test-SmokeFunction 'MachineProfile' 'Get-MachineProfile' { Get-MachineProfile }
