@@ -10,17 +10,7 @@ Abrir PowerShell como administrador y ejecutar:
 irm https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/main/Launch.ps1 | iex
 ```
 
-Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión más reciente.
-El launcher valida el SHA-256 del ZIP antes de instalar (requiere asset `.sha256` en el release).
-
-## Qué hace
-
-- **Optimización**: Servicios bloat, temporales, registro, privacidad, telemetría
-- **Diagnóstico**: Snapshot pre/post optimización, comparación de resultados
-- **Mantenimiento**: Windows Update, chkdsk, SFC, puntos de restauración
-- **Performance**: Perfiles de energía, startup apps, RAM
-- **Herramientas externas**: Descarga on-demand (Autoruns, WinDirStat, WinUtil y más)
-- **Trazabilidad**: Log persistente de acciones en `output\audit\` para revisar cambios aplicados
+Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión más reciente y valida su integridad (SHA-256) antes de instalar.
 
 ## Uso sin one-liner (método manual)
 
@@ -28,77 +18,20 @@ El launcher valida el SHA-256 del ZIP antes de instalar (requiere asset `.sha256
 2. Extraer a cualquier carpeta
 3. Click derecho en `Run.bat` → Ejecutar como administrador
 
+## Qué hace
+
+- **Optimización**: servicios bloat, temporales, registro, privacidad, telemetría
+- **Diagnóstico**: snapshot pre/post optimización y comparación de resultados
+- **Mantenimiento**: Windows Update, chkdsk, SFC, puntos de restauración
+- **Performance**: perfiles de energía, apps de inicio, RAM
+- **Herramientas externas**: descarga on-demand (Autoruns, WinUtil y más)
+- **Trazabilidad**: log persistente de acciones para revisar los cambios aplicados
+
 ## Requisitos
 
 - Windows 10 / Windows 11
 - PowerShell 5.1 (incluido en Windows)
 - Permisos de administrador
-
-## Versionado
-
-El toolkit usa versionado semantico (`MAJOR.MINOR.PATCH`) definido en `VERSION`.
-
-- `MAJOR`: cambios grandes o incompatibles (ejemplo: inicio de Toolkit v2 = `2.0.0`)
-- `MINOR`: mejoras funcionales compatibles
-- `PATCH`: hotfixes y correcciones sin cambios de flujo
-
-Reglas:
-
-- El tag/release publicado en GitHub es `v<VERSION>`.
-- `Release.ps1` toma `VERSION` por defecto si no pasas `-Version`.
-- Si necesitas un candidato de release, usar sufijo prerelease (ej: `2.0.0-rc.1`).
-
-## Estructura de carpetas (que se publica vs que se genera)
-
-### Toolkit funcional (se publica)
-
-- `core/`
-- `modules/`
-- `utils/`
-- `tools/` (sin `tools/bin`, porque se descarga on-demand)
-- `main.ps1`, `Launch.ps1`, `Release.ps1`, `Bootstrap-Tools.ps1`, `Run.bat`
-
-### Generado por scripts/runtime (no se versiona)
-
-- `output/audit/` (logs JSONL de acciones)
-- `output/snapshots/` (snapshots PRE/POST)
-- `output/driver_backup/` (exports de drivers)
-- `dist/` (ZIP y SHA256 de release local)
-- `tools/bin/` (herramientas descargadas)
-
-### Desarrollo interno local (no se publica)
-
-- `_local-dev/` (documentacion/artefactos internos del proceso de desarrollo)
-
-## Preparacion antes de publicar
-
-Desde la raiz del repositorio:
-
-```powershell
-.\_local-dev\scripts\Prep-ReleaseWorkspace.ps1 -DryRun   # vista previa de limpieza
-.\_local-dev\scripts\Prep-ReleaseWorkspace.ps1           # limpia generados + valida tracking
-```
-
-Opcional: si quieres conservar los ZIP actuales en `dist/` durante la limpieza:
-
-```powershell
-.\_local-dev\scripts\Prep-ReleaseWorkspace.ps1 -KeepDist
-```
-
-Este paso es obligatorio como **ultimo paso antes de cada push a GitHub** (release o commit comun) para evitar subir artefactos generados o carpetas internas.
-
-## Publicar nuevo release
-
-Desde la raíz del repositorio:
-
-```powershell
-Get-Content .\VERSION                 # ver version actual
-.\Release.ps1                         # genera dist\PCTk-<VERSION>.zip
-.\Release.ps1 -Publish                # genera + sube a GitHub Releases (requiere $env:GITHUB_TOKEN)
-.\Release.ps1 -Version '1.0.1'        # override manual puntual
-```
-
-Cada release genera también `dist\PCTk-YYYY.MM.DD.zip.sha256` y, con `-Publish`, se sube como asset para validación en `Launch.ps1`.
 
 ## Licencia
 
