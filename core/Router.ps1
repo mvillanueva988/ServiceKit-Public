@@ -130,6 +130,10 @@ function Show-MainMenu {
 
         [string] $choice = (Read-Host '  Selecciona una opcion').Trim().ToUpperInvariant()
 
+        # Enter vacio = re-mostrar el menu sin invocar el dispatcher
+        # ([Parameter(Mandatory)] [string] no acepta cadenas vacias).
+        if ([string]::IsNullOrEmpty($choice)) { continue }
+
         if ($choice -eq 'X') {
             Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
             return 'X'
@@ -378,6 +382,9 @@ function Show-IndividualActionsSubmenu {
         Write-Host ''
 
         [string] $choice = (Read-Host '  Selecciona una opcion').Trim().ToUpperInvariant()
+
+        # Enter vacio = re-mostrar el submenu
+        if ([string]::IsNullOrEmpty($choice)) { continue }
 
         if ($choice -eq 'B' -or $choice -eq 'X') {
             return
