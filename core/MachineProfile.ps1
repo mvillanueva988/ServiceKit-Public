@@ -191,7 +191,7 @@ function Get-TierResolved {
     return 'Low'
 }
 
-function Test-IsVirtualMachine-MachineProfile {
+function Get-MachineVmInfo {
     <#
     .SYNOPSIS
         Detección thin de VM para MachineProfile. Duplicación intencional de
@@ -320,7 +320,7 @@ function Get-MachineProfile {
     # VM detection thin (T-N1 / DD4): usando $cs y $bios ya consultados.
     # La lógica es una copia de §3a de snapshot-vm-plan.md — duplicación intencional
     # (no puede llamar a Test-IsVirtualMachine de Telemetry.ps1 por el límite de job).
-    $vmInfo = Test-IsVirtualMachine-MachineProfile -ComputerSystem $cs -Bios $bios
+    $vmInfo = Get-MachineVmInfo -ComputerSystem $cs -Bios $bios
 
     return [PSCustomObject]@{
         IsLaptop         = $isLaptop

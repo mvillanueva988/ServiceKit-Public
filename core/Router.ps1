@@ -249,7 +249,7 @@ function Invoke-DiagnosticSnapshot {
     Write-ActionAudit -Action $action -Status 'Started'
     Write-Host ('  Capturando snapshot {0}-service...' -f $Phase) -ForegroundColor Cyan
     $job = Start-TelemetryJob -Phase $Phase
-    $results = Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180
+    $results = Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120
     if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
         $r = $results[0]
         Write-Host ('  [OK] Snapshot guardado: {0}' -f $r.FileName) -ForegroundColor Green
