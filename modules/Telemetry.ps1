@@ -285,7 +285,7 @@ function Get-SystemSnapshot {
     # ── Volumenes (keep — no se cuelga, base del Compare) ────────────────────
     $volumes = @()
     $sw.Restart()
-    $volumes = Invoke-WithTimeout -TimeoutSeconds 5 -Default @() -ScriptBlock {
+    $volResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default @() -ScriptBlock {
         @(
             Get-Volume |
                 Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.FileSystem -ne 'FAT32' } |
@@ -305,6 +305,11 @@ function Get-SystemSnapshot {
         )
     }
     $qt['Get-Volume'] = [int] $sw.ElapsedMilliseconds
+    # T-N2: Invoke-WithTimeout des-empaqueta resultados de 1 elemento; sin este
+    # @() un host con 1 solo volumen (C:) serializaria Volumes como objeto, no
+    # array (rompe el invariante de shape, base del Compare). Mismo idiom que
+    # procs/usb/hid/installed.
+    $volumes = @($volResult)
 
     # ── Page File (keep — CIM rapido) ─────────────────────────────────────────
     [PSCustomObject] $pageFile = [PSCustomObject]@{ CurrentUsageMb = $null; PeakUsageMb = $null }
