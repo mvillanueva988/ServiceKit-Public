@@ -168,10 +168,7 @@ function Invoke-MainMenuDispatch {
         '4' { Invoke-DiagnosticSnapshot -Phase Post -MachineProfile $MachineProfile; return }
         '5' { Invoke-DiagnosticCompare  -MachineProfile $MachineProfile; return }
         '6' { Invoke-DiagnosticBsod     -MachineProfile $MachineProfile; return }
-        'R' {
-            Write-Host '  [Generar prompt de research] [pendiente C8: ResearchPrompt.ps1]' -ForegroundColor DarkYellow
-            return
-        }
+        'R' { Invoke-ResearchPrompt -MachineProfile $MachineProfile; return }
         'A' {
             Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
             return
@@ -244,6 +241,67 @@ function Invoke-DiagnosticBsod {
         Write-Host '  [!] No se pudo leer el Event Log.' -ForegroundColor Yellow
         Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Failed' -Summary 'No result'
     }
+}
+
+# ─── Research prompt handler ──────────────────────────────────────────────────
+
+function Invoke-ResearchPrompt {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+
+    Write-Host '  PLANTILLAS DE PROMPT' -ForegroundColor DarkCyan
+    [object[]] $templates = @(Get-ResearchPromptTemplates)
+    for ([int] $i = 0; $i -lt $templates.Count; $i++) {
+        Write-Host ('  [{0}] {1}' -f ($i + 1), $templates[$i].Label)
+        Write-Host ('      {0}' -f $templates[$i].Description) -ForegroundColor DarkGray
+    }
+    Write-Host ''
+    [string] $choice = (Read-Host '  Numero de plantilla (Enter para cancelar)').Trim()
+    if ([string]::IsNullOrWhiteSpace($choice)) { return }
+    [int] $idx = -1
+    if (-not [int]::TryParse($choice, [ref] $idx) -or $idx -lt 1 -or $idx -gt $templates.Count) {
+        Write-Host '  Opcion invalida.' -ForegroundColor Red
+        return
+    }
+    [string] $tplKey = $templates[$idx - 1].Key
+
+    [string] $useCase = (Read-Host '  Use-case del cliente (opcional, Enter para skip)').Trim()
+    [bool] $includeId = $false
+    if (-not $MachineProfile.IsHome) {
+        Write-Host '  Privacy: identificadores se scrubean por default (OS no-Home).' -ForegroundColor DarkGray
+        [string] $ans = (Read-Host '  Incluir identificadores reales? [s/N]').Trim().ToUpperInvariant()
+        $includeId = ($ans -eq 'S')
+    }
+
+    Write-ActionAudit -Action 'Research.Prompt' -Status 'Started' -Summary $tplKey
+
+    [hashtable] $params = @{
+        Template       = $tplKey
+        MachineProfile = $MachineProfile
+    }
+    if (-not [string]::IsNullOrWhiteSpace($useCase)) { $params['UseCase'] = $useCase }
+    if ($includeId) { $params['IncludeIdentifiers'] = $true }
+
+    Write-Host '  Generando snapshot + prompt (puede tardar ~30s)...' -ForegroundColor Cyan
+    $r = New-ResearchPrompt @params
+
+    if ($null -eq $r -or -not $r.Success) {
+        Write-Host '  [!] No se pudo generar el prompt.' -ForegroundColor Yellow
+        Write-ActionAudit -Action 'Research.Prompt' -Status 'Failed'
+        return
+    }
+
+    Write-Host ('  [OK] Prompt generado: {0}' -f $r.FileName) -ForegroundColor Green
+    Write-Host ('       {0}' -f $r.FilePath) -ForegroundColor DarkGray
+    if ($r.ClipboardSet) {
+        Write-Host '  [OK] Copiado al clipboard. Pegalo en Claude/ChatGPT/Perplexity con web search habilitado.' -ForegroundColor Green
+    } else {
+        Write-Host '  [!] No se pudo copiar al clipboard. Abri el archivo manualmente.' -ForegroundColor Yellow
+    }
+    if ($r.Scrubbed) {
+        Write-Host '  [i] ComputerName/dominio scrubeados. Pasar -IncludeIdentifiers para incluirlos.' -ForegroundColor DarkGray
+    }
+    Write-ActionAudit -Action 'Research.Prompt' -Status 'Success' -Summary ('{0} ({1} bytes)' -f $tplKey, $r.FileSize) -Details $r
 }
 
 # ─── Tools menu (basico — Stage 1: lanza Bootstrap-Tools o abre tools\bin) ────
