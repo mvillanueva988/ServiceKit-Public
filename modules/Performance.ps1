@@ -276,28 +276,81 @@ function Set-SystemTweaks {
 }
 
 function Set-UltimatePowerPlan {
+    <#
+    .SYNOPSIS
+        Aplica un plan de energia segun el form factor:
+        - Desktop: Ultimate Performance (con fallback a High Performance).
+        - Laptop:  Balanced. Ultimate/High en laptops con TDP locked via EC
+                   (HP/Lenovo/Dell U-series, etc.) eleva el Min processor state,
+                   mantiene C0/C1 mas tiempo, sube temperatura, y dispara throttle
+                   mas agresivo del EC. El resultado es menos performance sostenida,
+                   no mas. Balanced afinado (Min state 5%, USB selective suspend off,
+                   PCIe Link State Off) es la palanca correcta.
+
+        El parametro -IsLaptop permite al caller pasar el resultado de
+        Get-MachineProfile sin que la funcion tenga que volver a detectar.
+        Si se omite, se detecta via Win32_SystemEnclosure ChassisTypes.
+    #>
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter()]
+        [Nullable[bool]] $IsLaptop = $null
+    )
 
-    [string] $ultimateGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
+    [string] $balancedGuid = '381b4222-f694-41f0-9685-ff5bb260df2e'
     [string] $highPerfGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+    [string] $ultimateGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
 
+    # -- Resolver form factor --------------------------------------------------
+    [bool] $isLaptopResolved = $false
+    if ($null -ne $IsLaptop) {
+        $isLaptopResolved = [bool] $IsLaptop
+    }
+    else {
+        # Detector autonomo (mismo criterio que MachineProfile)
+        try {
+            $enclosure = Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction Stop
+            if ($null -ne $enclosure -and $null -ne $enclosure.ChassisTypes) {
+                [int[]] $mobileChassis = @(8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32)
+                $isLaptopResolved = @($enclosure.ChassisTypes | Where-Object { $mobileChassis -contains [int]$_ }).Count -gt 0
+            }
+        }
+        catch { }
+    }
+
+    # -- Laptops: forzar Balanced. Ultimate/High son contraproducentes ---------
+    if ($isLaptopResolved) {
+        & powercfg /setactive $balancedGuid 2>&1 | Out-Null
+        [bool] $applied = ($LASTEXITCODE -eq 0)
+        return [PSCustomObject]@{
+            Success  = $applied
+            PlanName = if ($applied) { 'Balanced (laptop)' } else { 'Balanced (intento fallido)' }
+            PlanGuid = $balancedGuid
+            Reason   = 'Laptop detectado: Ultimate Performance fuerza Min proc state alto y empeora throttle termico con TDP locked. Balanced afinado es la palanca correcta.'
+            Skipped  = $false
+        }
+    }
+
+    # -- Desktop: intentar Ultimate, fallback a High Performance ---------------
     try {
         [string] $listOutput  = (& powercfg /list 2>&1) -join "`n"
         [bool]   $hasUltimate = $listOutput -match $ultimateGuid
 
         if (-not $hasUltimate) {
-            # Intentar importar el esquema oculto (requiere Windows 10 1803+ / Win 11)
+            # Importar el esquema oculto (requiere Windows 10 1803+ / Win 11)
             & powercfg /duplicatescheme $ultimateGuid 2>&1 | Out-Null
             $hasUltimate = ($LASTEXITCODE -eq 0)
         }
 
         if ($hasUltimate) {
             & powercfg /setactive $ultimateGuid 2>&1 | Out-Null
+            [bool] $okU = ($LASTEXITCODE -eq 0)
             return [PSCustomObject]@{
-                Success  = $true
+                Success  = $okU
                 PlanName = 'Ultimate Performance'
                 PlanGuid = $ultimateGuid
+                Reason   = 'Desktop detectado: cooling dedicado tolera Ultimate Performance.'
+                Skipped  = $false
             }
         }
 
@@ -305,8 +358,10 @@ function Set-UltimatePowerPlan {
         & powercfg /setactive $highPerfGuid 2>&1 | Out-Null
         return [PSCustomObject]@{
             Success  = ($LASTEXITCODE -eq 0)
-            PlanName = 'High Performance (Ultimate no disponible en esta edicion de Windows)'
+            PlanName = 'High Performance'
             PlanGuid = $highPerfGuid
+            Reason   = 'Desktop detectado, Ultimate Performance no disponible en esta edicion de Windows.'
+            Skipped  = $false
         }
     }
     catch {
@@ -314,6 +369,8 @@ function Set-UltimatePowerPlan {
             Success  = $false
             PlanName = "Error: $($_.Exception.Message)"
             PlanGuid = ''
+            Reason   = $_.Exception.Message
+            Skipped  = $false
         }
     }
 }
