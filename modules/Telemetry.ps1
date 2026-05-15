@@ -242,6 +242,168 @@ function Get-SystemSnapshot {
     # cuando hay un AV de terceros instalado y no genera conflicto.
     [bool] $multipleAv = (@($avList | Where-Object { $_.IsActive }).Count -gt 1)
 
+    # ── Device Guard / VBS / HVCI status (inline, sin dependency externa) ─────
+    # Se inlinea aca en lugar de llamar a Get-CoreIsolationStatus porque
+    # Start-TelemetryJob solo dot-sourcea Telemetry.ps1 en el job runspace.
+    [PSCustomObject] $deviceGuard = $null
+    try {
+        $dg = Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' `
+                              -ClassName Win32_DeviceGuard -ErrorAction Stop
+        if ($null -ne $dg) {
+            [int] $vbsStatus = 0
+            if ($null -ne $dg.PSObject.Properties['VirtualizationBasedSecurityStatus']) {
+                $vbsStatus = [int] $dg.VirtualizationBasedSecurityStatus
+            }
+            [int[]] $svcRunning = @()
+            if ($null -ne $dg.PSObject.Properties['SecurityServicesRunning']) {
+                $svcRunning = @($dg.SecurityServicesRunning | ForEach-Object { [int] $_ })
+            }
+            $deviceGuard = [PSCustomObject]@{
+                VbsConfigured     = ($vbsStatus -ge 1)
+                VbsRunning        = ($vbsStatus -eq 2)
+                HvciRunning       = ($svcRunning -contains 2)
+                CredentialGuardRunning = ($svcRunning -contains 1)
+            }
+        }
+    } catch { }
+
+    # ── USB + HID devices (categoria, no enumeracion completa) ────────────────
+    [PSCustomObject[]] $usbDevices = @()
+    [PSCustomObject[]] $hidDevices = @()
+    try {
+        $usbDevices = @(
+            Get-PnpDevice -Class USB -Status OK -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        FriendlyName = [string] $_.FriendlyName
+                        InstanceId   = [string] $_.InstanceId
+                    }
+                }
+        )
+    } catch { }
+    try {
+        $hidDevices = @(
+            Get-PnpDevice -Class HIDClass -Status OK -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        FriendlyName = [string] $_.FriendlyName
+                        Manufacturer = [string] $_.Manufacturer
+                    }
+                }
+        )
+    } catch { }
+
+    # ── DNS servers IPv4 por adapter activo ───────────────────────────────────
+    [hashtable] $dnsServers = @{}
+    try {
+        foreach ($entry in @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
+                              Where-Object { $_.AddressFamily -eq 2 -and $_.ServerAddresses.Count -gt 0 })) {
+            $dnsServers[$entry.InterfaceAlias] = [string[]] @($entry.ServerAddresses)
+        }
+    } catch { }
+
+    # ── Thermal zones detalladas (no solo CPU temp) ──────────────────────────
+    [PSCustomObject[]] $thermalZones = @()
+    try {
+        $thermalZones = @(
+            Get-CimInstance -Namespace 'root/wmi' -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop |
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        Zone  = [string] $_.InstanceName
+                        TempC = [double] [math]::Round(($_.CurrentTemperature - 2732) / 10.0, 1)
+                    }
+                }
+        )
+    } catch { }
+
+    # ── Programas instalados — filtrados por vendors relevantes ───────────────
+    # Filter regex matches OEM utilities, drivers, dev tools, gaming clients,
+    # browsers, hardware monitors — todo lo que un tecnico de service quiere ver.
+    [string] $vendorFilter = 'AMD|NVIDIA|Intel|Steam|Discord|Chrome|Edge|Firefox|HP|Lenovo|Dell|Asus|MSI|Logitech|Razer|Realtek|Visual Studio|Office|WhatsApp|OBS|7-Zip|WinRAR|Notepad\+\+|Git for|Docker|Python|Node|VLC|Spotify|Adobe'
+    [PSCustomObject[]] $installedRelevant = @()
+    try {
+        [string[]] $uninstallHives = @(
+            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        )
+        $installedRelevant = @(
+            Get-ItemProperty $uninstallHives -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $null -ne $_.PSObject.Properties['DisplayName'] -and
+                    -not [string]::IsNullOrWhiteSpace($_.DisplayName) -and
+                    $_.DisplayName -match $vendorFilter
+                } |
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        Name      = [string] $_.DisplayName
+                        Version   = if ($null -ne $_.PSObject.Properties['DisplayVersion']) { [string] $_.DisplayVersion } else { '' }
+                        Publisher = if ($null -ne $_.PSObject.Properties['Publisher']) { [string] $_.Publisher } else { '' }
+                    }
+                } |
+                Sort-Object Name -Unique
+        )
+    } catch { }
+
+    # ── Steam / CS2 detection + cfg parsing ───────────────────────────────────
+    [PSCustomObject] $steam = $null
+    try {
+        $steamReg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam' -ErrorAction SilentlyContinue
+        if ($null -ne $steamReg -and $null -ne $steamReg.PSObject.Properties['InstallPath']) {
+            [string] $steamPath = [string] $steamReg.InstallPath
+            [string] $cs2Path = Join-Path $steamPath 'steamapps\common\Counter-Strike Global Offensive'
+            [bool] $cs2Installed = Test-Path -Path $cs2Path -PathType Container
+
+            [string[]] $autoexecLines = @()
+            if ($cs2Installed) {
+                [string] $autoexecPath = Join-Path $cs2Path 'game\csgo\cfg\autoexec.cfg'
+                if (Test-Path $autoexecPath) {
+                    $autoexecLines = @(Get-Content -LiteralPath $autoexecPath -ErrorAction SilentlyContinue)
+                }
+            }
+
+            [string] $launchOptions = ''
+            [string] $userdataDir = Join-Path $steamPath 'userdata'
+            if (Test-Path $userdataDir) {
+                foreach ($userDir in @(Get-ChildItem -Path $userdataDir -Directory -ErrorAction SilentlyContinue)) {
+                    [string] $localCfg = Join-Path $userDir.FullName 'config\localconfig.vdf'
+                    if (Test-Path $localCfg) {
+                        [string] $raw = Get-Content -LiteralPath $localCfg -Raw -ErrorAction SilentlyContinue
+                        if ($raw -match '"730"\s*\{[^}]*"LaunchOptions"\s*"([^"]*)"') {
+                            $launchOptions = $Matches[1]
+                            break
+                        }
+                    }
+                }
+            }
+
+            $steam = [PSCustomObject]@{
+                Installed       = $true
+                Path            = $steamPath
+                Cs2Installed    = $cs2Installed
+                Cs2Path         = if ($cs2Installed) { $cs2Path } else { '' }
+                AutoexecLines   = $autoexecLines
+                Cs2LaunchOptions = $launchOptions
+            }
+        }
+    } catch { }
+
+    # ── Power plan activo + valores del subgrupo processor ────────────────────
+    [PSCustomObject] $powerPlan = $null
+    try {
+        [string] $activeOut = (& powercfg /getactivescheme 2>&1) -join "`n"
+        [string] $activeGuid = ''
+        [string] $activeName = ''
+        if ($activeOut -match 'GUID del esquema de energ.a:\s*([0-9a-f-]+)\s*\(([^)]+)\)' -or
+            $activeOut -match 'Power Scheme GUID:\s*([0-9a-f-]+)\s*\(([^)]+)\)') {
+            $activeGuid = $Matches[1]
+            $activeName = $Matches[2]
+        }
+        $powerPlan = [PSCustomObject]@{
+            ActiveGuid = $activeGuid
+            ActiveName = $activeName
+        }
+    } catch { }
+
     return [PSCustomObject]@{
         Phase             = [string]   $Phase
         Timestamp         = [string]   (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
@@ -261,6 +423,15 @@ function Get-SystemSnapshot {
         MultipleAvProblem = [bool]     $multipleAv
         CpuTempC          = $cpuTempC
         UptimeHours       = [double]   $uptimeHours
+        # ── Campos nuevos PR4 (ver audit.ps1 de Mateo + research prompt) ──────
+        DeviceGuard       = $deviceGuard
+        UsbDevices        = $usbDevices
+        HidDevices        = $hidDevices
+        DnsServers        = $dnsServers
+        ThermalZones      = $thermalZones
+        InstalledPrograms = $installedRelevant
+        Steam             = $steam
+        PowerPlan         = $powerPlan
     }
 }
 
