@@ -143,22 +143,10 @@ function Invoke-MainMenuDispatch {
             Write-Host '  [Receta nombrada] [pendiente Stage 4: editor de recetas + toggles]' -ForegroundColor DarkYellow
             return
         }
-        '3' {
-            Write-Host '  [Snapshot PRE-service] [pendiente C6: cablear a Telemetry.Save-Snapshot]' -ForegroundColor DarkYellow
-            return
-        }
-        '4' {
-            Write-Host '  [Snapshot POST-service] [pendiente C6: cablear a Telemetry.Save-Snapshot]' -ForegroundColor DarkYellow
-            return
-        }
-        '5' {
-            Write-Host '  [Comparar PRE vs POST] [pendiente C6: cablear a Telemetry.Compare-Snapshot]' -ForegroundColor DarkYellow
-            return
-        }
-        '6' {
-            Write-Host '  [Historial de BSOD / Crashes] [pendiente C6: cablear a Diagnostics.Get-BsodHistory]' -ForegroundColor DarkYellow
-            return
-        }
+        '3' { Invoke-DiagnosticSnapshot -Phase Pre  -MachineProfile $MachineProfile; return }
+        '4' { Invoke-DiagnosticSnapshot -Phase Post -MachineProfile $MachineProfile; return }
+        '5' { Invoke-DiagnosticCompare  -MachineProfile $MachineProfile; return }
+        '6' { Invoke-DiagnosticBsod     -MachineProfile $MachineProfile; return }
         'R' {
             Write-Host '  [Generar prompt de research] [pendiente C8: ResearchPrompt.ps1]' -ForegroundColor DarkYellow
             return
@@ -167,10 +155,7 @@ function Invoke-MainMenuDispatch {
             Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
             return
         }
-        'T' {
-            Write-Host '  [Herramientas externas] [pendiente C6: cablear a Bootstrap-Tools / launcher de tools/bin]' -ForegroundColor DarkYellow
-            return
-        }
+        'T' { Show-ToolsMenu -MachineProfile $MachineProfile; return }
         'X' {
             Write-Host '  Saliendo de PCTk v2...' -ForegroundColor Cyan
             return
@@ -178,6 +163,92 @@ function Invoke-MainMenuDispatch {
         default {
             Write-Host '  Opcion invalida.' -ForegroundColor Red
             return
+        }
+    }
+}
+
+# ─── Diagnostic actions del menu principal ────────────────────────────────────
+
+function Invoke-DiagnosticSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('Pre', 'Post')] [string] $Phase,
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
+    )
+    $null = $MachineProfile
+    Write-Host ('  Capturando snapshot {0}-service...' -f $Phase) -ForegroundColor Cyan
+    $job = Start-TelemetryJob -Phase $Phase
+    $results = Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180
+    if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
+        $r = $results[0]
+        Write-Host ('  [OK] Snapshot guardado: {0}' -f $r.FileName) -ForegroundColor Green
+        Write-Host ('       {0}' -f $r.FilePath) -ForegroundColor DarkGray
+    } else {
+        Write-Host '  [!] No se obtuvo resultado del snapshot.' -ForegroundColor Yellow
+    }
+}
+
+function Invoke-DiagnosticCompare {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    try {
+        $diff = Compare-Snapshot
+        Show-SnapshotComparison -Diff $diff
+    }
+    catch {
+        Write-Host ('  [!] {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+}
+
+function Invoke-DiagnosticBsod {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    Write-Host '  Analizando Event Log (ultimos 90 dias)...' -ForegroundColor Cyan
+    $job = Start-BsodHistoryJob -Days 90
+    $results = Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120
+    if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
+        Show-BsodHistory -Data $results[0]
+    } else {
+        Write-Host '  [!] No se pudo leer el Event Log.' -ForegroundColor Yellow
+    }
+}
+
+# ─── Tools menu (basico — Stage 1: lanza Bootstrap-Tools o abre tools\bin) ────
+
+function Show-ToolsMenu {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    [string] $toolkitRoot = Split-Path -Parent $PSScriptRoot
+    [string] $binDir = Join-Path $toolkitRoot 'tools\bin'
+    [string] $bootstrap = Join-Path $toolkitRoot 'Bootstrap-Tools.ps1'
+
+    Write-Host '  HERRAMIENTAS EXTERNAS' -ForegroundColor DarkCyan
+    Write-Host '  ====================='
+    Write-Host ('  Binarios en: {0}' -f $binDir)
+    Write-Host ''
+    Write-Host '  [1]  Descargar/actualizar todas las herramientas (Bootstrap-Tools.ps1)'
+    Write-Host '  [2]  Abrir carpeta tools\bin'
+    Write-Host '  [B]  Volver al menu principal' -ForegroundColor DarkYellow
+    Write-Host ''
+    [string] $choice = (Read-Host '  Selecciona una opcion').Trim().ToUpperInvariant()
+
+    switch ($choice) {
+        '1' {
+            if (Test-Path $bootstrap) {
+                & $bootstrap
+            } else {
+                Write-Host ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap) -ForegroundColor Red
+            }
+        }
+        '2' {
+            if (-not (Test-Path $binDir)) {
+                New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+            }
+            Start-Process explorer.exe $binDir
         }
     }
 }
@@ -234,38 +305,262 @@ function Show-IndividualActionsSubmenu {
 function Invoke-IndividualActionDispatch {
     <#
     .SYNOPSIS
-        Cablea cada opcion del submenu a su modulo. Stage 1 C5 deja stubs
-        explicitos por opcion; C6 los reemplaza por invocaciones reales.
+        Cablea cada opcion del submenu a su modulo. Cada handler usa el
+        JobManager (Start-* / Wait-ToolkitJobs) para correr async y mostrar
+        el resumen al final.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
-        [string] $Choice,
-
-        [Parameter(Mandatory)]
-        [PSCustomObject] $MachineProfile
+        [Parameter(Mandatory)] [string] $Choice,
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
     )
 
     [string] $up = $Choice.ToUpperInvariant()
-    [string] $label = switch ($up) {
-        '1'  { 'Debloat de Servicios' }
-        '2'  { 'Limpieza de Disco' }
-        '3'  { 'Mantenimiento del Sistema' }
-        '4'  { 'Crear Punto de Restauracion' }
-        '5'  { 'Optimizar Red' }
-        '6'  { 'Rendimiento' }
-        '7'  { 'Backup de Drivers' }
-        '8'  { 'Apps Win32 + UWP' }
-        '9'  { 'Privacidad' }
-        '10' { 'Inicio del Sistema' }
-        '11' { 'Actualizaciones de Windows' }
-        default { '' }
+    switch ($up) {
+        '1'  { Invoke-ActionDebloat        -MachineProfile $MachineProfile; return }
+        '2'  { Invoke-ActionCleanup        -MachineProfile $MachineProfile; return }
+        '3'  { Invoke-ActionMaintenance    -MachineProfile $MachineProfile; return }
+        '4'  { Invoke-ActionRestorePoint   -MachineProfile $MachineProfile; return }
+        '5'  { Invoke-ActionNetwork        -MachineProfile $MachineProfile; return }
+        '6'  { Invoke-ActionPerformance    -MachineProfile $MachineProfile; return }
+        '7'  { Invoke-ActionDriverBackup   -MachineProfile $MachineProfile; return }
+        '8'  { Invoke-ActionApps           -MachineProfile $MachineProfile; return }
+        '9'  { Invoke-ActionPrivacy        -MachineProfile $MachineProfile; return }
+        '10' { Invoke-ActionStartup        -MachineProfile $MachineProfile; return }
+        '11' { Invoke-ActionWindowsUpdate  -MachineProfile $MachineProfile; return }
+        default {
+            Write-Host '  Opcion invalida.' -ForegroundColor Red
+        }
     }
+}
 
-    if ([string]::IsNullOrWhiteSpace($label)) {
-        Write-Host '  Opcion invalida.' -ForegroundColor Red
+# ─── Action handlers (Stage 1 C6) ─────────────────────────────────────────────
+# Cada handler es defensivo (try/catch) y reporta success/failure de manera
+# uniforme. Audit log per-action se distribuye en C7.
+
+function Invoke-ActionDebloat {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    Write-Host '  Deshabilitando servicios bloat...' -ForegroundColor Cyan
+    $job = Start-DebloatProcess
+    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    Write-Host ('  [OK] Deshabilitados: {0}  |  Fallaron: {1}' -f $r.Disabled, $r.Failed) -ForegroundColor Green
+    if ($r.Errors.Count -gt 0) {
+        Write-Host '  Errores:' -ForegroundColor Yellow
+        foreach ($e in $r.Errors) { Write-Host ('    - {0}' -f $e) -ForegroundColor DarkGray }
+    }
+}
+
+function Invoke-ActionCleanup {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    Write-Host '  [P]review (escanea sin borrar)  /  [R]un (borra)  /  [B]volver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+
+    if ($sub -eq 'P') {
+        Write-Host '  Escaneando rutas de limpieza...' -ForegroundColor Cyan
+        $job = Start-CleanupPreviewJob
+        $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180)[0]
+        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+        Write-Host ('  Total a liberar: {0} MB ({1} GB)' -f $r.TotalMB, $r.TotalGB) -ForegroundColor Green
+        foreach ($f in $r.Folders) {
+            Write-Host ('    {0,-50}  {1,8} MB' -f $f.Label, $f.SizeMB)
+        }
         return
     }
+    if ($sub -eq 'R') {
+        Write-Host '  Limpiando temporales y caches...' -ForegroundColor Cyan
+        $job = Start-CleanupProcess
+        $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 300)[0]
+        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+        Write-Host ('  [OK] Liberado: {0} MB ({1} GB)  |  Errores: {2}' -f $r.FreedMB, $r.FreedGB, $r.SoftErrors) -ForegroundColor Green
+        return
+    }
+}
 
-    Write-Host ('  [{0}] [pendiente C6: cablear a modulo]' -f $label) -ForegroundColor DarkYellow
+function Invoke-ActionMaintenance {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    Write-Host '  DISM + SFC toma 10-20 minutos. Confirma [S/n]:' -ForegroundColor Yellow
+    [string] $ans = (Read-Host).Trim().ToUpperInvariant()
+    if ($ans -ne 'S' -and $ans -ne '') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+    Write-Host '  Ejecutando DISM RestoreHealth + SFC scannow...' -ForegroundColor Cyan
+    $job = Start-MaintenanceProcess
+    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 1800)[0]
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    Write-Host ('  [OK] DISM exit={0}  SFC exit={1}' -f $r.DismExitCode, $r.SfcExitCode) -ForegroundColor Green
+}
+
+function Invoke-ActionRestorePoint {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    Write-Host '  Creando punto de restauracion...' -ForegroundColor Cyan
+    $job = Start-RestorePointProcess
+    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180)[0]
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($r.Success) {
+        Write-Host ('  [OK] {0}' -f $r.Message) -ForegroundColor Green
+    } else {
+        [string] $msg = if ($r.PSObject.Properties['Reason']) { $r.Reason } else { $r.Message }
+        Write-Host ('  [!] {0}' -f $msg) -ForegroundColor Yellow
+    }
+}
+
+function Invoke-ActionNetwork {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    Write-Host '  [D]iagnostico (read-only)  /  [O]ptimizar  /  [B]volver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+
+    if ($sub -eq 'D') {
+        Write-Host '  Recopilando diagnostico de red...' -ForegroundColor Cyan
+        $job = Start-NetworkDiagnosticsProcess
+        $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 60)[0]
+        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+        Write-Host ('  TCP AutoTuning : {0}' -f $r.TcpAutoTuning)
+        Write-Host ('  Ping 8.8.8.8   : {0} ms' -f $r.PingMs)
+        foreach ($a in $r.Adapters) { Write-Host ('  Adapter        : {0,-25} {1,-15} [{2}]' -f $a.Name, $a.LinkSpeed, $a.MediaType) }
+        foreach ($k in $r.DnsServers.Keys) { Write-Host ('  DNS {0,-15}: {1}' -f $k, ($r.DnsServers[$k] -join ', ')) }
+        return
+    }
+    if ($sub -eq 'O') {
+        Write-Host '  Optimizando red (NIC power props + TCP global)...' -ForegroundColor Cyan
+        $job = Start-NetworkProcess
+        $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
+        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+        foreach ($a in $r.AdaptersOptimized) {
+            Write-Host ('  [{0}] {1}  changes={2}' -f $(if ($a.ChangesMade -gt 0) { 'OK' } else { '--' }), $a.Name, $a.ChangesMade)
+        }
+        if ($r.PSObject.Properties['NetshIssues'] -and $r.NetshIssues.Count -gt 0) {
+            foreach ($i in $r.NetshIssues) { Write-Host ('  [!] {0}' -f $i) -ForegroundColor Yellow }
+        }
+        return
+    }
+}
+
+function Invoke-ActionPerformance {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+
+    [string] $defaultProfile = if ($MachineProfile.IsLowRam) { 'Full' } else { 'Balanced' }
+    Write-Host ('  Perfiles disponibles: [B]alanced  [F]ull (max performance)  [R]estore (defaults)  [T]weaksOnly (sin visuales)')
+    Write-Host ('  Default sugerido segun tu hardware: {0}' -f $defaultProfile) -ForegroundColor DarkGray
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+    [string] $vp = switch ($sub) {
+        'B' { 'Balanced' }
+        'F' { 'Full' }
+        'R' { 'Restore' }
+        'T' { 'TweaksOnly' }
+        default { '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($vp)) { Write-Host '  Opcion invalida o cancelada.' -ForegroundColor DarkGray; return }
+
+    Write-Host ('  Aplicando perfil {0} + power plan + system tweaks...' -f $vp) -ForegroundColor Cyan
+    $job = Start-PerformanceProcess -VisualProfile $vp
+    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($null -ne $r.Visuals)    { Write-Host ('  Visuales:  Success={0}  Applied={1}' -f $r.Visuals.Success, $r.Visuals.Applied.Count) }
+    if ($null -ne $r.PowerPlan)  { Write-Host ('  PowerPlan: {0}  ({1})' -f $r.PowerPlan.PlanName, $r.PowerPlan.Reason) }
+    if ($null -ne $r.Tweaks)     { Write-Host ('  Tweaks:    Success={0}  Applied={1}' -f $r.Tweaks.Success, $r.Tweaks.Applied.Count) }
+}
+
+function Invoke-ActionDriverBackup {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    [string] $toolkitRoot = Split-Path -Parent $PSScriptRoot
+    [string] $outDir = Join-Path $toolkitRoot 'output\driver_backup'
+    Write-Host ('  Exportando drivers a {0}...' -f $outDir) -ForegroundColor Cyan
+    $job = Start-DriverBackupJob -OutputRoot $outDir
+    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 600)[0]
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    if ($r.Success) {
+        Write-Host ('  [OK] {0} drivers exportados de {1} candidatos. {2}' -f $r.Exported, $r.Total, $r.Message) -ForegroundColor Green
+        Write-Host ('       {0}' -f $r.Destination) -ForegroundColor DarkGray
+    } else {
+        Write-Host ('  [!] {0}' -f $r.Message) -ForegroundColor Yellow
+    }
+}
+
+function Invoke-ActionApps {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    Write-Host '  Listando apps Win32 + UWP (puede tardar)...' -ForegroundColor Cyan
+    $win32Job = Start-Win32AppsJob
+    $uwpJob   = Start-UwpAppsJob
+    $results  = Wait-ToolkitJobs -Jobs @($win32Job, $uwpJob) -TimeoutSeconds 180
+    $win32 = @(); $uwp = @()
+    if ($results.Count -ge 1 -and $null -ne $results[0]) { $win32 = @($results[0]) }
+    if ($results.Count -ge 2 -and $null -ne $results[1]) { $uwp   = @($results[1]) }
+    Write-Host ('  Win32 instaladas: {0}' -f $win32.Count) -ForegroundColor Green
+    Write-Host ('  UWP   instaladas: {0}' -f $uwp.Count)   -ForegroundColor Green
+    Write-Host '  (UI completa de uninstall: Stage 2+ extiende este handler)'
+}
+
+function Invoke-ActionPrivacy {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    Write-Host '  Modo: [B]asic  [M]edium  [A]ggressive  [O]OSU10 GUI  [V]olver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+    if ($sub -eq 'O') {
+        if (Test-ShutUp10Available) {
+            $r = Open-ShutUp10
+            if ($r.Success) { Write-Host ('  [OK] OOSU10 abierto: {0}' -f $r.Path) -ForegroundColor Green }
+            else            { Write-Host ('  [!] {0}' -f $r.Error) -ForegroundColor Yellow }
+        } else {
+            Write-Host '  [!] OOSU10.exe no esta descargado. Usa [T] Herramientas para bajarlo.' -ForegroundColor Yellow
+        }
+        return
+    }
+    [string] $profile = switch ($sub) {
+        'B' { 'Basic' }
+        'M' { 'Medium' }
+        'A' { 'Aggressive' }
+        default { '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($profile)) { return }
+    Write-Host ('  Aplicando perfil {0} (registry tweaks)...' -f $profile) -ForegroundColor Cyan
+    $job = Start-PrivacyJob -Profile $profile
+    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
+    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; return }
+    Write-Host ('  [OK] Aplicados: {0}  |  Errores: {1}' -f $r.Applied.Count, $r.Errors.Count) -ForegroundColor Green
+}
+
+function Invoke-ActionStartup {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    [object[]] $entries = @(Get-StartupEntries)
+    if ($entries.Count -eq 0) { Write-Host '  Sin entradas de inicio.' -ForegroundColor DarkGray; return }
+    Write-Host ('  Entradas de inicio detectadas: {0}' -f $entries.Count) -ForegroundColor Green
+    for ([int] $i = 0; $i -lt $entries.Count; $i++) {
+        $e = $entries[$i]
+        [string] $state = if ($e.Enabled) { 'ON ' } else { 'OFF' }
+        Write-Host ('  [{0,3}] {1}  {2,-25}  {3,-30}' -f $i, $state, $e.Location, $e.Name)
+    }
+    Write-Host ''
+    Write-Host '  (Toggle interactivo: Stage 2+ extiende este handler)'
+}
+
+function Invoke-ActionWindowsUpdate {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    [bool] $isLtsc = $false
+    if ($MachineProfile.PSObject.Properties['IsHome']) { $isLtsc = $false }
+    $status = Get-WindowsUpdateStatus -IsLtsc $isLtsc
+    Write-Host '  ESTADO DE WINDOWS UPDATE' -ForegroundColor DarkCyan
+    Write-Host ('  Ultima instalacion: {0}' -f $status.LastInstall)
+    Write-Host ('  Ultima busqueda  : {0}' -f $status.LastCheck)
+    Write-Host ('  Fuente           : {0}' -f $status.Source)
 }
