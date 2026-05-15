@@ -23,6 +23,9 @@ tools/bin/
 output/
 Logs/
 
+# Recetas nombradas del operador (datos de clientes específicos, no publicables)
+data/profiles/named/
+
 # Build artifacts de Release.ps1
 dist/
 dist/*.zip

@@ -1,5 +1,5 @@
 {
-    "version": 3,
+    "version": 4,
     "comment": "Cada herramienta define su URL oficial de descarga. SHA-256 vacio = URL apunta a 'latest' sin version fija (Sysinternals, O&O, etc.) — hash no verificable. Ejecutar Bootstrap-Tools.ps1 para descargar.",
     "categories": {
         "arranque":    "Herramientas de diagnostico y gestion de arranque del sistema",
@@ -10,7 +10,8 @@
         "hardware":    "Informacion de hardware, sensores y temperaturas",
         "drivers":     "Limpieza y gestion de drivers",
         "limpieza":    "Limpieza profunda de archivos temporales y basura del sistema",
-        "setup":       "Scripts de setup y configuracion inicial de Windows"
+        "setup":       "Scripts de setup y configuracion inicial de Windows",
+        "diagnostico": "Diagnostico de latencia, drivers, timing y profiling GPU"
     },
     "tools": [
         {
@@ -187,6 +188,38 @@
             "launchExe": "winslop.exe",
             "url": "",
             "approxSizeMB": 50,
+            "sha256": ""
+        },
+        {
+            "name": "latencymon",
+            "category": "diagnostico",
+            "description": "Resplendence LatencyMon - mide ISR/DPC latency por driver. Indispensable para diagnosticar audio/video stutter, freeze de cursor en mouse 2.4GHz, y cuellos de botella de drivers (ndis/dxgkrnl/wdf01000/usbport). Doc 1 §1.3 lo nombra como herramienta forense primaria.",
+            "filename": "LatencyMon.exe",
+            "launchExe": "LatencyMon.exe",
+            "url": "https://www.resplendence.com/downloads/LatencyMon.exe",
+            "approxSizeMB": 1,
+            "sha256": ""
+        },
+        {
+            "name": "timerresolution",
+            "category": "diagnostico",
+            "description": "TimerResolution (lucasg) - fuerza la resolucion del timer del kernel a 0.5ms para reducir jitter en aplicaciones de latencia critica. Util para CS2 cuando los 1% lows se ven afectados por timer wakeup variable.",
+            "filename": "SetTimerResolution.exe",
+            "launchExe": "SetTimerResolution.exe",
+            "url": "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/clans/3954447/cea2cc2ddd9ec6f02aa46fdcabf24cb20bd0e2c8.zip",
+            "approxSizeMB": 1,
+            "sha256": ""
+        },
+        {
+            "name": "nvidiaprofileinspector",
+            "category": "diagnostico",
+            "description": "Orbmu2k NVIDIA Profile Inspector - expone settings ocultos del driver NVIDIA (Sysmem Fallback Policy, Power Management Mode per-app, threaded optimization, etc.) que no estan en el panel de control oficial. Necesario para automatizar la rama gaming nombrada en GPUs NVIDIA.",
+            "filename": "nvidiaProfileInspector.zip",
+            "launchExe": "nvidiaProfileInspector\\nvidiaProfileInspector.exe",
+            "type": "zip",
+            "extractDir": "nvidiaProfileInspector",
+            "url": "https://github.com/Orbmu2k/nvidiaProfileInspector/releases/latest/download/nvidiaProfileInspector.zip",
+            "approxSizeMB": 2,
             "sha256": ""
         }
     ]
