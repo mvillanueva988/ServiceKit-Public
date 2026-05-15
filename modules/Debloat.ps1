@@ -30,13 +30,22 @@ function Disable-BloatServices {
 
     $targetServices = if ($ServicesList -and $ServicesList.Count -gt 0) { $ServicesList } else { $defaultServices }
 
-    $disabled = 0
-    $failed   = 0
-    $errors   = [System.Collections.Generic.List[string]]::new()
+    $disabled         = 0
+    $failed           = 0
+    $skipped          = 0  # servicio no existe en este sistema
+    $alreadyDisabled  = 0  # ya estaba deshabilitado de antes
+    $errors           = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $skippedNames = [System.Collections.Generic.List[string]]::new()
 
     foreach ($svcName in $targetServices) {
         try {
             $svc = Get-Service -Name $svcName -ErrorAction Stop
+
+            # Ya estaba disabled? Contar separado para distinguir "no hizo falta" vs "lo hicimos ahora"
+            if ($svc.StartType -eq 'Disabled') {
+                $alreadyDisabled++
+                continue
+            }
 
             if ($svc.Status -eq 'Running') {
                 Stop-Service -Name $svcName -Force -ErrorAction Stop
@@ -46,7 +55,10 @@ function Disable-BloatServices {
             $disabled++
         }
         catch [Microsoft.PowerShell.Commands.ServiceCommandException] {
-            # Servicio no existe en este sistema — omitir silenciosamente
+            # Servicio no existe en este sistema — comun en Windows Sandbox,
+            # LTSC, o instalaciones minimal sin Xbox/Cortana/etc.
+            $skipped++
+            $skippedNames.Add($svcName)
         }
         catch {
             $failed++
@@ -55,9 +67,13 @@ function Disable-BloatServices {
     }
 
     return [PSCustomObject]@{
-        Disabled = $disabled
-        Failed   = $failed
-        Errors   = $errors.ToArray()
+        Disabled        = $disabled
+        AlreadyDisabled = $alreadyDisabled
+        Skipped         = $skipped
+        SkippedNames    = $skippedNames.ToArray()
+        Failed          = $failed
+        Errors          = $errors.ToArray()
+        TotalTargeted   = $targetServices.Count
     }
 }
 

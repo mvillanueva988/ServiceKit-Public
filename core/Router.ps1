@@ -447,12 +447,19 @@ function Invoke-ActionDebloat {
         Write-ActionAudit -Action 'Debloat' -Status 'Failed' -Summary 'No result'
         return
     }
-    Write-Host ('  [OK] Deshabilitados: {0}  |  Fallaron: {1}' -f $r.Disabled, $r.Failed) -ForegroundColor Green
+    Write-Host ('  Servicios objetivo: {0}' -f $r.TotalTargeted) -ForegroundColor Cyan
+    Write-Host ('    [OK]            Deshabilitados ahora:   {0}' -f $r.Disabled) -ForegroundColor Green
+    Write-Host ('    [SKIP]          Ya estaban disabled:    {0}' -f $r.AlreadyDisabled) -ForegroundColor DarkGray
+    Write-Host ('    [SKIP]          No existen en sistema:  {0}' -f $r.Skipped) -ForegroundColor DarkGray
+    Write-Host ('    [FAIL]          Errores:                {0}' -f $r.Failed) -ForegroundColor $(if ($r.Failed -gt 0) { 'Yellow' } else { 'DarkGray' })
+    if ($r.SkippedNames.Count -gt 0) {
+        Write-Host ('  Omitidos (no existen): {0}' -f ($r.SkippedNames -join ', ')) -ForegroundColor DarkGray
+    }
     if ($r.Errors.Count -gt 0) {
         Write-Host '  Errores:' -ForegroundColor Yellow
         foreach ($e in $r.Errors) { Write-Host ('    - {0}' -f $e) -ForegroundColor DarkGray }
     }
-    Write-ActionAudit -Action 'Debloat' -Status 'Success' -Summary ('Disabled={0} Failed={1}' -f $r.Disabled, $r.Failed) -Details $r
+    Write-ActionAudit -Action 'Debloat' -Status 'Success' -Summary ('Disabled={0} AlreadyDisabled={1} Skipped={2} Failed={3}' -f $r.Disabled, $r.AlreadyDisabled, $r.Skipped, $r.Failed) -Details $r
 }
 
 function Invoke-ActionCleanup {
@@ -550,8 +557,13 @@ function Invoke-ActionNetwork {
         $job = Start-NetworkProcess
         $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
         if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Network.Optimize' -Status 'Failed'; return }
-        foreach ($a in $r.AdaptersOptimized) {
-            Write-Host ('  [{0}] {1}  changes={2}' -f $(if ($a.ChangesMade -gt 0) { 'OK' } else { '--' }), $a.Name, $a.ChangesMade)
+        if ($r.AdaptersOptimized.Count -eq 0) {
+            Write-Host '  [i] No se encontraron adapters fisicos (802.3 Ethernet / Wi-Fi 802.11) para optimizar.' -ForegroundColor DarkYellow
+            Write-Host '      Esto es esperable en Windows Sandbox o VMs (solo tienen adapter virtual).' -ForegroundColor DarkGray
+        } else {
+            foreach ($a in $r.AdaptersOptimized) {
+                Write-Host ('  [{0}] {1}  changes={2}' -f $(if ($a.ChangesMade -gt 0) { 'OK' } else { '--' }), $a.Name, $a.ChangesMade)
+            }
         }
         if ($r.PSObject.Properties['NetshIssues'] -and $r.NetshIssues.Count -gt 0) {
             foreach ($i in $r.NetshIssues) { Write-Host ('  [!] {0}' -f $i) -ForegroundColor Yellow }
