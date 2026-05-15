@@ -184,19 +184,37 @@ function Get-SystemSnapshot {
     # Distinguimos:
     #   Enabled  = el motor esta habilitado (puede estar pasivo)
     #   IsActive = esta protegiendo en tiempo real ahora mismo
+    #
+    # SecurityCenter2 enumera TODOS los AV registrados, incluido Windows
+    # Defender. Para evitar duplicado al agregar despues via Get-MpComputerStatus,
+    # skipeamos Defender en este loop (matching por displayName o por
+    # pathToSignedReportingExe). El MpComputerStatus tiene info mas rica
+    # (AMRunningMode) y debe ser la fuente unica de verdad para Defender.
     [System.Collections.Generic.List[PSCustomObject]] $avList =
         [System.Collections.Generic.List[PSCustomObject]]::new()
     try {
         foreach ($av in @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop)) {
-            [string] $hex     = [Convert]::ToString($av.productState, 16).PadLeft(6, '0')
-            [bool]   $enabled = ($hex.Substring(2, 2) -eq '10')
-            # SecurityCenter2 no expone passive mode para terceros — asumimos
-            # IsActive == Enabled para AVs externos (suelen tomar el lead).
+            [string] $displayName = [string] $av.displayName
+            [string] $exePath = ''
+            if ($null -ne $av.PSObject.Properties['pathToSignedReportingExe']) {
+                $exePath = [string] $av.pathToSignedReportingExe
+            }
+            # Skip Defender — sera agregado abajo con info detallada.
+            if ($displayName -match '(?i)Windows\s*Defender|Microsoft\s*Defender' -or
+                $exePath -match '(?i)\\Windows Defender\\|\\MsMpeng\.exe') {
+                continue
+            }
+
+            # Decode productState para AVs de terceros:
+            # bit 0x1000 del DWORD = "product enabled". Mas confiable que el
+            # substring approach previo, que asumia un nibble especifico.
+            [bool] $enabled = (([int64] $av.productState -band 0x1000) -ne 0)
+
             $avList.Add([PSCustomObject]@{
-                Name           = [string] $av.displayName
-                Enabled        = [bool]   $enabled
-                IsActive       = [bool]   $enabled
-                IsNative       = [bool]   $false
+                Name           = $displayName
+                Enabled        = $enabled
+                IsActive       = $enabled
+                IsNative       = $false
                 AMRunningMode  = $null
             })
         }
@@ -387,16 +405,21 @@ function Get-SystemSnapshot {
         }
     } catch { }
 
-    # ── Power plan activo + valores del subgrupo processor ────────────────────
+    # ── Power plan activo ────────────────────────────────────────────────────
+    # El header de "powercfg /getactivescheme" varia por locale:
+    #   en-US: "Power Scheme GUID:"
+    #   es-AR: "GUID de plan de energía:"  (NO "esquema" como en versiones viejas)
+    #   pt-BR: "GUID do Esquema de Energia:"
+    # En vez de listar todas, usamos regex agnostico al idioma que matchea el
+    # formato comun: cualquier texto antes de ":" seguido del GUID con paren.
     [PSCustomObject] $powerPlan = $null
     try {
         [string] $activeOut = (& powercfg /getactivescheme 2>&1) -join "`n"
         [string] $activeGuid = ''
         [string] $activeName = ''
-        if ($activeOut -match 'GUID del esquema de energ.a:\s*([0-9a-f-]+)\s*\(([^)]+)\)' -or
-            $activeOut -match 'Power Scheme GUID:\s*([0-9a-f-]+)\s*\(([^)]+)\)') {
+        if ($activeOut -match ':\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*\(([^)]+)\)') {
             $activeGuid = $Matches[1]
-            $activeName = $Matches[2]
+            $activeName = $Matches[2].Trim()
         }
         $powerPlan = [PSCustomObject]@{
             ActiveGuid = $activeGuid
