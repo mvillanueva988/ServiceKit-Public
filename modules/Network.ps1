@@ -48,43 +48,82 @@ function Optimize-Network {
         # Normalizar GUID del adaptador para comparación con NetCfgInstanceId del Registro
         [string] $adapterGuid = ($adapter.InterfaceGuid -replace '[{}]', '').ToLower()
 
+        # StrictMode-safe: PSObject.Properties[] retorna $null cuando la prop no existe,
+        # en lugar de tirar PropertyNotFoundException como hace el acceso directo.
         $matchedKey = $nicSubKeys | Where-Object {
-            $cfgId = (Get-ItemProperty -Path $_.PSPath -Name 'NetCfgInstanceId' -ErrorAction SilentlyContinue).NetCfgInstanceId
-            $cfgId -and ($cfgId -replace '[{}]', '').ToLower() -eq $adapterGuid
+            $itemProps = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+            if ($null -eq $itemProps) { return $false }
+            if ($null -eq $itemProps.PSObject.Properties['NetCfgInstanceId']) { return $false }
+            [string] $cfgId = [string] $itemProps.NetCfgInstanceId
+            if ([string]::IsNullOrWhiteSpace($cfgId)) { return $false }
+            return (($cfgId -replace '[{}]', '').ToLower() -eq $adapterGuid)
         } | Select-Object -First 1
 
-        if ($matchedKey) {
-            [int] $changesMade = 0
-            foreach ($prop in $powerProps) {
-                $regVal = Get-ItemProperty -Path $matchedKey.PSPath -Name $prop -ErrorAction SilentlyContinue
-                if ($null -ne $regVal -and $null -ne $regVal.$prop) {
-                    Set-ItemProperty -Path $matchedKey.PSPath -Name $prop -Value '0' -ErrorAction SilentlyContinue
-                    # Verificar que el cambio tomó efecto
-                    $verify = Get-ItemProperty -Path $matchedKey.PSPath -Name $prop -ErrorAction SilentlyContinue
-                    if ($null -ne $verify -and $verify.$prop -eq '0') {
-                        $changesMade++
-                    }
-                }
-            }
-            $optimized.Add([PSCustomObject]@{ Name = $adapter.Name; ChangesMade = $changesMade })
-        } else {
+        if ($null -eq $matchedKey) {
             $optimized.Add([PSCustomObject]@{ Name = $adapter.Name; ChangesMade = 0 })
+            continue
         }
+
+        [int] $changesMade = 0
+        foreach ($prop in $powerProps) {
+            $regVal = Get-ItemProperty -Path $matchedKey.PSPath -Name $prop -ErrorAction SilentlyContinue
+            if ($null -eq $regVal) { continue }
+            if ($null -eq $regVal.PSObject.Properties[$prop]) { continue }
+
+            Set-ItemProperty -Path $matchedKey.PSPath -Name $prop -Value '0' -ErrorAction SilentlyContinue
+
+            $verify = Get-ItemProperty -Path $matchedKey.PSPath -Name $prop -ErrorAction SilentlyContinue
+            if ($null -ne $verify -and
+                $null -ne $verify.PSObject.Properties[$prop] -and
+                "$($verify.$prop)" -eq '0') {
+                $changesMade++
+            }
+        }
+
+        $optimized.Add([PSCustomObject]@{ Name = $adapter.Name; ChangesMade = $changesMade })
     }
 
     # -- 3. Comandos globales de red --
-    try {
+    # autotuning=normal ya es default en Win10 22H2+ — skip si ya está aplicado.
+    # fastopen=enabled no es válido para 'set global' en varios builds de Win11 24H2 —
+    # detectar el fallo via $LASTEXITCODE en lugar de catch genérico que ocultaba todo.
+    [System.Collections.Generic.List[string]] $netshIssues = [System.Collections.Generic.List[string]]::new()
+
+    # autotuning: leer valor actual via cmdlet preferida (no tira si está disponible)
+    [string] $currentAutotuning = ''
+    $tcpSettings = Get-NetTCPSetting -ErrorAction SilentlyContinue |
+        Where-Object { $_.SettingName -eq 'Internet' } |
+        Select-Object -First 1
+    if ($null -eq $tcpSettings) {
+        $tcpSettings = Get-NetTCPSetting -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if ($null -ne $tcpSettings -and
+        $null -ne $tcpSettings.PSObject.Properties['AutoTuningLevelLocal']) {
+        $currentAutotuning = [string] $tcpSettings.AutoTuningLevelLocal
+    }
+
+    if ($currentAutotuning -ine 'normal') {
         $null = & netsh int tcp set global autotuninglevel=normal 2>&1
-        $null = & netsh int tcp set global fastopen=enabled       2>&1
-        $null = & ipconfig /flushdns                              2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $netshIssues.Add("autotuninglevel=normal: exit code $LASTEXITCODE")
+            $overallSuccess = $false
+        }
     }
-    catch {
-        $overallSuccess = $false
+
+    # fastopen: en muchos builds 24H2 el comando rechaza fastopen como 'set global'.
+    # Lo intentamos best-effort: si falla, no marcamos failure global (es nice-to-have).
+    $fastOpenOut = & netsh int tcp set global fastopen=enabled 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $netshIssues.Add("fastopen=enabled no disponible en este build (no-op)")
     }
+
+    # flushdns es seguro siempre
+    $null = & ipconfig /flushdns 2>&1
 
     return [PSCustomObject]@{
         AdaptersOptimized = [PSCustomObject[]] $optimized.ToArray()
         Success           = [bool] $overallSuccess
+        NetshIssues       = [string[]] $netshIssues.ToArray()
     }
 }
 
