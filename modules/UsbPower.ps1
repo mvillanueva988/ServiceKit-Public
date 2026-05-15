@@ -27,15 +27,21 @@ function Get-UsbSelectiveSuspendStatus {
     [bool] $hidden = $true
     [Nullable[int]] $regGlobal = $null
 
-    # Parsear `powercfg /query SCHEME_CURRENT <subgroup> <setting>` para AC y DC
+    # Parsear `powercfg /query SCHEME_CURRENT <subgroup> <setting>` para AC y DC.
+    # El output varia por locale:
+    #   en-US: "Current AC Power Setting Index: 0x00000000"
+    #          "Current DC Power Setting Index: 0x00000001"
+    #   es-AR: "Índice de configuración de corriente alterna actual: 0x00000000"
+    #          "Índice de configuración de corriente continua actual: 0x00000001"
+    #   pt-BR: "Índice da Configuração de Energia CA Atual: 0x00000000"
+    # Regex permisivo que matchea por marcadores: 'AC'/'corriente alterna' para
+    # AC y 'DC'/'corriente continua' para DC, con o sin tildes.
     try {
         [string] $qOut = (& powercfg /query SCHEME_CURRENT $script:UsbSubgroupGuid $script:UsbSuspendGuid 2>&1) -join "`n"
-        if ($qOut -match 'Indice de valor de configuracion de CA actual:\s*0x([0-9a-fA-F]+)' -or
-            $qOut -match 'Current AC Power Setting Index:\s*0x([0-9a-fA-F]+)') {
+        if ($qOut -match '(?im)^[^\r\n]*(?:\bAC\b|corriente alterna|Energia CA|Energ.a CA)[^\r\n]*:\s*0x([0-9a-fA-F]+)') {
             $acIdx = [int]("0x$($Matches[1])")
         }
-        if ($qOut -match 'Indice de valor de configuracion de CC actual:\s*0x([0-9a-fA-F]+)' -or
-            $qOut -match 'Current DC Power Setting Index:\s*0x([0-9a-fA-F]+)') {
+        if ($qOut -match '(?im)^[^\r\n]*(?:\bDC\b|corriente continua|Energia CC|Energ.a CC)[^\r\n]*:\s*0x([0-9a-fA-F]+)') {
             $dcIdx = [int]("0x$($Matches[1])")
         }
         # Si powercfg /query devuelve datos, el setting NO está oculto.
