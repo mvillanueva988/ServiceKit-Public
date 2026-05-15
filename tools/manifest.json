@@ -1,6 +1,6 @@
 {
-    "version": 4,
-    "comment": "Cada herramienta define su URL oficial de descarga. SHA-256 vacio = URL apunta a 'latest' sin version fija (Sysinternals, O&O, etc.) — hash no verificable. Ejecutar Bootstrap-Tools.ps1 para descargar.",
+    "version": 5,
+    "comment": "Cada herramienta declara updatePolicy: 'latest' (URL siempre devuelve la última, sin SHA), 'latest-html' (URL devuelve página HTML que Bootstrap parsea para encontrar el descargable real), o 'pinned' (versión específica con SHA-256 verificable). Para entries pinned, 'checkUpdate' apunta a una URL/API que el script tools\\Check-ToolUpdates.ps1 puede consultar para detectar nuevas versiones.",
     "categories": {
         "arranque":    "Herramientas de diagnostico y gestion de arranque del sistema",
         "privacidad":  "Tweaks de privacidad y telemetria de Windows",
@@ -21,6 +21,7 @@
             "filename": "Autoruns.exe",
             "launchExe": "Autoruns.exe",
             "url": "https://live.sysinternals.com/Autoruns.exe",
+            "updatePolicy": "latest",
             "approxSizeMB": 2,
             "sha256": ""
         },
@@ -31,7 +32,8 @@
             "filename": "autorunsc.exe",
             "launchExe": "autorunsc.exe",
             "url": "https://live.sysinternals.com/autorunsc.exe",
-            "approxSizeMB": 0.5,
+            "updatePolicy": "latest",
+            "approxSizeMB": 1,
             "sha256": ""
         },
         {
@@ -41,6 +43,7 @@
             "filename": "OOSU10.exe",
             "launchExe": "OOSU10.exe",
             "url": "https://dl5.oo-software.com/files/ooshutup10/OOSU10.exe",
+            "updatePolicy": "latest",
             "approxSizeMB": 2,
             "sha256": ""
         },
@@ -52,8 +55,11 @@
             "launchExe": "BCUninstaller\\BCUninstaller.exe",
             "type": "zip",
             "extractDir": "BCUninstaller",
-            "url": "https://github.com/Klocman/Bulk-Crap-Uninstaller/releases/download/v5.7/BCUninstaller_5.7_portable.zip",
-            "approxSizeMB": 35,
+            "url": "https://github.com/Klocman/Bulk-Crap-Uninstaller/releases/download/v6.1/BCUninstaller_6.1.0.1_portable.zip",
+            "updatePolicy": "pinned",
+            "version": "6.1.0.1",
+            "checkUpdate": "https://api.github.com/repos/Klocman/Bulk-Crap-Uninstaller/releases/latest",
+            "approxSizeMB": 77,
             "sha256": ""
         },
         {
@@ -63,6 +69,7 @@
             "filename": "Procmon.exe",
             "launchExe": "Procmon.exe",
             "url": "https://live.sysinternals.com/Procmon.exe",
+            "updatePolicy": "latest",
             "approxSizeMB": 4,
             "sha256": ""
         },
@@ -73,7 +80,8 @@
             "filename": "procexp.exe",
             "launchExe": "procexp.exe",
             "url": "https://live.sysinternals.com/procexp.exe",
-            "approxSizeMB": 3,
+            "updatePolicy": "latest",
+            "approxSizeMB": 5,
             "sha256": ""
         },
         {
@@ -83,6 +91,7 @@
             "filename": "Tcpview.exe",
             "launchExe": "Tcpview.exe",
             "url": "https://live.sysinternals.com/Tcpview.exe",
+            "updatePolicy": "latest",
             "approxSizeMB": 1,
             "sha256": ""
         },
@@ -95,6 +104,7 @@
             "type": "zip",
             "extractDir": "CrystalDiskInfo",
             "url": "https://sourceforge.net/projects/crystaldiskinfo/files/latest/download",
+            "updatePolicy": "latest-html",
             "approxSizeMB": 6,
             "sha256": ""
         },
@@ -107,6 +117,7 @@
             "type": "zip",
             "extractDir": "CrystalDiskMark",
             "url": "https://sourceforge.net/projects/crystaldiskmark/files/latest/download",
+            "updatePolicy": "latest-html",
             "approxSizeMB": 5,
             "sha256": ""
         },
@@ -118,8 +129,12 @@
             "launchExe": "WizTree\\WizTree64.exe",
             "type": "zip",
             "extractDir": "WizTree",
-            "url": "https://diskanalyzer.com/files/wiztree_4_30_portable.zip",
-            "approxSizeMB": 3,
+            "url": "https://diskanalyzer.com/files/wiztree_4_31_portable.zip",
+            "updatePolicy": "pinned",
+            "version": "4.31",
+            "checkUpdate": "https://diskanalyzer.com/download",
+            "versionPattern": "wiztree_(\\d+)_(\\d+)_portable\\.zip",
+            "approxSizeMB": 8,
             "sha256": ""
         },
         {
@@ -131,6 +146,7 @@
             "type": "zip",
             "extractDir": "HWiNFO64",
             "url": "https://sourceforge.net/projects/hwinfo/files/latest/download",
+            "updatePolicy": "latest-html",
             "approxSizeMB": 10,
             "sha256": ""
         },
@@ -142,8 +158,12 @@
             "launchExe": "CPU-Z\\cpuz_x64.exe",
             "type": "zip",
             "extractDir": "CPU-Z",
-            "url": "https://download.cpuid.com/cpu-z/cpu-z_2.16-en.zip",
-            "approxSizeMB": 3,
+            "url": "https://download.cpuid.com/cpu-z/cpu-z_2.20-en.zip",
+            "updatePolicy": "pinned",
+            "version": "2.20",
+            "checkUpdate": "https://www.cpuid.com/softwares/cpu-z.html",
+            "versionPattern": "cpu-z_(\\d+\\.\\d+)-en\\.zip",
+            "approxSizeMB": 6,
             "sha256": ""
         },
         {
@@ -155,6 +175,7 @@
             "type": "zip",
             "extractDir": "DDU",
             "url": "https://sourceforge.net/projects/display-driver-uninstaller/files/latest/download",
+            "updatePolicy": "latest-html",
             "approxSizeMB": 9,
             "sha256": ""
         },
@@ -166,8 +187,12 @@
             "launchExe": "BleachBit\\bleachbit.exe",
             "type": "zip",
             "extractDir": "BleachBit",
-            "url": "https://download.bleachbit.org/BleachBit-4.6.2-portable.zip",
-            "approxSizeMB": 18,
+            "url": "https://download.bleachbit.org/BleachBit-6.0.0-portable.zip",
+            "updatePolicy": "pinned",
+            "version": "6.0.0",
+            "checkUpdate": "https://www.bleachbit.org/download/windows",
+            "versionPattern": "BleachBit-(\\d+\\.\\d+\\.\\d+)-portable\\.zip",
+            "approxSizeMB": 22,
             "sha256": ""
         },
         {
@@ -177,7 +202,8 @@
             "filename": "winutil.ps1",
             "launchExe": "winutil.ps1",
             "url": "https://christitus.com/win",
-            "approxSizeMB": 5,
+            "updatePolicy": "latest",
+            "approxSizeMB": 1,
             "sha256": ""
         },
         {
@@ -187,6 +213,8 @@
             "filename": "winslop.exe",
             "launchExe": "winslop.exe",
             "url": "",
+            "updatePolicy": "pinned",
+            "version": "",
             "approxSizeMB": 50,
             "sha256": ""
         },
@@ -196,17 +224,24 @@
             "description": "Resplendence LatencyMon - mide ISR/DPC latency por driver. Indispensable para diagnosticar audio/video stutter, freeze de cursor en mouse 2.4GHz, y cuellos de botella de drivers (ndis/dxgkrnl/wdf01000/usbport). Doc 1 §1.3 lo nombra como herramienta forense primaria.",
             "filename": "LatencyMon.exe",
             "launchExe": "LatencyMon.exe",
-            "url": "https://www.resplendence.com/downloads/LatencyMon.exe",
-            "approxSizeMB": 1,
+            "url": "https://www.resplendence.com/download/LatencyMon.exe",
+            "updatePolicy": "latest",
+            "approxSizeMB": 4,
             "sha256": ""
         },
         {
             "name": "timerresolution",
             "category": "diagnostico",
-            "description": "TimerResolution (lucasg) - fuerza la resolucion del timer del kernel a 0.5ms para reducir jitter en aplicaciones de latencia critica. Util para CS2 cuando los 1% lows se ven afectados por timer wakeup variable.",
-            "filename": "SetTimerResolution.exe",
+            "description": "Lucas Hale TimerResolution V1.2 - fuerza la resolucion del timer del kernel a 0.5ms para reducir jitter en aplicaciones de latencia critica. Util para CS2 cuando los 1% lows se ven afectados por timer wakeup variable. ZIP de ~7KB que contiene SetTimerResolution.exe",
+            "filename": "TimerResolution.zip",
             "launchExe": "SetTimerResolution.exe",
-            "url": "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/clans/3954447/cea2cc2ddd9ec6f02aa46fdcabf24cb20bd0e2c8.zip",
+            "type": "zip",
+            "extractDir": "TimerResolution",
+            "url": "https://lucashale.com/TimerResolution-V1.2.zip",
+            "updatePolicy": "pinned",
+            "version": "1.2",
+            "checkUpdate": "https://www.lucashale.com/timer-resolution/",
+            "versionPattern": "TimerResolution-V(\\d+\\.\\d+)\\.zip",
             "approxSizeMB": 1,
             "sha256": ""
         },
@@ -219,6 +254,7 @@
             "type": "zip",
             "extractDir": "nvidiaProfileInspector",
             "url": "https://github.com/Orbmu2k/nvidiaProfileInspector/releases/latest/download/nvidiaProfileInspector.zip",
+            "updatePolicy": "latest",
             "approxSizeMB": 2,
             "sha256": ""
         }
