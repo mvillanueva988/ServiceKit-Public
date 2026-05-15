@@ -145,7 +145,7 @@ function Get-AutoProfilePreviewLines {
 
     [bool] $useOosu = $false
     if (-not [string]::IsNullOrWhiteSpace($oosuCfg)) {
-        [string] $cfgPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'data\oosu10-profiles' $oosuCfg
+        [string] $cfgPath = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'data\oosu10-profiles') $oosuCfg
         $useOosu = (Test-ShutUp10Available) -and (Test-Path $cfgPath)
     }
     [string] $privRoute = if ($useOosu) { "OOSU10 ($oosuCfg)" } else { "nativo ($privLevel)" }
@@ -204,7 +204,7 @@ function Invoke-ProfilePrivacyStep {
     [bool]   $useOosu = $false
     [string] $cfgPath = ''
     if (-not [string]::IsNullOrWhiteSpace($oosuCfg)) {
-        $cfgPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'data\oosu10-profiles' $oosuCfg
+        $cfgPath = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'data\oosu10-profiles') $oosuCfg
         $useOosu = (Test-ShutUp10Available) -and (Test-Path $cfgPath)
     }
 
