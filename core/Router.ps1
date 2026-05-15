@@ -576,14 +576,49 @@ function Invoke-ActionRestorePoint {
     $job = Start-RestorePointProcess
     $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180)[0]
     if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'RestorePoint' -Status 'Failed'; return }
+
     if ($r.Success) {
         Write-Host ('  [OK] {0}' -f $r.Message) -ForegroundColor Green
-        Write-ActionAudit -Action 'RestorePoint' -Status 'Success' -Summary $r.Message
-    } else {
-        [string] $msg = if ($r.PSObject.Properties['Reason']) { $r.Reason } else { $r.Message }
-        Write-Host ('  [!] {0}' -f $msg) -ForegroundColor Yellow
-        Write-ActionAudit -Action 'RestorePoint' -Status 'Failed' -Summary $msg
+        if ($r.Bypassed) {
+            Write-Host '  (Cooldown bypaseado via registry temporal)' -ForegroundColor DarkGray
+        }
+        Write-ActionAudit -Action 'RestorePoint' -Status 'Success' -Summary $r.Message -Details $r
+        return
     }
+
+    # Caso cooldown: mostrar info del RP existente y ofrecer bypass.
+    if ($r.PSObject.Properties['CooldownActive'] -and $r.CooldownActive -and $null -ne $r.LatestRp) {
+        Write-Host ('  [!] Cooldown activo: ya hay un RP reciente.') -ForegroundColor Yellow
+        Write-Host ('       Ultimo RP: "{0}" creado hace {1} horas (SequenceNumber={2})' -f $r.LatestRp.Description, $r.LatestRp.HoursAgo, $r.LatestRp.SequenceNumber) -ForegroundColor DarkGray
+        Write-Host ('       CreationTime: {0}' -f $r.LatestRp.CreationTime) -ForegroundColor DarkGray
+        Write-Host ''
+        if (Confirm-Action -Title 'Forzar creacion de RP nuevo? (bypass cooldown via registry temporal)' -Lines @(
+            'Va a modificar HKLM\...\SystemRestore\SystemRestorePointCreationFrequency=0 temporalmente',
+            'Despues de crear el RP, el registry se restaura al valor previo',
+            'El RP existente queda intacto, se suma uno nuevo'
+        ) -DefaultYes $false) {
+            Write-Host '  Forzando nuevo RP...' -ForegroundColor Cyan
+            $bypassJob = Start-RestorePointProcess -BypassCooldown
+            $r2 = (Wait-ToolkitJobs -Jobs @($bypassJob) -TimeoutSeconds 180)[0]
+            if ($null -ne $r2 -and $r2.Success) {
+                Write-Host ('  [OK] {0}  (bypass aplicado)' -f $r2.Message) -ForegroundColor Green
+                Write-ActionAudit -Action 'RestorePoint' -Status 'Success' -Summary 'Created with bypass' -Details $r2
+            } else {
+                [string] $em = if ($null -ne $r2) { $r2.Message } else { 'sin resultado' }
+                Write-Host ('  [!] Bypass fallo: {0}' -f $em) -ForegroundColor Yellow
+                Write-ActionAudit -Action 'RestorePoint' -Status 'Failed' -Summary ('Bypass failed: ' + $em)
+            }
+        } else {
+            Write-Host '  OK, te quedas con el RP existente como fallback.' -ForegroundColor DarkGray
+            Write-ActionAudit -Action 'RestorePoint' -Status 'Cancelled' -Summary 'Cooldown - operator kept existing RP' -Details $r
+        }
+        return
+    }
+
+    # Cualquier otro fallo (System Restore disabled, etc.)
+    [string] $msg = if ($r.PSObject.Properties['Reason']) { $r.Reason } else { $r.Message }
+    Write-Host ('  [!] {0}' -f $msg) -ForegroundColor Yellow
+    Write-ActionAudit -Action 'RestorePoint' -Status 'Failed' -Summary $msg
 }
 
 function Invoke-ActionNetwork {
