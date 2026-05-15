@@ -1,5 +1,45 @@
 ﻿Set-StrictMode -Version Latest
 
+# ─── Confirm-Action (preview + S/n prompt centralizado) ──────────────────────
+function Confirm-Action {
+    <#
+    .SYNOPSIS
+        Imprime un preview de lo que la accion va a hacer y pide confirmacion.
+        Retorna $true si el operador confirma, $false si cancela.
+
+        Default es 'S' — Enter sin escribir nada = confirmar. Para no-default
+        pasar -DefaultYes:$false. El prompt usa [S/n] o [s/N] segun.
+
+    .EXAMPLE
+        if (-not (Confirm-Action -Title 'Aplicar perfil Balanced?' -Lines @(
+            'Visuales: 9 toggles',
+            'PowerPlan: Balanced (previo: Ultimate Performance)',
+            'Tweaks: hibernacion off, SvcHost, shutdown timeout, Game DVR off'
+        ))) { return }
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [string] $Title,
+        [Parameter()] [string[]] $Lines = @(),
+        [Parameter()] [bool] $DefaultYes = $true
+    )
+
+    Write-Host ''
+    Write-Host ('  {0}' -f $Title) -ForegroundColor Cyan
+    foreach ($l in $Lines) {
+        Write-Host ('    - {0}' -f $l) -ForegroundColor DarkGray
+    }
+    [string] $defaultLabel = if ($DefaultYes) { '[S/n]' } else { '[s/N]' }
+    [string] $ans = (Read-Host ('  Confirmar? ' + $defaultLabel)).Trim().ToUpperInvariant()
+
+    if ($DefaultYes) {
+        return ([string]::IsNullOrEmpty($ans) -or $ans -eq 'S' -or $ans -eq 'SI' -or $ans -eq 'Y' -or $ans -eq 'YES')
+    } else {
+        return ($ans -eq 'S' -or $ans -eq 'SI' -or $ans -eq 'Y' -or $ans -eq 'YES')
+    }
+}
+
 # ─── Write-ActionAudit (helper centralizado) ──────────────────────────────────
 function Write-ActionAudit {
     <#
@@ -438,6 +478,22 @@ function Invoke-ActionDebloat {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+
+    [string[]] $bloatList = @(
+        'XblAuthManager', 'XblGameSave', 'XboxNetApiSvc', 'XboxGipSvc',
+        'Spooler (cola de impresion)', 'PrintNotify', 'Fax', 'WMPNetworkSvc',
+        'RemoteRegistry', 'RemoteAccess', 'DiagTrack (telemetria)', 'dmwappushservice'
+    )
+    if (-not (Confirm-Action -Title 'Aplicar Debloat: deshabilitar 12 servicios bloat?' -Lines @(
+        ($bloatList -join ', '),
+        'Reversible: Set-Service -Name <X> -StartupType Automatic; Start-Service <X>',
+        'OJO con Spooler/PrintNotify si imprimis desde esta PC.'
+    ))) {
+        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'Debloat' -Status 'Cancelled'
+        return
+    }
+
     Write-ActionAudit -Action 'Debloat' -Status 'Started'
     Write-Host '  Deshabilitando servicios bloat...' -ForegroundColor Cyan
     $job = Start-DebloatProcess
@@ -552,6 +608,24 @@ function Invoke-ActionNetwork {
         return
     }
     if ($sub -eq 'O') {
+        # Listar adapters fisicos detectados para preview
+        [string[]] $eligible = @(
+            Get-NetAdapter -ErrorAction SilentlyContinue |
+                Where-Object { $_.Status -eq 'Up' -and $_.PhysicalMediaType -in @('802.3', 'Native 802.11') } |
+                ForEach-Object { ('{0} ({1})' -f $_.Name, $_.PhysicalMediaType) }
+        )
+        [string[]] $previewLines = @(
+            ('Adapters fisicos activos: {0}' -f $(if ($eligible.Count -gt 0) { $eligible -join ', ' } else { '(ninguno detectado)' })),
+            'Va a deshabilitar en cada adapter (si aplica): EEE, Green Ethernet, PowerSavingMode, EnablePME, ULPMode',
+            'TCP global: autotuninglevel=normal (skip si ya es normal), fastopen=enabled (best-effort)',
+            'ipconfig /flushdns',
+            'Reversible manual: Device Manager > adapter > Advanced/Power Management.'
+        )
+        if (-not (Confirm-Action -Title 'Aplicar Network Optimize?' -Lines $previewLines)) {
+            Write-Host '  Cancelado.' -ForegroundColor DarkGray
+            Write-ActionAudit -Action 'Network.Optimize' -Status 'Cancelled'
+            return
+        }
         Write-ActionAudit -Action 'Network.Optimize' -Status 'Started'
         Write-Host '  Optimizando red (NIC power props + TCP global)...' -ForegroundColor Cyan
         $job = Start-NetworkProcess
@@ -590,13 +664,49 @@ function Invoke-ActionPerformance {
     }
     if ([string]::IsNullOrWhiteSpace($vp)) { Write-Host '  Opcion invalida o cancelada.' -ForegroundColor DarkGray; return }
 
+    # Mostrar plan de energia actual ANTES de tocar nada — el usuario lo necesita para revertir si no le gusta.
+    [string] $currentPlanLabel = '(desconocido)'
+    try {
+        [string] $activeOut = (& powercfg /getactivescheme 2>&1) -join "`n"
+        if ($activeOut -match ':\s*([0-9a-f-]{36})\s*\(([^)]+)\)') {
+            $currentPlanLabel = ('{0}  (GUID: {1})' -f $Matches[2].Trim(), $Matches[1])
+        }
+    } catch { }
+
+    [string] $targetPlanHint = if ($MachineProfile.IsLaptop) { 'Balanced (laptop con TDP locked)' } else { 'Ultimate Performance o High Performance (desktop)' }
+    [string[]] $visualsDescription = switch ($vp) {
+        'Balanced'   { @('Deshabilita animaciones, sombras, transparencias. Conserva ClearType, thumbnails, drag-fullwindow.') }
+        'Full'       { @('Max Performance: TODO el efecto visual off. Equivale a "Adjust for best performance".') }
+        'Restore'    { @('Restaura visuales a Windows defaults (efectos activos).') }
+        'TweaksOnly' { @('NO toca visuales. Solo aplica system tweaks + power plan.') }
+    }
+
+    if (-not (Confirm-Action -Title ('Aplicar perfil Performance: {0}?' -f $vp) -Lines @(
+        ('Plan de energia actual: {0}' -f $currentPlanLabel),
+        ('Plan de energia objetivo: {0}' -f $targetPlanHint),
+        ('Visuales: ' + ($visualsDescription -join ' / ')),
+        'System tweaks: hibernacion off, SvcHost (si RAM<=8GB), shutdown timeout 2000ms, Game DVR off',
+        'Reversible: re-correr con [R]estore para volver a defaults.',
+        'Plan de energia previo se imprime al terminar (anotalo).'
+    ))) {
+        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'Performance' -Status 'Cancelled' -Summary $vp
+        return
+    }
+
     Write-ActionAudit -Action 'Performance' -Status 'Started' -Summary ('Profile={0}' -f $vp)
     Write-Host ('  Aplicando perfil {0} + power plan + system tweaks...' -f $vp) -ForegroundColor Cyan
     $job = Start-PerformanceProcess -VisualProfile $vp
     $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
     if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Performance' -Status 'Failed'; return }
     if ($null -ne $r.Visuals)    { Write-Host ('  Visuales:  Success={0}  Applied={1}' -f $r.Visuals.Success, $r.Visuals.Applied.Count) }
-    if ($null -ne $r.PowerPlan)  { Write-Host ('  PowerPlan: {0}  ({1})' -f $r.PowerPlan.PlanName, $r.PowerPlan.Reason) }
+    if ($null -ne $r.PowerPlan)  {
+        Write-Host ('  PowerPlan: {0}  ({1})' -f $r.PowerPlan.PlanName, $r.PowerPlan.Reason)
+        if (-not [string]::IsNullOrWhiteSpace($r.PowerPlan.PreviousName)) {
+            Write-Host ('             Plan previo: {0}  (GUID: {1})' -f $r.PowerPlan.PreviousName, $r.PowerPlan.PreviousGuid) -ForegroundColor DarkGray
+            Write-Host ('             Para revertir: powercfg /setactive {0}' -f $r.PowerPlan.PreviousGuid) -ForegroundColor DarkGray
+        }
+    }
     if ($null -ne $r.Tweaks)     { Write-Host ('  Tweaks:    Success={0}  Applied={1}' -f $r.Tweaks.Success, $r.Tweaks.Applied.Count) }
     Write-ActionAudit -Action 'Performance' -Status 'Success' -Summary $vp -Details $r
 }
@@ -666,6 +776,46 @@ function Invoke-ActionPrivacy {
         default { '' }
     }
     if ([string]::IsNullOrWhiteSpace($profile)) { return }
+
+    [string[]] $profileDescription = switch ($profile) {
+        'Basic' {
+            @(
+                'Telemetria (AllowTelemetry=0)',
+                'Advertising ID off',
+                'Bing en busqueda de inicio off',
+                'Cortana consent off',
+                'Feedback de Windows off',
+                'Activity Feed off'
+            )
+        }
+        'Medium' {
+            @(
+                'Todos los Basic',
+                'Ubicacion global del sistema off',
+                'Experiencias personalizadas con telemetria off',
+                'Sugerencias en panel Inicio off',
+                'Apps silenciosas instaladas por Microsoft off',
+                'Actualizacion automatica de mapas off'
+            )
+        }
+        'Aggressive' {
+            @(
+                'Todos los Medium',
+                'OneDrive sync DESHABILITADO (policy) — OJO si usas OneDrive!',
+                'Edge Startup Boost off',
+                'Edge background mode off',
+                'Consumer features de Windows off',
+                'Tips y sugerencias de apps off',
+                'Windows Error Reporting off'
+            )
+        }
+    }
+    if (-not (Confirm-Action -Title ('Aplicar Privacy: perfil {0}?' -f $profile) -Lines $profileDescription)) {
+        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'Privacy.Apply' -Status 'Cancelled' -Summary $profile
+        return
+    }
+
     Write-ActionAudit -Action 'Privacy.Apply' -Status 'Started' -Summary ('Profile={0}' -f $profile)
     Write-Host ('  Aplicando perfil {0} (registry tweaks)...' -f $profile) -ForegroundColor Cyan
     $job = Start-PrivacyJob -Profile $profile

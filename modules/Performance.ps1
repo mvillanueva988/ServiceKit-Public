@@ -301,6 +301,18 @@ function Set-UltimatePowerPlan {
     [string] $highPerfGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
     [string] $ultimateGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
 
+    # Capturar el plan activo ANTES de cambiar nada, para que el caller pueda
+    # mostrarlo en el preview y registrarlo en el audit log para revertir.
+    [string] $previousGuid = ''
+    [string] $previousName = ''
+    try {
+        [string] $activeOut = (& powercfg /getactivescheme 2>&1) -join "`n"
+        if ($activeOut -match ':\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*\(([^)]+)\)') {
+            $previousGuid = $Matches[1]
+            $previousName = $Matches[2].Trim()
+        }
+    } catch { }
+
     # -- Resolver form factor --------------------------------------------------
     [bool] $isLaptopResolved = $false
     if ($null -ne $IsLaptop) {
@@ -323,11 +335,13 @@ function Set-UltimatePowerPlan {
         & powercfg /setactive $balancedGuid 2>&1 | Out-Null
         [bool] $applied = ($LASTEXITCODE -eq 0)
         return [PSCustomObject]@{
-            Success  = $applied
-            PlanName = if ($applied) { 'Balanced (laptop)' } else { 'Balanced (intento fallido)' }
-            PlanGuid = $balancedGuid
-            Reason   = 'Laptop detectado: Ultimate Performance fuerza Min proc state alto y empeora throttle termico con TDP locked. Balanced afinado es la palanca correcta.'
-            Skipped  = $false
+            Success      = $applied
+            PlanName     = if ($applied) { 'Balanced (laptop)' } else { 'Balanced (intento fallido)' }
+            PlanGuid     = $balancedGuid
+            PreviousGuid = $previousGuid
+            PreviousName = $previousName
+            Reason       = 'Laptop detectado: Ultimate Performance fuerza Min proc state alto y empeora throttle termico con TDP locked. Balanced afinado es la palanca correcta.'
+            Skipped      = $false
         }
     }
 
@@ -346,31 +360,37 @@ function Set-UltimatePowerPlan {
             & powercfg /setactive $ultimateGuid 2>&1 | Out-Null
             [bool] $okU = ($LASTEXITCODE -eq 0)
             return [PSCustomObject]@{
-                Success  = $okU
-                PlanName = 'Ultimate Performance'
-                PlanGuid = $ultimateGuid
-                Reason   = 'Desktop detectado: cooling dedicado tolera Ultimate Performance.'
-                Skipped  = $false
+                Success      = $okU
+                PlanName     = 'Ultimate Performance'
+                PlanGuid     = $ultimateGuid
+                PreviousGuid = $previousGuid
+                PreviousName = $previousName
+                Reason       = 'Desktop detectado: cooling dedicado tolera Ultimate Performance.'
+                Skipped      = $false
             }
         }
 
         # Fallback: High Performance (siempre disponible)
         & powercfg /setactive $highPerfGuid 2>&1 | Out-Null
         return [PSCustomObject]@{
-            Success  = ($LASTEXITCODE -eq 0)
-            PlanName = 'High Performance'
-            PlanGuid = $highPerfGuid
-            Reason   = 'Desktop detectado, Ultimate Performance no disponible en esta edicion de Windows.'
-            Skipped  = $false
+            Success      = ($LASTEXITCODE -eq 0)
+            PlanName     = 'High Performance'
+            PlanGuid     = $highPerfGuid
+            PreviousGuid = $previousGuid
+            PreviousName = $previousName
+            Reason       = 'Desktop detectado, Ultimate Performance no disponible en esta edicion de Windows.'
+            Skipped      = $false
         }
     }
     catch {
         return [PSCustomObject]@{
-            Success  = $false
-            PlanName = "Error: $($_.Exception.Message)"
-            PlanGuid = ''
-            Reason   = $_.Exception.Message
-            Skipped  = $false
+            Success      = $false
+            PlanName     = "Error: $($_.Exception.Message)"
+            PlanGuid     = ''
+            PreviousGuid = $previousGuid
+            PreviousName = $previousName
+            Reason       = $_.Exception.Message
+            Skipped      = $false
         }
     }
 }
