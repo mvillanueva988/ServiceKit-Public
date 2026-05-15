@@ -168,3 +168,177 @@ function Open-ShutUp10 {
         return [PSCustomObject]@{ Success = $false; Error = $_.Exception.Message; Path = $exePath }
     }
 }
+
+# --- Add-WslDefenderExclusions -----------------------------------------------
+function Add-WslDefenderExclusions {
+    <#
+    .SYNOPSIS
+        Agrega exclusiones de Defender para WSL2 + Docker Desktop + VS Code.
+        Doc 1 sec 1.11 documenta que el scan sincronico de Defender sobre
+        archivos del LXSS (donde vive el rootfs de Ubuntu/Docker) es la
+        causa #1 de slowness en flujos de desarrollo con WSL2: cada open
+        de archivo dispara una inspeccion AV que bloquea el syscall.
+
+        Excluye:
+          - Paths del LXSS: cualquier CanonicalGroupLimited.Ubuntu* en LocalAppData
+          - Path de Docker Desktop: LocalAppData\Docker
+          - Procesos: vmmemWSL.exe, wsl.exe, wslservice.exe, Code.exe
+          - Opcional: Steam si se pasa -IncludeSteam
+
+        Tamper Protection se mantiene ON. Add-MpPreference no requiere
+        apagarla mientras el caller sea admin local.
+
+        Si Defender no esta disponible (ej. AV de terceros), no hace nada
+        y reporta Skipped.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [switch] $IncludeSteam,
+
+        [Parameter()]
+        [string] $SteamPath = 'C:\Program Files (x86)\Steam'
+    )
+
+    # ¿Defender disponible? Si Get-MpPreference falla, asumimos AV de terceros activo.
+    try {
+        $null = Get-MpPreference -ErrorAction Stop
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success = $true
+            Skipped = $true
+            Reason  = 'Get-MpPreference no disponible (probablemente AV de terceros activo). No se aplican exclusiones de Defender.'
+            Applied = @()
+            Errors  = @()
+        }
+    }
+
+    [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
+
+    # Resolver paths LXSS (puede haber varios distros — Ubuntu, Ubuntu-22.04, kali, debian, etc.)
+    [string[]] $lxssPaths = @()
+    [string] $localPkgs = Join-Path $env:LOCALAPPDATA 'Packages'
+    if (Test-Path $localPkgs) {
+        $lxssPaths = @(
+            Get-ChildItem -Path $localPkgs -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match 'CanonicalGroupLimited\.|TheDebianProject\.|KaliLinux\.|whitewaterfoundry\.|46932SUSE\.|Fedora' } |
+                Select-Object -ExpandProperty FullName
+        )
+    }
+    [string] $dockerPath = Join-Path $env:LOCALAPPDATA 'Docker'
+
+    foreach ($p in $lxssPaths) {
+        try {
+            Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+            $applied.Add("Path: $p")
+        }
+        catch { $errors.Add("Path $p : $($_.Exception.Message)") }
+    }
+
+    if (Test-Path $dockerPath) {
+        try {
+            Add-MpPreference -ExclusionPath $dockerPath -ErrorAction Stop
+            $applied.Add("Path: $dockerPath")
+        }
+        catch { $errors.Add("Path $dockerPath : $($_.Exception.Message)") }
+    }
+
+    [string[]] $procs = @('vmmemWSL.exe', 'wsl.exe', 'wslservice.exe', 'Code.exe')
+    foreach ($proc in $procs) {
+        try {
+            Add-MpPreference -ExclusionProcess $proc -ErrorAction Stop
+            $applied.Add("Process: $proc")
+        }
+        catch { $errors.Add("Process $proc : $($_.Exception.Message)") }
+    }
+
+    if ($IncludeSteam -and (Test-Path $SteamPath)) {
+        try {
+            Add-MpPreference -ExclusionPath $SteamPath -ErrorAction Stop
+            $applied.Add("Path: $SteamPath")
+            foreach ($sp in @('steam.exe', 'steamwebhelper.exe', 'cs2.exe')) {
+                try {
+                    Add-MpPreference -ExclusionProcess $sp -ErrorAction Stop
+                    $applied.Add("Process: $sp")
+                }
+                catch { $errors.Add("Process $sp : $($_.Exception.Message)") }
+            }
+        }
+        catch { $errors.Add("Path $SteamPath : $($_.Exception.Message)") }
+    }
+
+    return [PSCustomObject]@{
+        Success         = ($errors.Count -eq 0)
+        Skipped         = $false
+        Applied         = $applied.ToArray()
+        Errors          = $errors.ToArray()
+        RestartRequired = $false
+        Reason          = 'Exclusiones de Defender aplicadas. Tamper Protection sigue ON.'
+    }
+}
+
+# --- Remove-WslDefenderExclusions --------------------------------------------
+function Remove-WslDefenderExclusions {
+    <#
+    .SYNOPSIS
+        Revierte las exclusiones aplicadas por Add-WslDefenderExclusions.
+        Es best-effort: si una exclusion no existe, Remove-MpPreference
+        no tira error.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [switch] $IncludeSteam,
+
+        [Parameter()]
+        [string] $SteamPath = 'C:\Program Files (x86)\Steam'
+    )
+
+    try { $null = Get-MpPreference -ErrorAction Stop } catch {
+        return [PSCustomObject]@{
+            Success = $true
+            Skipped = $true
+            Reason  = 'Defender no disponible. Nada que remover.'
+            Applied = @()
+            Errors  = @()
+        }
+    }
+
+    [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
+
+    [string[]] $lxssPaths = @()
+    [string] $localPkgs = Join-Path $env:LOCALAPPDATA 'Packages'
+    if (Test-Path $localPkgs) {
+        $lxssPaths = @(
+            Get-ChildItem -Path $localPkgs -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match 'CanonicalGroupLimited\.|TheDebianProject\.|KaliLinux\.|whitewaterfoundry\.|46932SUSE\.|Fedora' } |
+                Select-Object -ExpandProperty FullName
+        )
+    }
+    [string] $dockerPath = Join-Path $env:LOCALAPPDATA 'Docker'
+
+    foreach ($p in @($lxssPaths + @($dockerPath))) {
+        try { Remove-MpPreference -ExclusionPath $p -ErrorAction SilentlyContinue; $applied.Add("Path removido: $p") } catch { }
+    }
+    foreach ($proc in @('vmmemWSL.exe', 'wsl.exe', 'wslservice.exe', 'Code.exe')) {
+        try { Remove-MpPreference -ExclusionProcess $proc -ErrorAction SilentlyContinue; $applied.Add("Process removido: $proc") } catch { }
+    }
+    if ($IncludeSteam) {
+        try { Remove-MpPreference -ExclusionPath $SteamPath -ErrorAction SilentlyContinue; $applied.Add("Path removido: $SteamPath") } catch { }
+        foreach ($sp in @('steam.exe', 'steamwebhelper.exe', 'cs2.exe')) {
+            try { Remove-MpPreference -ExclusionProcess $sp -ErrorAction SilentlyContinue; $applied.Add("Process removido: $sp") } catch { }
+        }
+    }
+
+    return [PSCustomObject]@{
+        Success         = $true
+        Skipped         = $false
+        Applied         = $applied.ToArray()
+        Errors          = $errors.ToArray()
+        RestartRequired = $false
+        Reason          = 'Exclusiones de Defender removidas (best-effort).'
+    }
+}
