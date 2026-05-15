@@ -279,6 +279,87 @@ function Add-WslDefenderExclusions {
     }
 }
 
+# --- Invoke-OOSU10Profile ----------------------------------------------------
+function Invoke-OOSU10Profile {
+    <#
+    .SYNOPSIS
+        Aplica un archivo .cfg de O&O ShutUp10++ de forma silenciosa.
+        Si OOSU10.exe o el .cfg no estan disponibles, retorna Skipped=$true
+        sin fallar (el engine ya tiene fallback nativo decidido antes de llamar aca).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter()]
+        [int] $TimeoutSeconds = 120
+    )
+
+    [string] $exe = Get-ShutUp10Path
+
+    if ([string]::IsNullOrWhiteSpace($exe)) {
+        return [PSCustomObject]@{
+            Success        = $true
+            Skipped        = $true
+            Reason         = 'OOSU10.exe no instalado'
+            ExePath        = ''
+            CfgPath        = $Path
+            ExitCode       = $null
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [PSCustomObject]@{
+            Success        = $true
+            Skipped        = $true
+            Reason         = 'cfg no encontrado'
+            ExePath        = $exe
+            CfgPath        = $Path
+            ExitCode       = $null
+        }
+    }
+
+    try {
+        $proc = Start-Process -FilePath $exe -ArgumentList @($Path, '/quiet') `
+            -PassThru -WindowStyle Hidden -ErrorAction Stop
+
+        [bool] $finished = $proc.WaitForExit($TimeoutSeconds * 1000)
+
+        if (-not $finished) {
+            try { $proc.Kill() } catch { }
+            return [PSCustomObject]@{
+                Success        = $false
+                Skipped        = $false
+                Reason         = "Timeout ($TimeoutSeconds s)"
+                ExePath        = $exe
+                CfgPath        = $Path
+                ExitCode       = $null
+            }
+        }
+
+        [int] $exit = $proc.ExitCode
+        return [PSCustomObject]@{
+            Success        = ($exit -eq 0)
+            Skipped        = $false
+            Reason         = if ($exit -eq 0) { '' } else { "ExitCode $exit" }
+            ExePath        = $exe
+            CfgPath        = $Path
+            ExitCode       = $exit
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success        = $false
+            Skipped        = $false
+            Reason         = $_.Exception.Message
+            ExePath        = $exe
+            CfgPath        = $Path
+            ExitCode       = $null
+        }
+    }
+}
+
 # --- Remove-WslDefenderExclusions --------------------------------------------
 function Remove-WslDefenderExclusions {
     <#

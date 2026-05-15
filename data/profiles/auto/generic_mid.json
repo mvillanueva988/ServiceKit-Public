@@ -1,0 +1,36 @@
+﻿{
+  "_schema_version": "1.0",
+  "_use_case": "generic",
+  "_tier": "mid",
+  "_description": "PC de servicio tecnico sin contexto de uso claro (tier Mid)",
+  "_rationale": "Receta neutra y segura. Limpia bloat inequivoco y temporales, baja telemetria a nivel basico y aplica visuales Balanced (conserva ClearType/thumbnails). NO toca impresion, RAS, ni startup; no asume nada del uso del cliente.",
+
+  "services": {
+    "disable": [
+      "Fax", "WMPNetworkSvc", "RemoteRegistry", "DiagTrack", "dmwappushservice"
+    ],
+    "preserve_note": "NO se tocan: Spooler/PrintNotify (impresion), RemoteAccess (RAS/VPN), y los 4 servicios Xbox (Game Pass). Generic no asume si el cliente imprime, usa VPN, o juega con Game Pass."
+  },
+
+  "performance": {
+    "visual_profile": "Balanced",
+    "_stage2_note": "Stage 2 invoca Start-PerformanceProcess -VisualProfile <visual_profile>. Eso ya aplica power plan laptop-aware + system tweaks sanos (hibernacion off, svchost si <=8GB, shutdown timeout, GameDVR off). Los bloques de abajo quedan declarados para el seam de granularidad futura (D1) -- el engine de Stage 2 NO los lee aun.",
+    "power_plan": { "_future": true },
+    "system_tweaks": { "_future": true }
+  },
+
+  "privacy": {
+    "level": "basic",
+    "oosu10_cfg": "basic.cfg",
+    "fallback": "native",
+    "_note": "Si OOSU10.exe + data/oosu10-profiles/basic.cfg estan disponibles -> Invoke-OOSU10Profile. Si no -> Start-PrivacyJob -Profile Basic (registry nativo). Generic = nivel mas suave (NO desactiva OneDrive)."
+  },
+
+  "cleanup": { "clear_temp": true },
+
+  "startup": {
+    "auto_disable_known_bloat": false,
+    "report_only": true,
+    "_note": "D3: Stage 2 solo lista startup en el preview/snapshot. Auto-disable diferido."
+  }
+}

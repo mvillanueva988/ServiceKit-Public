@@ -130,6 +130,12 @@ Test-SmokeFunction 'ToolkitSupport' 'Convert-ToolkitDateDisplay' {
     Convert-ToolkitDateDisplay -Value (Get-Date)
 }
 
+# ─── Stage 2: ProfileEngine (read-only: path + import/validate) ──────────────
+Test-SmokeFunction 'ProfileEngine' 'Get-AutoProfilePath'  { Get-AutoProfilePath -UseCase generic -Tier Mid }
+Test-SmokeFunction 'ProfileEngine' 'Import generic_low'   { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic -Tier Low) }
+Test-SmokeFunction 'ProfileEngine' 'Import generic_mid'   { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic -Tier Mid) }
+Test-SmokeFunction 'ProfileEngine' 'Import generic_high'  { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic -Tier High) }
+
 # ─── Stage 0 new modules (read-only paths only) ───────────────────────────────
 Test-SmokeFunction 'CoreIsolation' 'Get-CoreIsolationStatus' { Get-CoreIsolationStatus }
 

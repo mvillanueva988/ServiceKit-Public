@@ -201,7 +201,7 @@ function Invoke-MainMenuDispatch {
 
     switch ($up) {
         '1' {
-            Write-Host '  [Aplicar perfil automatico] [pendiente Stage 2: ProfileEngine + recetas auto]' -ForegroundColor DarkYellow
+            Invoke-ApplyAutoProfile -MachineProfile $MachineProfile
             return
         }
         '2' {
@@ -890,4 +890,116 @@ function Invoke-ActionWindowsUpdate {
     Write-Host ('  Ultima busqueda  : {0}' -f $status.LastCheck)
     Write-Host ('  Fuente           : {0}' -f $status.Source)
     Write-ActionAudit -Action 'WindowsUpdate.Status' -Status 'Success' -Summary ('LastInstall={0}' -f $status.LastInstall) -Details $status
+}
+
+# ─── Invoke-ApplyAutoProfile (handler [1] del menu principal) ────────────────
+function Invoke-ApplyAutoProfile {
+    <#
+    .SYNOPSIS
+        Handler del menu principal [1]. Muestra selector de use-case, carga la receta
+        segun el tier detectado, pide confirmacion y ejecuta Invoke-AutoProfile.
+        Separacion UI/orquestacion: este handler NO hace las mutaciones — se las delega
+        al engine (ProfileEngine.ps1).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
+    )
+
+    [string] $detectedTier = 'Mid'
+    [object] $tierProp = $MachineProfile.PSObject.Properties['Tier']
+    if ($null -ne $tierProp) { $detectedTier = [string]$tierProp.Value }
+
+    Write-Host ''
+    Write-Host '  ================================================' -ForegroundColor DarkCyan
+    Write-Host '    APLICAR PERFIL AUTOMATICO' -ForegroundColor Cyan
+    Write-Host '  ================================================' -ForegroundColor DarkCyan
+    Write-Host ("  Tier detectado: {0}" -f $detectedTier) -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  [1]  Generic         (disponible)'
+    Write-Host '  [2]  Office          (proximamente - Stage 3)' -ForegroundColor DarkGray
+    Write-Host '  [3]  Study           (proximamente - Stage 3)' -ForegroundColor DarkGray
+    Write-Host '  [4]  Multimedia      (proximamente - Stage 3)' -ForegroundColor DarkGray
+    Write-Host '  [B]  Volver'
+    Write-Host ''
+    [string] $ucChoice = (Read-Host '  Selecciona').Trim().ToUpperInvariant()
+
+    switch ($ucChoice) {
+        'B' { return }
+        '2' { Write-Host '  Office: proximamente (Stage 3).' -ForegroundColor DarkYellow; return }
+        '3' { Write-Host '  Study: proximamente (Stage 3).'  -ForegroundColor DarkYellow; return }
+        '4' { Write-Host '  Multimedia: proximamente (Stage 3).' -ForegroundColor DarkYellow; return }
+        '1' { } # continua abajo
+        default { Write-Host '  Opcion invalida.' -ForegroundColor Red; return }
+    }
+
+    # ── Cargar receta Generic para el tier detectado ──────────────────────────
+    [string] $tierArg = switch ($detectedTier.ToLowerInvariant()) { 'low' { 'Low' } 'high' { 'High' } default { 'Mid' } }
+    [string] $profPath = Get-AutoProfilePath -UseCase 'generic' -Tier $tierArg
+
+    [PSCustomObject] $profile = $null
+    try {
+        $profile = Import-AutoProfile -Path $profPath
+    } catch {
+        Write-Host ("  [!] No se pudo cargar la receta: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        Write-ActionAudit -Action 'Profile.Apply.Generic' -Status 'Failed' -Summary $_.Exception.Message
+        return
+    }
+
+    # ── Preview + Confirm ─────────────────────────────────────────────────────
+    [string[]] $previewLines = Get-AutoProfilePreviewLines -Profile $profile -MachineProfile $MachineProfile
+    if (-not (Confirm-Action -Title ('Aplicar perfil Generic ({0})?' -f $detectedTier) -Lines $previewLines)) {
+        Write-ActionAudit -Action 'Profile.Apply.Generic' -Status 'Cancelled'
+        return
+    }
+
+    # ── Identificador de cliente ──────────────────────────────────────────────
+    Write-Host ''
+    [string] $rawSlug = (Read-Host '  Identificador del cliente (ej. juan-perez, Enter para autogenerar)').Trim()
+    [string] $clientSlug = ''
+    if ([string]::IsNullOrWhiteSpace($rawSlug)) {
+        $clientSlug = 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant()
+    } else {
+        $clientSlug = $rawSlug.ToLowerInvariant()
+        $clientSlug = $clientSlug -replace '\s+', '-'
+        $clientSlug = $clientSlug -replace '[^a-z0-9-]', ''
+        $clientSlug = ($clientSlug -replace '-{2,}', '-').Trim('-')
+        if ([string]::IsNullOrWhiteSpace($clientSlug)) {
+            $clientSlug = 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant()
+        }
+    }
+    Write-Host ("  Cliente: {0}" -f $clientSlug) -ForegroundColor DarkGray
+
+    # ── Gate Restore Point ────────────────────────────────────────────────────
+    [bool] $createRp = Confirm-Action `
+        -Title 'Crear Restore Point automaticamente?' `
+        -Lines @(
+            'Crea un punto de restauracion de Windows antes de aplicar la receta.',
+            'Permite revertir los cambios con System Restore si algo sale mal.',
+            'Recomendado para la mayoria de los servicios.'
+        ) `
+        -DefaultYes:$true
+
+    # ── Ejecutar pipeline ─────────────────────────────────────────────────────
+    Write-Host ''
+    Write-Host '  Iniciando pipeline...' -ForegroundColor Cyan
+    $result = Invoke-AutoProfile `
+        -Profile       $profile `
+        -MachineProfile $MachineProfile `
+        -ClientSlug    $clientSlug `
+        -SkipRestorePoint:(-not $createRp)
+
+    # ── Mostrar resumen final ─────────────────────────────────────────────────
+    Write-Host ''
+    [string] $statusColor = switch ($result.Status) {
+        'Success' { 'Green'  }
+        'Partial' { 'Yellow' }
+        default   { 'Red'    }
+    }
+    Write-Host ('  === Resultado: {0} | Duracion: {1}s ===' -f $result.Status, $result.DurationSec) -ForegroundColor $statusColor
+
+    [object] $crDir = $result.ClientRun.PSObject.Properties['Dir']
+    if ($null -ne $crDir -and -not [string]::IsNullOrWhiteSpace([string]$crDir.Value)) {
+        Write-Host ('  Carpeta de run: {0}' -f [string]$crDir.Value) -ForegroundColor Cyan
+    }
 }
