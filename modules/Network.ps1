@@ -163,14 +163,32 @@ function Get-NetworkDiagnostics {
     param()
 
     # -- TCP AutoTuning --
+    # Get-NetTCPSetting devuelve varias filas; la primera ('Automatic') tiene
+    # AutoTuningLevelLocal nulo. La fila 'Internet' es la que aplica al trafico
+    # real. Filtramos por SettingName y verificamos PSObject.Properties[] para
+    # ser StrictMode-safe.
     [string] $tcpTuning = 'desconocido'
-    $tcpSetting = Get-NetTCPSetting -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -ne $tcpSetting -and $null -ne $tcpSetting.AutoTuningLevelLocal) {
-        $tcpTuning = $tcpSetting.AutoTuningLevelLocal.ToString()
-    } else {
-        # Fallback: parsear netsh int tcp show global
+    $tcpSetting = Get-NetTCPSetting -ErrorAction SilentlyContinue |
+        Where-Object { $_.SettingName -eq 'Internet' } |
+        Select-Object -First 1
+    if ($null -eq $tcpSetting) {
+        # Fallback: cualquier fila con AutoTuningLevelLocal no-vacio.
+        $tcpSetting = Get-NetTCPSetting -ErrorAction SilentlyContinue |
+            Where-Object {
+                $null -ne $_.PSObject.Properties['AutoTuningLevelLocal'] -and
+                -not [string]::IsNullOrWhiteSpace([string] $_.AutoTuningLevelLocal)
+            } |
+            Select-Object -First 1
+    }
+    if ($null -ne $tcpSetting -and
+        $null -ne $tcpSetting.PSObject.Properties['AutoTuningLevelLocal']) {
+        $tcpTuning = [string] $tcpSetting.AutoTuningLevelLocal
+    }
+    if ([string]::IsNullOrWhiteSpace($tcpTuning) -or $tcpTuning -eq 'desconocido') {
+        # Ultimo fallback: parsear netsh int tcp show global con regex agnostico
+        # al idioma (busca cualquier linea que termine en valor tipo Normal/Disabled).
         [string] $netshOut = ((& netsh int tcp show global 2>&1) -join "`n")
-        if ($netshOut -match 'Receive Window Auto-Tuning Level\s*:\s*(\S+)') {
+        if ($netshOut -match '(?im)^\s*(?:Receive Window Auto-Tuning Level|Nivel de.*?ajuste.*?ventana.*?)\s*:\s*(\S+)') {
             $tcpTuning = $Matches[1]
         }
     }
