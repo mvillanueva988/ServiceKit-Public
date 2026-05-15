@@ -37,7 +37,10 @@ function Wait-ToolkitJobs {
     )
 
     if ($null -eq $Jobs -or $Jobs.Count -eq 0) {
-        return @()
+        # ',' fuerza que el caller reciba un array vacio, no $null.
+        # Sin la coma, PowerShell unwrapea y el caller ve $null cuando
+        # asigna `$x = Wait-ToolkitJobs ...`, rompiendo .Count y [0].
+        return ,@()
     }
 
     $null = $Jobs | Wait-Job -Timeout $TimeoutSeconds
@@ -50,8 +53,14 @@ function Wait-ToolkitJobs {
         }
     }
 
-    $results = foreach ($job in $Jobs) {
-        if ($job.State -eq 'Failed') {
+    # Acumular en List<object> en vez de capturar el output de un foreach.
+    # El patron `$results = foreach (...)` produce un array PERO al hacer
+    # `return $results` PowerShell unwrapea si tiene 1 solo elemento, y
+    # el caller termina con un objeto suelto sin .Count. List<object> +
+    # ToArray() + ',' previene el unwrap.
+    [System.Collections.Generic.List[object]] $resultsList = [System.Collections.Generic.List[object]]::new()
+    foreach ($job in $Jobs) {
+        [object] $r = if ($job.State -eq 'Failed') {
             [object[]] $childErrors = @($job.ChildJobs | ForEach-Object { $_.Error } | Where-Object { $_ })
             [string] $errMsg = if ($childErrors.Count -gt 0) { $childErrors[0].Exception.Message } else { 'Error desconocido' }
             Write-Host ("  [!] Trabajo '{0}' fallo: {1}" -f $job.Name, $errMsg) -ForegroundColor Red
@@ -63,9 +72,12 @@ function Wait-ToolkitJobs {
         else {
             Receive-Job -Job $job -AutoRemoveJob -Wait
         }
+        $resultsList.Add($r)
     }
 
-    return $results
+    # ',' garantiza que se retorne el array como UN solo objeto que el
+    # caller des-empaqueta de vuelta al array. Es el idiom PowerShell.
+    return ,$resultsList.ToArray()
 }
 
 function Invoke-ModuleJob {
