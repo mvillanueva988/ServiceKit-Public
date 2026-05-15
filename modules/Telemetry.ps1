@@ -177,26 +177,48 @@ function Get-SystemSnapshot {
         }
     }
 
-    # Antivirus — SecurityCenter2 (terceros) + Windows Defender
+    # Antivirus — SecurityCenter2 (terceros) + Windows Defender.
+    # IsActive es lo que cuenta para detectar conflictos: cuando hay un AV
+    # de terceros corriendo, Defender entra automaticamente en Passive Mode
+    # y sigue reportando AntivirusEnabled=$true pero NO escanea activamente.
+    # Distinguimos:
+    #   Enabled  = el motor esta habilitado (puede estar pasivo)
+    #   IsActive = esta protegiendo en tiempo real ahora mismo
     [System.Collections.Generic.List[PSCustomObject]] $avList =
         [System.Collections.Generic.List[PSCustomObject]]::new()
     try {
         foreach ($av in @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop)) {
             [string] $hex     = [Convert]::ToString($av.productState, 16).PadLeft(6, '0')
             [bool]   $enabled = ($hex.Substring(2, 2) -eq '10')
+            # SecurityCenter2 no expone passive mode para terceros — asumimos
+            # IsActive == Enabled para AVs externos (suelen tomar el lead).
             $avList.Add([PSCustomObject]@{
-                Name     = [string] $av.displayName
-                Enabled  = [bool]   $enabled
-                IsNative = [bool]   $false
+                Name           = [string] $av.displayName
+                Enabled        = [bool]   $enabled
+                IsActive       = [bool]   $enabled
+                IsNative       = [bool]   $false
+                AMRunningMode  = $null
             })
         }
     } catch { }
     try {
         [object] $def = Get-MpComputerStatus -ErrorAction Stop
+        # AMRunningMode: 'Normal' | 'Passive Mode' | 'SxS Passive Mode' |
+        # 'EDR Block Mode'. Solo 'Normal' significa que Defender esta
+        # escaneando en tiempo real; los modos pasivos son explicitos
+        # "otro AV se hizo cargo".
+        [string] $runningMode = ''
+        if ($null -ne $def.PSObject.Properties['AMRunningMode']) {
+            $runningMode = [string] $def.AMRunningMode
+        }
+        [bool] $defEnabled = [bool] $def.AntivirusEnabled
+        [bool] $defActive  = $defEnabled -and ($runningMode -eq 'Normal' -or [string]::IsNullOrEmpty($runningMode))
         $avList.Add([PSCustomObject]@{
-            Name     = 'Windows Defender'
-            Enabled  = [bool] $def.AntivirusEnabled
-            IsNative = [bool] $true
+            Name           = 'Windows Defender'
+            Enabled        = $defEnabled
+            IsActive       = $defActive
+            IsNative       = [bool] $true
+            AMRunningMode  = $runningMode
         })
     } catch { }
 
@@ -215,7 +237,10 @@ function Get-SystemSnapshot {
     [object] $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
     [double] $uptimeHours = if ($os) { [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 1) } else { [double]0 }
 
-    [bool] $multipleAv = (@($avList | Where-Object { $_.Enabled }).Count -gt 1)
+    # Multiple AV problem real = mas de un motor escaneando ACTIVAMENTE.
+    # Defender en Passive Mode no cuenta: es el comportamiento esperado
+    # cuando hay un AV de terceros instalado y no genera conflicto.
+    [bool] $multipleAv = (@($avList | Where-Object { $_.IsActive }).Count -gt 1)
 
     return [PSCustomObject]@{
         Phase             = [string]   $Phase
