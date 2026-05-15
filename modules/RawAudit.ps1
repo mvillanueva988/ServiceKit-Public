@@ -108,7 +108,7 @@ function New-RawAuditReport {
     }
     $lines.Add('')
     foreach ($v in $Snapshot.Volumes) {
-        $lines.Add(('  {0}:  {1} GB free of {2} GB  ({3}%% used)  [{4}]' -f $v.Letter, $v.FreeGb, $v.SizeGb, $v.UsedPct, $v.Label))
+        $lines.Add(('  {0}:  {1} GB free of {2} GB  ({3}% used)  [{4}]' -f $v.Letter, $v.FreeGb, $v.SizeGb, $v.UsedPct, $v.Label))
     }
 
     # ── Power plan + page file ────────────────────────────────────────────────
