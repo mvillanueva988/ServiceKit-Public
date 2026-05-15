@@ -54,7 +54,7 @@ function Show-MainMenu {
         }
 
         Write-Host '================================================' -ForegroundColor DarkCyan
-        Write-Host '               SERVICEKIT v2' -ForegroundColor Cyan
+        Write-Host '                   PCTk v2' -ForegroundColor Cyan
         Write-Host '================================================' -ForegroundColor DarkCyan
         Write-Host ("  OS   : {0} Build {1} {2}" -f $osName, $build, $arch)
         Write-Host ("  CPU  : {0}  {1} nucleos / {2} hilos" -f $cpuName, $cpuCores, $cpuThreads)
@@ -137,7 +137,7 @@ function Invoke-MainMenuDispatch {
     }
 
     if ($Choice.ToUpperInvariant() -eq 'X') {
-        Write-Host '  Saliendo de ServiceKit v2...' -ForegroundColor Cyan
+        Write-Host '  Saliendo de PCTk v2...' -ForegroundColor Cyan
         return
     }
 

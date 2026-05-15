@@ -25,13 +25,13 @@ function Test-IsAdministrator {
 
 try {
     if (-not (Test-IsAdministrator)) {
-        Write-Host '  [!] ServiceKit requiere PowerShell ejecutado como Administrador.' -ForegroundColor Red
+        Write-Host '  [!] PCTk requiere PowerShell ejecutado como Administrador.' -ForegroundColor Red
         exit 1
     }
 
-    $script:InstanceMutex = [System.Threading.Mutex]::new($false, 'Local\ServiceKit')
+    $script:InstanceMutex = [System.Threading.Mutex]::new($false, 'Local\PCTk')
     if (-not $script:InstanceMutex.WaitOne(0)) {
-        Write-Host '  [!] Ya existe una instancia activa de ServiceKit.' -ForegroundColor Yellow
+        Write-Host '  [!] Ya existe una instancia activa de PCTk.' -ForegroundColor Yellow
         exit 1
     }
 
