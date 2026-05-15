@@ -51,6 +51,146 @@ function Test-IsIntegratedGpuName {
     return $false
 }
 
+function Get-CpuClass {
+    <#
+    .SYNOPSIS
+        Clasifica un CPU en U-series / H-series / Desktop-K / Desktop-X /
+        LowEnd / Unknown a partir del nombre. Usado para tier resolution.
+
+        - U-series: Intel i*-*U / i*-*UE / AMD R*-*U (laptop thin-and-light)
+        - H-series: Intel i*-*H / i*-*HX / AMD R*-*H / R*-*HX / R*-*HS
+        - Desktop-K: Intel i*-*K / i*-*KF / i*-*KS
+        - Desktop-X: Intel i*-*X / AMD R*-*X / R*-*X3D
+        - LowEnd: Celeron / Pentium / Atom / E1 / E2 / A4 / A6
+        - Unknown: lo que no matchee
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string] $CpuName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CpuName)) { return 'Unknown' }
+    [string] $n = $CpuName.ToUpperInvariant()
+
+    if ($n -match '\b(CELERON|PENTIUM|ATOM)\b|\b(E1|E2|A4|A6)-\d') { return 'LowEnd' }
+    # Intel mobile: ej. i7-1355U, i5-12500H, i9-13900HX
+    if ($n -match 'I[3579]-\d+\s*UE?\b') { return 'U-series' }
+    if ($n -match 'I[3579]-\d+\s*H[XS]?\b') { return 'H-series' }
+    if ($n -match 'I[3579]-\d+\s*K[FS]?\b') { return 'Desktop-K' }
+    if ($n -match 'I[3579]-\d+\s*XE?\b') { return 'Desktop-X' }
+    # AMD mobile: Ryzen 7 5800H, Ryzen 5 5600U, Ryzen 9 7945HX3D
+    if ($n -match 'RYZEN\s+[3579]\s+\d+\s*U\b') { return 'U-series' }
+    if ($n -match 'RYZEN\s+[3579]\s+\d+\s*H[SX]?(?:3D)?\b') { return 'H-series' }
+    if ($n -match 'RYZEN\s+[3579]\s+\d+\s*X(?:3D|T)?\b') { return 'Desktop-X' }
+    return 'Unknown'
+}
+
+function Get-DGpuVramMb {
+    <#
+    .SYNOPSIS
+        Estima VRAM dedicada de la GPU discreta a partir del nombre. WMI
+        AdapterRAM no es confiable (>4GB se desborda en uint32 a valores
+        negativos o capeados). Usamos heurística por nombre conocido,
+        retorna 0 si no se puede inferir.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string] $GpuName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($GpuName)) { return 0 }
+    [string] $n = $GpuName.ToUpperInvariant()
+
+    # NVIDIA por modelo conocido (laptop + desktop)
+    if ($n -match 'RTX\s*5090')                                          { return 32768 }
+    if ($n -match 'RTX\s*5080')                                          { return 16384 }
+    if ($n -match 'RTX\s*5070\s*TI')                                     { return 16384 }
+    if ($n -match 'RTX\s*5070')                                          { return 12288 }
+    if ($n -match 'RTX\s*4090')                                          { return 24576 }
+    if ($n -match 'RTX\s*4080')                                          { return 16384 }
+    if ($n -match 'RTX\s*4070\s*TI')                                     { return 12288 }
+    if ($n -match 'RTX\s*4070')                                          { return 12288 }
+    if ($n -match 'RTX\s*4060\s*TI')                                     { return 8192 }
+    if ($n -match 'RTX\s*4060')                                          { return 8192 }
+    if ($n -match 'RTX\s*4050')                                          { return 6144 }
+    if ($n -match 'RTX\s*3090')                                          { return 24576 }
+    if ($n -match 'RTX\s*3080\s*TI')                                     { return 12288 }
+    if ($n -match 'RTX\s*3080')                                          { return 10240 }
+    if ($n -match 'RTX\s*3070\s*TI')                                     { return 8192 }
+    if ($n -match 'RTX\s*3070')                                          { return 8192 }
+    if ($n -match 'RTX\s*3060\s*TI')                                     { return 8192 }
+    if ($n -match 'RTX\s*3060')                                          { return 6144 }
+    if ($n -match 'RTX\s*3050\s*TI')                                     { return 4096 }
+    if ($n -match 'RTX\s*3050')                                          { return 4096 }
+    if ($n -match 'RTX\s*2080|RTX\s*2070\s*SUPER|RTX\s*2070')            { return 8192 }
+    if ($n -match 'RTX\s*2060\s*SUPER|RTX\s*2060')                       { return 6144 }
+    if ($n -match 'GTX\s*16\d\d')                                        { return 4096 }
+    # AMD Radeon dGPU
+    if ($n -match 'RX\s*7900')                                           { return 16384 }
+    if ($n -match 'RX\s*7800')                                           { return 16384 }
+    if ($n -match 'RX\s*7700')                                           { return 12288 }
+    if ($n -match 'RX\s*7600')                                           { return 8192 }
+    if ($n -match 'RX\s*6900|RX\s*6800')                                 { return 16384 }
+    if ($n -match 'RX\s*6700')                                           { return 12288 }
+    if ($n -match 'RX\s*6600')                                           { return 8192 }
+    if ($n -match 'RX\s*6500')                                           { return 4096 }
+    # Intel Arc dGPU
+    if ($n -match 'ARC\s*A7\d\d')                                        { return 16384 }
+    if ($n -match 'ARC\s*A5\d\d|ARC\s*A3\d\d')                           { return 8192 }
+    return 0
+}
+
+function Get-TierResolved {
+    <#
+    .SYNOPSIS
+        Tier de hardware basado en RAM + clase de CPU + VRAM dGPU.
+
+        Low : <=8GB RAM, U-series alto o LowEnd, iGPU only
+        Mid : 12-16GB RAM, U-series alto o H-series bajo, iGPU o dGPU <=4GB
+        High: >=16GB RAM, H-series alto / Desktop K/X, dGPU >=6GB
+
+        Si el hardware está en el borde, el tier se inclina hacia abajo
+        (más conservador para el operador que aplica recetas).
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [int]    $RamMB,
+        [Parameter(Mandatory)] [string] $CpuClass,
+        [Parameter(Mandatory)] [int]    $DGpuVramMb
+    )
+
+    [int] $score = 0
+
+    # Eje RAM: 8GB-=0, 16GB=1, >16GB=2
+    if ($RamMB -ge 16000)      { $score += 2 }
+    elseif ($RamMB -ge 12000)  { $score += 1 }
+
+    # Eje CPU
+    switch ($CpuClass) {
+        'LowEnd'    { }
+        'U-series'  { $score += 1 }
+        'H-series'  { $score += 2 }
+        'Desktop-K' { $score += 2 }
+        'Desktop-X' { $score += 2 }
+        'Unknown'   { $score += 1 }
+    }
+
+    # Eje GPU
+    if     ($DGpuVramMb -ge 12288) { $score += 2 }
+    elseif ($DGpuVramMb -ge 6144)  { $score += 1 }
+    elseif ($DGpuVramMb -gt 0)     { } # dGPU pero pobre (<=4GB) no suma
+
+    # Tier final
+    if ($score -ge 5) { return 'High' }
+    if ($score -ge 3) { return 'Mid'  }
+    return 'Low'
+}
+
 function Get-MachineProfile {
     [CmdletBinding()]
     param()
@@ -97,6 +237,22 @@ function Get-MachineProfile {
     [string] $toolkitRoot = Split-Path -Parent $PSScriptRoot
     [string] $oemCatalogPath = Join-Path -Path $toolkitRoot -ChildPath ('data\oem-bloat\{0}.json' -f $manufacturerSlug)
 
+    # CPU class y dGPU VRAM para clasificación de tier
+    [string] $cpuName  = if ($null -ne $cs -and $cs.PSObject.Properties['Manufacturer']) {
+        $cpuRaw = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $cpuRaw -and $null -ne $cpuRaw.Name) { [string] $cpuRaw.Name } else { '' }
+    } else { '' }
+    [string] $cpuClass = Get-CpuClass -CpuName $cpuName
+
+    [int] $dGpuVramMb = 0
+    foreach ($gname in $gpuNames) {
+        if (Test-IsIntegratedGpuName -GpuName $gname) { continue }
+        [int] $candidate = Get-DGpuVramMb -GpuName $gname
+        if ($candidate -gt $dGpuVramMb) { $dGpuVramMb = $candidate }
+    }
+
+    [string] $tier = Get-TierResolved -RamMB $ramMB -CpuClass $cpuClass -DGpuVramMb $dGpuVramMb
+
     return [PSCustomObject]@{
         IsLaptop      = $isLaptop
         RamMB         = $ramMB
@@ -104,6 +260,10 @@ function Get-MachineProfile {
         HasDGpu       = $hasDGpu
         HasIGpuOnly   = $hasIGpuOnly
         GpuNames      = $gpuNames
+        DGpuVramMb    = $dGpuVramMb
+        CpuName       = $cpuName
+        CpuClass      = $cpuClass
+        Tier          = $tier
         Manufacturer  = $manufacturer
         IsWin11       = ($build -ge 22000)
         IsHome        = ($osReg -and ([string]$osReg.ProductName -match '\bHome\b'))
