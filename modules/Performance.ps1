@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Claves compartidas usadas por los tres perfiles

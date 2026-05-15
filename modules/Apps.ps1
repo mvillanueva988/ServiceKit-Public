@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 # ─── Get-InstalledWin32Apps ───────────────────────────────────────────────────
 function Get-InstalledWin32Apps {

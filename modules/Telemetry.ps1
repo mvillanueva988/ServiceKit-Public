@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 # Captura la ruta del módulo durante el dot-sourcing para usarla en jobs asincrónicos
 [string] $script:TelemetryModulePath = $PSCommandPath

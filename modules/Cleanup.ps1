@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 # ─── _Get-CleanupPaths ────────────────────────────────────────────────────────
 # Fuente única de rutas. Llamada en tiempo de ejecución para que los paths de
