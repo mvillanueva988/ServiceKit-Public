@@ -101,6 +101,19 @@ Test-SmokeFunction 'ToolkitSupport' 'Convert-ToolkitDateDisplay' {
     Convert-ToolkitDateDisplay -Value (Get-Date)
 }
 
+# ─── Stage 0 new modules (read-only paths only) ───────────────────────────────
+Test-SmokeFunction 'CoreIsolation' 'Get-CoreIsolationStatus' { Get-CoreIsolationStatus }
+
+Test-SmokeFunction 'UsbPower' 'Get-UsbSelectiveSuspendStatus' { Get-UsbSelectiveSuspendStatus }
+
+Test-SmokeFunction 'Hags' 'Get-HagsStatus' { Get-HagsStatus }
+
+Test-SmokeFunction 'Wsl' 'Test-WslAvailable' { Test-WslAvailable }
+Test-SmokeFunction 'Wsl' 'Get-WslConfig'     { Get-WslConfig }
+Test-SmokeFunction 'Wsl' 'New-WslConfig (Default)' { New-WslConfig -Preset Default }
+Test-SmokeFunction 'Wsl' 'New-WslConfig (Gaming)'  { New-WslConfig -Preset Gaming }
+Test-SmokeFunction 'Wsl' 'New-WslConfig (DevHeavy)' { New-WslConfig -Preset DevHeavy }
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'
