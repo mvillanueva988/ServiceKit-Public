@@ -547,9 +547,17 @@ function Compare-Snapshot {
             })
         }
     }
-    [double] $totalFreedGb = [math]::Round(
-        ($volDiff | Measure-Object -Property SpaceFreedGb -Sum).Sum, 2
-    )
+    # PS5.1 + StrictMode: Measure-Object sobre coleccion vacia devuelve $null
+    # (no un MeasureInfo), y .Sum sobre $null tira PropertyNotFoundException.
+    # $volDiff queda vacia cuando ningun volumen matchea entre PRE/POST (VMs,
+    # cambios de letra). Guard explicito.
+    [double] $totalFreedGb = 0
+    if ($volDiff.Count -gt 0) {
+        $sumInfo = $volDiff | Measure-Object -Property SpaceFreedGb -Sum
+        if ($null -ne $sumInfo -and $null -ne $sumInfo.Sum) {
+            $totalFreedGb = [math]::Round([double] $sumInfo.Sum, 2)
+        }
+    }
 
     # Diff de servicios
     [int]      $servicesDelta = $pre.Services.RunningCount - $post.Services.RunningCount
