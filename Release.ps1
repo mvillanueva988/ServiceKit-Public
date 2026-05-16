@@ -74,6 +74,15 @@ Write-Host "      $zipPath" -ForegroundColor DarkGray
 Write-Host ("  [v] {0}" -f $shaName) -ForegroundColor Green
 Write-Host "      $shaPath" -ForegroundColor DarkGray
 
+# -- SHA-256 de Launch.ps1 (pegar en README/release notes) ----------------------
+[string] $launchPs1 = Join-Path $PSScriptRoot 'Launch.ps1'
+if (Test-Path $launchPs1) {
+    [string] $launchSha = (Get-FileHash -Path $launchPs1 -Algorithm SHA256).Hash.ToUpperInvariant()
+    Write-Host ''
+    Write-Host '  SHA-256 de Launch.ps1 (pegar en README/release notes):' -ForegroundColor Cyan
+    Write-Host "  $launchSha" -ForegroundColor White
+}
+
 # -- Publicar a GitHub Releases (opcional) ---------------------------------------
 if ($Publish) {
     # Verificar token

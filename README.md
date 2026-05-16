@@ -7,10 +7,22 @@ Toolkit de optimización y diagnóstico para Windows 10/11. Diseñado para uso t
 Abrir PowerShell como administrador y ejecutar:
 
 ```powershell
-irm https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/main/Launch.ps1 | iex
+irm https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.0.0/Launch.ps1 | iex
 ```
 
-Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión más reciente y valida su integridad (SHA-256) antes de instalar.
+Reemplaza `v2.0.0` por el tag de la última release estable. Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión más reciente y valida su integridad (SHA-256) antes de instalar.
+
+### Verificación (opcional, recomendada)
+
+Para validar Launch.ps1 antes de ejecutarlo, comparar el SHA-256 contra el valor publicado en las [release notes](https://github.com/mvillanueva988/ServiceKit-Public/releases):
+
+```powershell
+$f = "$env:TEMP\Launch.ps1"
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.0.0/Launch.ps1' -OutFile $f
+(Get-FileHash $f -Algorithm SHA256).Hash
+# Si el hash coincide con el publicado, ejecutar:
+# iex (Get-Content $f -Raw)
+```
 
 ## Uso sin one-liner (método manual)
 

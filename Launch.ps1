@@ -150,7 +150,17 @@ function Invoke-Launch {
 
     # ── Extraer ZIP ───────────────────────────────────────────────────────────
     Write-Host '  Instalando...' -ForegroundColor Cyan
-    if (Test-Path $InstallPath) { Remove-Item $InstallPath -Recurse -Force }
+    if (Test-Path $InstallPath) {
+        if (-not (Test-Path (Join-Path $InstallPath 'main.ps1'))) {
+            if ($hadToolsBin -and (Test-Path $toolsBinBak)) {
+                Move-Item -Path $toolsBinBak -Destination $toolsBinSrc
+            }
+            Write-Host ("  [!] '{0}' existe y no parece una instalacion de PCTk; no se borra nada." -f $InstallPath) -ForegroundColor Red
+            Write-Host '      Revisa, elige otra ruta o borra manualmente.' -ForegroundColor DarkGray
+            return
+        }
+        Remove-Item $InstallPath -Recurse -Force
+    }
     Expand-Archive -Path $zipDest -DestinationPath $InstallPath -Force
     Remove-Item $zipDest -Force
 
