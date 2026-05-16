@@ -65,6 +65,7 @@ if (Test-Path $testsDir) {
     Get-ChildItem -Path $testsDir -Filter '*-sandbox-launcher.ps1'   | Remove-Item -Force
     Get-ChildItem -Path $testsDir -Filter 'snapshot-vm-validate.ps1' | Remove-Item -Force
     Get-ChildItem -Path $testsDir -Filter 'stage3-validate.ps1'      | Remove-Item -Force
+    Get-ChildItem -Path $testsDir -Filter 'stage4-validate.ps1'      | Remove-Item -Force
     Get-ChildItem -Path $testsDir -Filter 'stage2-harness.ps1'       | Remove-Item -Force
 }
 

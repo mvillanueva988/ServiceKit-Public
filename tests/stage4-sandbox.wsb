@@ -1,0 +1,17 @@
+<Configuration>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\Users\Mateo\Documents\Dev\Toolkit\.claude\worktrees\romantic-curie-89f730</HostFolder>
+      <SandboxFolder>C:\Toolkit</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>C:\stage4-validate</HostFolder>
+      <SandboxFolder>C:\stage4-validate</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\Toolkit\tests\stage4-sandbox-launcher.ps1</Command>
+  </LogonCommand>
+</Configuration>
