@@ -593,13 +593,13 @@ function Invoke-ProfileGamingTweaksStep {
             [object] $d = & $Action ([string]$p.Value)
             [bool] $ok = $true
             if ($null -ne $d -and $d.PSObject.Properties['Success']) { $ok = [bool]$d.Success }
-            if (-not $ok) { $script:res.Success = $false }
             return [PSCustomObject]@{ Applied = $ok; Skipped = $false; Value = [string]$p.Value; Detail = $d }
         } catch {
-            $script:res.Success = $false
             return [PSCustomObject]@{ Applied = $false; Skipped = $false; Value = [string]$p.Value; Detail = $_.Exception.Message }
         }
     }
+    # Nota: Invoke-Toggle es pura (NO muta $res — $script:res no existe en
+    # scope de funcion bajo StrictMode, tiraba). El parent agrega Success abajo.
 
     $res.Hvci = Invoke-Toggle 'hvci' {
         param($v); if ($v -eq 'off') { Disable-Hvci } else { Enable-Hvci } }
@@ -614,6 +614,12 @@ function Invoke-ProfileGamingTweaksStep {
 
     $res.GameMode = Invoke-Toggle 'game_mode' {
         param($v); Set-GameMode -State $v }
+
+    # Agregacion de Success: un toggle ejecutado (no skipped) que no aplico
+    # marca el step como no-exitoso (-> Status Partial en Invoke-NamedProfile).
+    foreach ($t in @($res.Hvci, $res.Hags, $res.UsbSuspend, $res.GameMode)) {
+        if ($null -ne $t -and -not $t.Skipped -and -not $t.Applied) { $res.Success = $false }
+    }
 
     # wslconfig: objeto { enabled; preset }. Solo si enabled y WSL disponible.
     [object] $wP = $gt.PSObject.Properties['wslconfig']
