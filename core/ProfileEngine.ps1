@@ -256,12 +256,51 @@ function Invoke-AutoProfile {
         # Stage 4: cuando Invoke-NamedProfile envuelve esta funcion, suprime la
         # entrada de audit interna para escribir UNA sola consolidada (con
         # gaming_tweaks). Sin el switch = audita normal (invariante intacto).
-        [Parameter()] [switch] $NoAudit
+        [Parameter()] [switch] $NoAudit,
+        # Progress UX (R3/R7): opt-IN. Solo el engine/named pasa -ShowProgress.
+        # ProgressBase/ProgressSpan para remap de rango (R7): named llama con
+        # -ProgressBase 0 -ProgressSpan 85 -NoProgressComplete; auto directo usa defaults.
+        [Parameter()] [switch] $ShowProgress,
+        [Parameter()] [int]    $ProgressBase = 0,
+        [Parameter()] [int]    $ProgressSpan = 100,
+        # R7: si esta presente, el core NO emite Write-Progress -Completed (el named
+        # es duenio del lifecycle y lo emite el mismo al final).
+        [Parameter()] [switch] $NoProgressComplete
     )
 
     [datetime] $startedAt = Get-Date
     [string]   $useCase   = [string]$Profile._use_case
     [string]   $tier      = [string]$Profile._tier
+
+    # R4: habilitar o suprimir la barra segun los params recibidos.
+    # $script:PctkProgressEnabled vive en JobManager.ps1 (dot-sourced antes).
+    # -Unattended fuerza supresion; -ShowProgress (ausente) = suprimido por default.
+    if ($Unattended -or -not $ShowProgress) {
+        $script:PctkProgressEnabled = $false
+    } else {
+        $script:PctkProgressEnabled = $true
+        $script:PctkProgressOk      = $true
+    }
+
+    # R7: helper para mapear % de fase al rango efectivo (ProgressBase..ProgressBase+ProgressSpan)
+    [scriptblock] $MapPct = { param([int]$fasePct)
+        $ProgressBase + [int]($fasePct * $ProgressSpan / 100)
+    }
+
+    # R9: tabla de fases (% al entrar, honesto, discreto):
+    # Fase 1=RP(5) 2=PRE(15) 3=Batch(30) 4=Privacy(60) 5=POST(70) 6=Compare(80)
+    # 7=ClientFolder(88) 8=Startup(93) 9=Audit(98). Write-Progress -Completed al cerrar.
+    [string] $barActivity = ('PCTk: aplicando perfil {0}' -f $useCase.ToUpper())
+
+    # Helper interno: emitir Write-Progress si la barra esta habilitada.
+    # Si PctkProgressEnabled=$false o PctkProgressOk=$false, no-op.
+    [scriptblock] $EmitProgress = { param([int]$pct, [string]$statusTxt)
+        if ($script:PctkProgressEnabled -and $script:PctkProgressOk) {
+            [int] $eff = & $MapPct $pct
+            [hashtable] $s = @{ Id = 1; Activity = $barActivity; Status = $statusTxt; PercentComplete = $eff }
+            try { Write-Progress @s } catch { $script:PctkProgressOk = $false }
+        }
+    }
     [string] $tierNorm = switch ($tier.ToLowerInvariant()) {
         'low'  { 'Low'  }
         'high' { 'High' }
@@ -284,13 +323,15 @@ function Invoke-AutoProfile {
     [string]         $overallStatus = 'Failed'
 
     # ── 1. Restore Point ──────────────────────────────────────────────────────
+    & $EmitProgress 5 'Restore Point...'
     if ($SkipRestorePoint) {
         $rpResult = [PSCustomObject]@{ Done = $false; Skipped = $true; CooldownActive = $false; Message = 'Omitido por operador (-SkipRestorePoint)' }
         Write-Host '  [i] Restore Point omitido.' -ForegroundColor DarkGray
     } else {
         Write-Host '  Creando Restore Point...' -ForegroundColor Cyan
         $rpJob     = Start-RestorePointProcess
-        $rpArr     = Wait-ToolkitJobs -Jobs @($rpJob) -TimeoutSeconds 120
+        $rpArr     = Wait-ToolkitJobs -Jobs @($rpJob) -TimeoutSeconds 120 `
+                         -ShowProgress:$ShowProgress -ActivityLabel $barActivity -PercentHint (& $MapPct 5)
         $rpRaw     = if ($rpArr.Count -gt 0) { $rpArr[0] } else { $null }
 
         if ($null -ne $rpRaw -and $rpRaw.PSObject.Properties['Success'] -and $rpRaw.Success) {
@@ -328,6 +369,11 @@ function Invoke-AutoProfile {
             if (-not $continuar) {
                 $rpResult = [PSCustomObject]@{ Done = $false; Skipped = $false; CooldownActive = $false; Message = "Abortado por operador. RP error: $failMsg" }
                 [datetime] $endedAt0 = Get-Date
+                # R1: Write-Progress -Completed antes del early-return (NO try/finally)
+                if ($script:PctkProgressEnabled -and $script:PctkProgressOk) {
+                    try { Write-Progress -Id 1 -Activity $barActivity -Completed } catch { }
+                }
+                $script:PctkProgressEnabled = $false
                 return [PSCustomObject]@{
                     UseCase = $useCase; Tier = $tier; ProfilePath = $profPath; SchemaVersion = $schemaVer
                     RestorePoint = $rpResult; PreSnapshot = $preSnap; Debloat = $null; Cleanup = $null
@@ -342,9 +388,11 @@ function Invoke-AutoProfile {
     }
 
     # ── 2. Snapshot PRE ───────────────────────────────────────────────────────
+    & $EmitProgress 15 'Snapshot PRE...'
     Write-Host '  Capturando snapshot PRE...' -ForegroundColor Cyan
     $preJob  = Start-TelemetryJob -Phase Pre
-    $preArr  = Wait-ToolkitJobs -Jobs @($preJob) -TimeoutSeconds 90
+    $preArr  = Wait-ToolkitJobs -Jobs @($preJob) -TimeoutSeconds 90 `
+                   -ShowProgress:$ShowProgress -ActivityLabel $barActivity -PercentHint (& $MapPct 15)
     $preRaw  = if ($preArr.Count -gt 0) { $preArr[0] } else { $null }
     if ($null -ne $preRaw -and $preRaw.PSObject.Properties['FileName'] -and -not [string]::IsNullOrWhiteSpace([string]$preRaw.FileName)) {
         $preSnap = [PSCustomObject]@{ Ok = $true; FileName = [string]$preRaw.FileName; FilePath = [string]$preRaw.FilePath }
@@ -354,18 +402,23 @@ function Invoke-AutoProfile {
     }
 
     # ── 3. Batch de mutacion (Debloat + Cleanup + Performance en paralelo) ────
+    & $EmitProgress 30 'Batch: Debloat / Limpieza / Performance...'
     Write-Host '  Aplicando perfil: Debloat / Limpieza / Performance (en paralelo)...' -ForegroundColor Cyan
     [string[]] $svcList = @($Profile.services.disable)
     $jobDebloat  = Start-DebloatProcess -ServicesList $svcList
     $jobCleanup  = Start-CleanupProcess
     $jobPerf     = Invoke-ProfilePerformanceStep -Profile $Profile -MachineProfile $MachineProfile
 
-    $batchArr = Wait-ToolkitJobs -Jobs @($jobDebloat, $jobCleanup, $jobPerf) -TimeoutSeconds 600
+    $batchArr = Wait-ToolkitJobs -Jobs @($jobDebloat, $jobCleanup, $jobPerf) -TimeoutSeconds 600 `
+                    -ShowProgress:$ShowProgress -ActivityLabel $barActivity -PercentHint (& $MapPct 30)
     $debloatR = if ($batchArr.Count -gt 0) { $batchArr[0] } else { $null }
     $cleanupR = if ($batchArr.Count -gt 1) { $batchArr[1] } else { $null }
     $perfR    = if ($batchArr.Count -gt 2) { $batchArr[2] } else { $null }
 
     # ── 3b. Privacy (sincronico, despues del batch) ───────────────────────────
+    # R2: Privacy es sincronica; su Wait-ToolkitJobs interno (rama nativa) se cubre
+    # por el flag script-scope (PctkProgressEnabled) sin enhebrar params.
+    & $EmitProgress 60 'Privacy...'
     try {
         $privResult = Invoke-ProfilePrivacyStep -Profile $Profile
     } catch {
@@ -383,9 +436,11 @@ function Invoke-AutoProfile {
     $overallStatus = if ($jobsFailed -eq 0) { 'Success' } elseif ($jobsFailed -lt 4) { 'Partial' } else { 'Failed' }
 
     # ── 4. Snapshot POST ──────────────────────────────────────────────────────
+    & $EmitProgress 70 'Snapshot POST...'
     Write-Host '  Capturando snapshot POST...' -ForegroundColor Cyan
     $postJob = Start-TelemetryJob -Phase Post
-    $postArr = Wait-ToolkitJobs -Jobs @($postJob) -TimeoutSeconds 90
+    $postArr = Wait-ToolkitJobs -Jobs @($postJob) -TimeoutSeconds 90 `
+                   -ShowProgress:$ShowProgress -ActivityLabel $barActivity -PercentHint (& $MapPct 70)
     $postRaw = if ($postArr.Count -gt 0) { $postArr[0] } else { $null }
     if ($null -ne $postRaw -and $postRaw.PSObject.Properties['FileName'] -and -not [string]::IsNullOrWhiteSpace([string]$postRaw.FileName)) {
         $postSnap = [PSCustomObject]@{ Ok = $true; FileName = [string]$postRaw.FileName; FilePath = [string]$postRaw.FilePath }
@@ -395,6 +450,7 @@ function Invoke-AutoProfile {
     }
 
     # ── 5. Compare + Show ─────────────────────────────────────────────────────
+    & $EmitProgress 80 'Comparando snapshots...'
     if ($preSnap.Ok -and $postSnap.Ok) {
         try {
             $compareR = Compare-Snapshot -PrePath $preSnap.FilePath -PostPath $postSnap.FilePath
@@ -407,6 +463,7 @@ function Invoke-AutoProfile {
     }
 
     # ── 5b. Carpeta de run por cliente ────────────────────────────────────────
+    & $EmitProgress 88 'Carpeta de run por cliente...'
     [string] $compareScore = if ($null -ne $compareR) {
         "$($compareR.Score)/$($compareR.ScoreMax)"
     } else { 'N/A' }
@@ -497,6 +554,7 @@ function Invoke-AutoProfile {
     }
 
     # ── 6. Startup Report (D3 — solo reporte, sin toggle) ────────────────────
+    & $EmitProgress 93 'Startup report...'
     Write-Host '  Entradas de inicio detectadas (solo reporte):' -ForegroundColor DarkCyan
     try {
         [object[]] $startupEntries = @(Get-StartupEntries)
@@ -508,6 +566,7 @@ function Invoke-AutoProfile {
     }
 
     # ── 7. Audit (una sola entrada con el resultado completo) ─────────────────
+    & $EmitProgress 98 'Audit y cierre...'
     [datetime] $endedAt    = Get-Date
     [int]      $durationSec = [math]::Round(($endedAt - $startedAt).TotalSeconds)
 
@@ -550,6 +609,16 @@ function Invoke-AutoProfile {
             -Status  $overallStatus `
             -Summary "tier=$tier services=$disabledStr cleanup=$cleanupGb privacy=$($privResult.Path) compare=$compareScore" `
             -Details $fullResult
+    }
+
+    # R1: Write-Progress -Completed antes del return final (NO try/finally).
+    # Si -NoProgressComplete: el named es duenio del lifecycle (emite -Completed el mismo)
+    # y NO reseteamos PctkProgressEnabled aqui (named lo reutiliza para gaming_tweaks).
+    if (-not $NoProgressComplete) {
+        if ($script:PctkProgressEnabled -and $script:PctkProgressOk) {
+            try { Write-Progress -Id 1 -Activity $barActivity -Completed } catch { }
+        }
+        $script:PctkProgressEnabled = $false
     }
 
     return $fullResult
@@ -681,7 +750,9 @@ function Invoke-NamedProfile {
         [Parameter()] [switch] $SkipRestorePoint,
         [Parameter()] [switch] $Unattended,
         [Parameter()] [string] $ClientSlug = '',
-        [Parameter()] [string] $SourcePath = ''
+        [Parameter()] [string] $SourcePath = '',
+        # R3/R7: opt-IN; solo el Router pasa -ShowProgress al invocar named.
+        [Parameter()] [switch] $ShowProgress
     )
 
     # Hardware changed vs snapshot guardado (warn, no bloquea)
@@ -699,12 +770,24 @@ function Invoke-NamedProfile {
     }
 
     # Core (reusa el motor validado; -NoAudit para 1 sola entrada consolidada)
+    # R7: named llama al core con rango 0-85; -NoProgressComplete para que el core
+    # NO emita -Completed (named es duenio del lifecycle y lo emite el mismo).
     [PSCustomObject] $core = Invoke-AutoProfile -Profile $Profile -MachineProfile $MachineProfile `
-        -SkipRestorePoint:$SkipRestorePoint -Unattended:$Unattended -ClientSlug $ClientSlug -NoAudit
+        -SkipRestorePoint:$SkipRestorePoint -Unattended:$Unattended -ClientSlug $ClientSlug -NoAudit `
+        -ShowProgress:$ShowProgress -ProgressBase 0 -ProgressSpan 85 -NoProgressComplete
 
-    # gaming_tweaks
+    # gaming_tweaks: rango 85-98 (R7). Un Write-Progress por toggle aplicado/skip.
+    [string] $namedUc    = [string]$Profile._use_case
+    [string] $namedBarAct = ('PCTk: aplicando perfil {0}' -f $namedUc.ToUpper())
+    if ($ShowProgress -and -not $Unattended -and $script:PctkProgressOk) {
+        $script:PctkProgressEnabled = $true
+        try { Write-Progress -Id 1 -Activity $namedBarAct -Status 'Gaming tweaks...' -PercentComplete 85 } catch { $script:PctkProgressOk = $false }
+    }
     Write-Host '  Aplicando gaming_tweaks...' -ForegroundColor Cyan
     [PSCustomObject] $gaming = Invoke-ProfileGamingTweaksStep -Profile $Profile -MachineProfile $MachineProfile -Unattended:$Unattended
+    if ($ShowProgress -and -not $Unattended -and $script:PctkProgressOk) {
+        try { Write-Progress -Id 1 -Activity $namedBarAct -Status 'Gaming tweaks aplicados.' -PercentComplete 98 } catch { $script:PctkProgressOk = $false }
+    }
 
     # _last_applied + reescribir el JSON fuente (si existe)
     [string] $appliedAt = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
@@ -747,5 +830,12 @@ function Invoke-NamedProfile {
     if ($gaming.RebootNeeded) {
         Write-Host '  [i] HVCI/HAGS aplicados: requieren REINICIO para efecto pleno.' -ForegroundColor Yellow
     }
+
+    # R7: named es duenio del lifecycle de Write-Progress; emite -Completed UNA vez al final.
+    if ($ShowProgress -and -not $Unattended -and $script:PctkProgressOk) {
+        try { Write-Progress -Id 1 -Activity $namedBarAct -Completed } catch { }
+    }
+    $script:PctkProgressEnabled = $false
+
     return $result
 }

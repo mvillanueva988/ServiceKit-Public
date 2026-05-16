@@ -196,6 +196,16 @@ Test-SmokeFunction 'NamedProfileEditor' 'Import/validate _sample' { Import-Named
 Test-SmokeFunction 'Performance' 'Get-GameModeStatus' { Get-GameModeStatus }
 Test-SmokeFunction 'Privacy' 'Get-CustomDefenderExclusions' { Get-CustomDefenderExclusions }
 
+# ─── Progress UX: Wait-ToolkitJobs sin -ShowProgress (R3 opt-IN) ─────────────
+# Verifica que Wait-ToolkitJobs SIN -ShowProgress sobre un job trivial devuelve
+# array y no throw. No valida la UX visual (eso es Sandbox/Opus).
+Test-SmokeFunction 'JobManager' 'Wait-ToolkitJobs no-ShowProgress devuelve array' {
+    $j = Start-Job -ScriptBlock { 'ok' }
+    $arr = Wait-ToolkitJobs -Jobs @($j) -TimeoutSeconds 10
+    if ($null -eq $arr) { throw 'Wait-ToolkitJobs retorno $null (esperado array)' }
+    if ($arr.Count -lt 1) { throw ('Array vacio; esperado Count>=1; Count={0}' -f $arr.Count) }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

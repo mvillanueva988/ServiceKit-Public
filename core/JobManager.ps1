@@ -1,5 +1,12 @@
 Set-StrictMode -Version Latest
 
+# R4: flags script-scope inicializados siempre post Set-StrictMode.
+# PctkProgressEnabled: el engine lo pone $true al arrancar un run con -ShowProgress,
+# $false si -Unattended o sin -ShowProgress, y lo resetea a $false al cerrar.
+# PctkProgressOk: al primer fallo de Write-Progress -> $false; no se reintenta.
+$script:PctkProgressEnabled = $false
+$script:PctkProgressOk      = $true
+
 function Invoke-AsyncToolkitJob {
     [CmdletBinding()]
     param(
@@ -33,7 +40,20 @@ function Wait-ToolkitJobs {
         [System.Management.Automation.Job[]] $Jobs,
 
         [Parameter()]
-        [int] $TimeoutSeconds = 300
+        [int] $TimeoutSeconds = 300,
+
+        # R3: opt-IN; solo el engine auto/named lo pasa.
+        # Las ~13 llamadas de Router.ps1 quedan intactas (sin barra).
+        [Parameter()]
+        [switch] $ShowProgress,
+
+        # R5: Activity no puede ser vacio; default no-vacio garantizado.
+        [Parameter()]
+        [string] $ActivityLabel = 'PCTk',
+
+        # R8: el engine pasa el % de la fase; -1 = indeterminado (sin PercentComplete).
+        [Parameter()]
+        [int] $PercentHint = -1
     )
 
     if ($null -eq $Jobs -or $Jobs.Count -eq 0) {
@@ -43,7 +63,41 @@ function Wait-ToolkitJobs {
         return ,@()
     }
 
-    $null = $Jobs | Wait-Job -Timeout $TimeoutSeconds
+    # R4/R5: mostrar barra solo si el caller opto-in Y el engine habilito el flag Y
+    # Write-Progress no fallo antes (host no interactivo).
+    # R6/D2: usar Wait-Job -Any -Timeout 1 en lugar de Start-Sleep 750ms para
+    # eliminar la regresion de latencia (~4.5s en pipeline completo). Wait-Job -Any
+    # bloquea eficiente en wait-handles .NET (CPU cero, no busy-wait) y despierta
+    # apenas termina un job -> latencia agregada nula + refresco responsivo.
+    [int] $PollSeconds = 1
+    [System.Diagnostics.Stopwatch] $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        [int] $running = @($Jobs | Where-Object { $_.State -eq 'Running' -or $_.State -eq 'NotStarted' }).Count
+        if ($running -eq 0) { break }
+
+        # R4: triple guarda antes de Write-Progress
+        if ($ShowProgress -and $script:PctkProgressEnabled -and $script:PctkProgressOk) {
+            # R5: Activity siempre no-vacio; PercentComplete solo si PercentHint >= 0
+            [string] $actLabel = if ([string]::IsNullOrWhiteSpace($ActivityLabel)) { 'PCTk' } else { $ActivityLabel }
+            [string] $statusTxt = ('En curso... {0}s ({1} trabajo/s)' -f [int]$sw.Elapsed.TotalSeconds, $running)
+            [hashtable] $wpSplat = @{
+                Id       = 1
+                Activity = $actLabel
+                Status   = $statusTxt
+            }
+            if ($PercentHint -ge 0) { $wpSplat['PercentComplete'] = $PercentHint }
+            try {
+                Write-Progress @wpSplat
+            } catch {
+                # R4: primer fallo -> silenciar permanentemente; nunca throw
+                $script:PctkProgressOk = $false
+            }
+        }
+
+        # Esperar hasta que algun job termine o se cumpla el poll window
+        $Jobs | Wait-Job -Any -Timeout $PollSeconds | Out-Null
+
+    } while ($sw.Elapsed.TotalSeconds -lt $TimeoutSeconds)
 
     [System.Management.Automation.Job[]] $unfinishedJobs = @($Jobs | Where-Object { $_.State -eq 'Running' -or $_.State -eq 'NotStarted' })
     if ($unfinishedJobs.Count -gt 0) {
