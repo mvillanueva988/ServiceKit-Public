@@ -126,11 +126,17 @@ Test-SmokeFunction 'StartupManager' 'Get-StartupEntries' { Get-StartupEntries }
 
 Test-SmokeFunction 'Telemetry' 'Test-IsVirtualMachine' { Test-IsVirtualMachine }
 Test-SmokeFunction 'Telemetry' 'Invoke-WithTimeout returns on time' {
-    Invoke-WithTimeout -ScriptBlock { 42 } -TimeoutSeconds 5
+    $r = Invoke-WithTimeout -ScriptBlock { 42 } -TimeoutSeconds 5
+    if (-not $r.Ok) { throw ('Debe ser Ok=$true; Ok={0}' -f $r.Ok) }
+    if ($r.TimedOut) { throw 'No debe ser TimedOut' }
+    if ($r.Value[0] -ne 42) { throw ('Value[0] debe ser 42; got {0}' -f $r.Value[0]) }
 }
 Test-SmokeFunction 'Telemetry' 'Invoke-WithTimeout honors timeout' {
-    # debe devolver el Default sin colgar el smoke (~2s, no el sleep)
-    Invoke-WithTimeout -ScriptBlock { Start-Sleep 30; 'NO' } -TimeoutSeconds 2 -Default 'TIMEOUT'
+    # debe devolver envelope con TimedOut=$true sin colgar el smoke (~2s, no el sleep)
+    $r = Invoke-WithTimeout -ScriptBlock { Start-Sleep 30; 'NO' } -TimeoutSeconds 2 -Default 'TIMEOUT'
+    if (-not $r.TimedOut) { throw ('Debe ser TimedOut=$true; TimedOut={0}' -f $r.TimedOut) }
+    if ($r.Ok) { throw 'No debe ser Ok=$true en timeout' }
+    if ($r.Value[0] -ne 'TIMEOUT') { throw ('Value[0] debe ser TIMEOUT; got {0}' -f $r.Value[0]) }
 }
 
 $script:_snapshotResult = $null

@@ -11,7 +11,7 @@ function Invoke-WithTimeout {
     <#
     .SYNOPSIS
         Ejecuta un ScriptBlock en un runspace separado con timeout.
-        Retorna el resultado del ScriptBlock, o $Default si vence el timeout o lanza.
+        Retorna siempre [PSCustomObject]@{ Ok=[bool]; TimedOut=[bool]; Value=<array> }. Nunca throw.
     .NOTES
         T-N3: el ScriptBlock debe ser autocontenido (solo cmdlets built-in, args
         explícitos via -ArgumentList). No puede hacer closure sobre el scope padre.
@@ -44,19 +44,18 @@ function Invoke-WithTimeout {
         $async = $ps.BeginInvoke()
         if ($async.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))) {
             try {
-                $out = @($ps.EndInvoke($async))
-                if ($out.Count -eq 1) { return $out[0] }
-                return $out
+                [object[]] $out = @($ps.EndInvoke($async))
+                return [PSCustomObject]@{ Ok = $true; TimedOut = $false; Value = $out }
             } catch {
-                return $Default
+                return [PSCustomObject]@{ Ok = $false; TimedOut = $false; Value = @($Default) }
             }
         } else {
-            # Timeout: detener y retornar Default (T-N4: el hilo nativo puede seguir)
+            # Timeout: detener y retornar envelope con TimedOut=$true (T-N4: el hilo nativo puede seguir)
             try { $ps.Stop() } catch { }
-            return $Default
+            return [PSCustomObject]@{ Ok = $false; TimedOut = $true; Value = @($Default) }
         }
     } catch {
-        return $Default
+        return [PSCustomObject]@{ Ok = $false; TimedOut = $false; Value = @($Default) }
     } finally {
         if ($null -ne $ps) { $ps.Dispose() }
     }
@@ -239,11 +238,11 @@ function Get-SystemSnapshot {
     # SMART (Get-StorageReliabilityCounter) skip en VM (§3d): cuelga en disco virtual.
     $diskList = [System.Collections.Generic.List[PSCustomObject]]::new()
     $sw.Restart()
-    $physDisks = Invoke-WithTimeout -TimeoutSeconds 10 -Default @() -ScriptBlock {
+    $physDisks = (Invoke-WithTimeout -TimeoutSeconds 10 -Default @() -ScriptBlock {
         @(Get-PhysicalDisk -ErrorAction SilentlyContinue)
-    }
+    }).Value
     $qt['Get-PhysicalDisk'] = [int] $sw.ElapsedMilliseconds
-    foreach ($physDisk in @($physDisks)) {
+    foreach ($physDisk in $physDisks) {
         $tempC    = $null
         $wearPct  = $null
         $readErr  = $null
@@ -251,10 +250,10 @@ function Get-SystemSnapshot {
         if (-not $isVM) {
             # SMART solo en HW físico
             $sw.Restart()
-            $rel = Invoke-WithTimeout -TimeoutSeconds 8 -Default $null -ScriptBlock {
+            $rel = (Invoke-WithTimeout -TimeoutSeconds 8 -Default $null -ScriptBlock {
                 param($d)
                 $d | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
-            } -ArgumentList @($physDisk)
+            } -ArgumentList @($physDisk)).Value | Select-Object -First 1
             $qt['Get-StorageReliabilityCounter'] = [int] $sw.ElapsedMilliseconds
             if ($rel) {
                 if ($null -ne $rel.PSObject.Properties['Temperature'] -and [int]$rel.Temperature -gt 0) {
@@ -305,11 +304,8 @@ function Get-SystemSnapshot {
         )
     }
     $qt['Get-Volume'] = [int] $sw.ElapsedMilliseconds
-    # T-N2: Invoke-WithTimeout des-empaqueta resultados de 1 elemento; sin este
-    # @() un host con 1 solo volumen (C:) serializaria Volumes como objeto, no
-    # array (rompe el invariante de shape, base del Compare). Mismo idiom que
-    # procs/usb/hid/installed.
-    $volumes = @($volResult)
+    # T-N2: envelope garantiza .Value siempre array — shape invariant de Volumes preservado.
+    $volumes = $volResult.Value
 
     # ── Page File (keep — CIM rapido) ─────────────────────────────────────────
     [PSCustomObject] $pageFile = [PSCustomObject]@{ CurrentUsageMb = $null; PeakUsageMb = $null }
@@ -331,14 +327,14 @@ function Get-SystemSnapshot {
     )
     [PSCustomObject] $services = [PSCustomObject]@{ RunningCount = 0; BloatRunning = [string[]]@() }
     $sw.Restart()
-    $svcResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+    $svcEnv = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
         param([string[]] $bNames)
         $running = @(Get-Service | Where-Object { $_.Status -eq 'Running' })
         $bloat   = @($running | Where-Object { $_.Name -in $bNames } | Select-Object -ExpandProperty Name)
         [PSCustomObject]@{ RunningCount = [int]$running.Count; BloatRunning = [string[]]$bloat }
     } -ArgumentList @(,$bloatNames)
     $qt['Get-Service'] = [int] $sw.ElapsedMilliseconds
-    if ($null -ne $svcResult) { $services = $svcResult }
+    if ($svcEnv.Ok) { $services = $svcEnv.Value | Select-Object -First 1 }
 
     # ── Startup (keep — registry, rapido) ─────────────────────────────────────
     [int] $startupCount = 0
@@ -378,7 +374,7 @@ function Get-SystemSnapshot {
         )
     }
     $qt['Get-Process'] = [int] $sw.ElapsedMilliseconds
-    $topProcs = @($procsResult)
+    $topProcs = $procsResult.Value
 
     # ── Chassis / Batería ─────────────────────────────────────────────────────
     # Chassis: keep (CIM rapido). Batería: skip en VM (§3d).
@@ -462,10 +458,11 @@ function Get-SystemSnapshot {
 
         # Defender
         $sw.Restart()
-        $defResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+        $defEnv = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
             Get-MpComputerStatus -ErrorAction Stop
         }
         $qt['Get-MpComputerStatus'] = [int] $sw.ElapsedMilliseconds
+        $defResult = $defEnv.Value | Select-Object -First 1
         if ($null -ne $defResult) {
             # AMRunningMode: 'Normal' | 'Passive Mode' | 'SxS Passive Mode' |
             # 'EDR Block Mode'. Solo 'Normal' significa que Defender esta
@@ -575,7 +572,7 @@ function Get-SystemSnapshot {
             )
         }
         $qt['Get-PnpDevice-USB'] = [int] $sw.ElapsedMilliseconds
-        $usbDevices = @($usbResult)
+        $usbDevices = $usbResult.Value
 
         $sw.Restart()
         $hidResult = Invoke-WithTimeout -TimeoutSeconds 6 -Default @() -ScriptBlock {
@@ -590,7 +587,7 @@ function Get-SystemSnapshot {
             )
         }
         $qt['Get-PnpDevice-HID'] = [int] $sw.ElapsedMilliseconds
-        $hidDevices = @($hidResult)
+        $hidDevices = $hidResult.Value
     } else {
         $qt['Get-PnpDevice-USB'] = 'skipped'
         $qt['Get-PnpDevice-HID'] = 'skipped'
@@ -599,7 +596,7 @@ function Get-SystemSnapshot {
     # ── DNS servers IPv4 por adapter activo (keep) ────────────────────────────
     [hashtable] $dnsServers = @{}
     $sw.Restart()
-    $dnsResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+    $dnsEnv = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
         $h = @{}
         foreach ($entry in @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
                               Where-Object { $_.AddressFamily -eq 2 -and $_.ServerAddresses.Count -gt 0 })) {
@@ -608,7 +605,7 @@ function Get-SystemSnapshot {
         $h
     }
     $qt['Get-DnsClientServerAddress'] = [int] $sw.ElapsedMilliseconds
-    if ($null -ne $dnsResult) { $dnsServers = $dnsResult }
+    if ($dnsEnv.Ok) { $dnsServers = $dnsEnv.Value | Select-Object -First 1 }
 
     # ── Programas instalados (keep) ───────────────────────────────────────────
     # Filter regex matches OEM utilities, drivers, dev tools, gaming clients,
@@ -640,12 +637,12 @@ function Get-SystemSnapshot {
         )
     } -ArgumentList @($vendorFilter)
     $qt['InstalledPrograms'] = [int] $sw.ElapsedMilliseconds
-    $installedRelevant = @($installedResult)
+    $installedRelevant = $installedResult.Value
 
     # ── Steam / CS2 detection + cfg parsing (keep — condicional) ─────────────
     [PSCustomObject] $steam = $null
     $sw.Restart()
-    $steamResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+    $steamEnv = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
         try {
             $reg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam' -ErrorAction SilentlyContinue
             if ($null -eq $reg -or $null -eq $reg.PSObject.Properties['InstallPath']) { return $null }
@@ -687,7 +684,7 @@ function Get-SystemSnapshot {
         } catch { $null }
     }
     $qt['Steam'] = [int] $sw.ElapsedMilliseconds
-    $steam = $steamResult
+    $steam = $steamEnv.Value | Select-Object -First 1
 
     # ── Power plan activo (keep) ──────────────────────────────────────────────
     # El header de "powercfg /getactivescheme" varia por locale:
@@ -698,7 +695,7 @@ function Get-SystemSnapshot {
     # formato comun: cualquier texto antes de ":" seguido del GUID con paren.
     [PSCustomObject] $powerPlan = $null
     $sw.Restart()
-    $ppResult = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
+    $ppEnv = Invoke-WithTimeout -TimeoutSeconds 5 -Default $null -ScriptBlock {
         try {
             [string] $out = (& powercfg /getactivescheme 2>&1) -join "`n"
             [string] $guid = ''
@@ -711,7 +708,7 @@ function Get-SystemSnapshot {
         } catch { $null }
     }
     $qt['powercfg'] = [int] $sw.ElapsedMilliseconds
-    $powerPlan = $ppResult
+    $powerPlan = $ppEnv.Value | Select-Object -First 1
 
     # ── Retorno garantizado (§3c: partial-snapshot invariant) ─────────────────
     # T-N2: shape invariante — NUNCA renombrar ni remover campos existentes.
