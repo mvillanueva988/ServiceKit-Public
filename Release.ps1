@@ -68,6 +68,15 @@ if (Test-Path $testsDir) {
     Get-ChildItem -Path $testsDir -Filter 'stage2-harness.ps1'       | Remove-Item -Force
 }
 
+# Recetas nombradas (T-S4): son datos de clientes reales. Solo viajan el
+# placeholder y el fixture de smoke; cualquier <cliente>.json se excluye del ZIP.
+[string] $namedDir = Join-Path (Join-Path (Join-Path $staging 'data') 'profiles') 'named'
+if (Test-Path $namedDir) {
+    Get-ChildItem -Path $namedDir -File | Where-Object {
+        $_.Name -ne 'README.md' -and $_.Name -ne '_sample.json'
+    } | Remove-Item -Force
+}
+
 # ── Generar ZIP ───────────────────────────────────────────────────────────────
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
