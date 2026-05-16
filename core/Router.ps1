@@ -924,39 +924,43 @@ function Invoke-ApplyAutoProfile {
     Write-Host ("  Tier detectado: {0}" -f $detectedTier) -ForegroundColor Yellow
     Write-Host ''
     Write-Host '  [1]  Generic         (disponible)'
-    Write-Host '  [2]  Office          (proximamente - Stage 3)' -ForegroundColor DarkGray
-    Write-Host '  [3]  Study           (proximamente - Stage 3)' -ForegroundColor DarkGray
-    Write-Host '  [4]  Multimedia      (proximamente - Stage 3)' -ForegroundColor DarkGray
+    Write-Host '  [2]  Office          (trabajo administrativo: Office/Outlook/Teams)'
+    Write-Host '  [3]  Study           (estudiante: browser pesado, videollamadas)'
+    Write-Host '  [4]  Multimedia      (streaming: series/deportes/peliculas)'
     Write-Host '  [B]  Volver'
     Write-Host ''
     [string] $ucChoice = (Read-Host '  Selecciona').Trim().ToUpperInvariant()
 
+    [string] $useCase = ''
     switch ($ucChoice) {
-        'B' { return }
-        '2' { Write-Host '  Office: proximamente (Stage 3).' -ForegroundColor DarkYellow; return }
-        '3' { Write-Host '  Study: proximamente (Stage 3).'  -ForegroundColor DarkYellow; return }
-        '4' { Write-Host '  Multimedia: proximamente (Stage 3).' -ForegroundColor DarkYellow; return }
-        '1' { } # continua abajo
+        'B'     { return }
+        '1'     { $useCase = 'generic' }
+        '2'     { $useCase = 'office' }
+        '3'     { $useCase = 'study' }
+        '4'     { $useCase = 'multimedia' }
         default { Write-Host '  Opcion invalida.' -ForegroundColor Red; return }
     }
 
-    # ── Cargar receta Generic para el tier detectado ──────────────────────────
+    # ── Cargar receta para el use-case y tier detectado ───────────────────────
     [string] $tierArg = switch ($detectedTier.ToLowerInvariant()) { 'low' { 'Low' } 'high' { 'High' } default { 'Mid' } }
-    [string] $profPath = Get-AutoProfilePath -UseCase 'generic' -Tier $tierArg
+    [string] $profPath = Get-AutoProfilePath -UseCase $useCase -Tier $tierArg
+
+    [string] $auditAction = ('Profile.Apply.' + (([string]$useCase).Substring(0,1).ToUpperInvariant() + ([string]$useCase).Substring(1)))
 
     [PSCustomObject] $profile = $null
     try {
         $profile = Import-AutoProfile -Path $profPath
     } catch {
         Write-Host ("  [!] No se pudo cargar la receta: {0}" -f $_.Exception.Message) -ForegroundColor Red
-        Write-ActionAudit -Action 'Profile.Apply.Generic' -Status 'Failed' -Summary $_.Exception.Message
+        Write-ActionAudit -Action $auditAction -Status 'Failed' -Summary $_.Exception.Message
         return
     }
 
     # ── Preview + Confirm ─────────────────────────────────────────────────────
     [string[]] $previewLines = Get-AutoProfilePreviewLines -Profile $profile -MachineProfile $MachineProfile
-    if (-not (Confirm-Action -Title ('Aplicar perfil Generic ({0})?' -f $detectedTier) -Lines $previewLines)) {
-        Write-ActionAudit -Action 'Profile.Apply.Generic' -Status 'Cancelled'
+    [string] $useCaseLabel = ([string]$useCase).Substring(0,1).ToUpperInvariant() + ([string]$useCase).Substring(1)
+    if (-not (Confirm-Action -Title ('Aplicar perfil {0} ({1})?' -f $useCaseLabel, $detectedTier) -Lines $previewLines)) {
+        Write-ActionAudit -Action $auditAction -Status 'Cancelled'
         return
     }
 

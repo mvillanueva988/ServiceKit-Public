@@ -1,0 +1,37 @@
+﻿{
+  "_schema_version": "1.0",
+  "_use_case": "study",
+  "_tier": "high",
+  "_description": "PC de estudiante (browser pesado, videollamadas, trabajos) — tier High",
+  "_rationale": "Prioriza arranque rapido y evitar lentitud progresiva tipica de uso academico (browser con muchas pestanas, Zoom/Meet, descarga de PDFs). Deshabilita Xbox (no es PC de juego) y telemetria. Preserva Spooler/PrintNotify (el estudiante imprime trabajos — D4). Privacy medium: baja telemetria y Bing sin afectar flujo de estudio. En hardware High el modulo Performance aplica power plan de maximo rendimiento; el JSON declara Balanced (la divergencia visual agresiva no aporta al uso academico).",
+
+  "services": {
+    "disable": [
+      "Fax", "WMPNetworkSvc", "RemoteRegistry", "DiagTrack", "dmwappushservice",
+      "XblAuthManager", "XblGameSave", "XboxNetApiSvc", "XboxGipSvc"
+    ],
+    "preserve_note": "Preservados: Spooler/PrintNotify (impresion de trabajos academicos — D4). Xbox deshabilitado: Study no es PC de juego (DD1)."
+  },
+
+  "performance": {
+    "visual_profile": "Balanced",
+    "_stage2_note": "Stage 2 invoca Start-PerformanceProcess -VisualProfile <visual_profile>. Eso ya aplica power plan laptop-aware + system tweaks sanos (hibernacion off, svchost si <=8GB, shutdown timeout, GameDVR off). Los bloques de abajo quedan declarados para el seam de granularidad futura (D1) -- el engine de Stage 2 NO los lee aun.",
+    "power_plan": { "_future": true },
+    "system_tweaks": { "_future": true }
+  },
+
+  "privacy": {
+    "level": "medium",
+    "oosu10_cfg": "medium.cfg",
+    "fallback": "native",
+    "_note": "Si OOSU10.exe + data/oosu10-profiles/medium.cfg estan disponibles -> Invoke-OOSU10Profile. Si no -> Start-PrivacyJob -Profile Medium (registry nativo). Medium apaga telemetria, Bing, feedback, activity sin tocar OneDrive."
+  },
+
+  "cleanup": { "clear_temp": true },
+
+  "startup": {
+    "auto_disable_known_bloat": false,
+    "report_only": true,
+    "_note": "D3: Stage 3 sigue report-only. Auto-disable diferido a Stage 4."
+  }
+}

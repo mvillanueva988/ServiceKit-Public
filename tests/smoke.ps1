@@ -165,6 +165,17 @@ Test-SmokeFunction 'ProfileEngine' 'Import generic_low'   { Import-AutoProfile -
 Test-SmokeFunction 'ProfileEngine' 'Import generic_mid'   { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic -Tier Mid) }
 Test-SmokeFunction 'ProfileEngine' 'Import generic_high'  { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic -Tier High) }
 
+# ─── Stage 3: Office / Study / Multimedia recipes (read-only: import/validate) ─
+Test-SmokeFunction 'ProfileEngine' 'Import office_low'      { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase office -Tier Low) }
+Test-SmokeFunction 'ProfileEngine' 'Import office_mid'      { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase office -Tier Mid) }
+Test-SmokeFunction 'ProfileEngine' 'Import office_high'     { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase office -Tier High) }
+Test-SmokeFunction 'ProfileEngine' 'Import study_low'       { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase study -Tier Low) }
+Test-SmokeFunction 'ProfileEngine' 'Import study_mid'       { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase study -Tier Mid) }
+Test-SmokeFunction 'ProfileEngine' 'Import study_high'      { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase study -Tier High) }
+Test-SmokeFunction 'ProfileEngine' 'Import multimedia_low'  { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase multimedia -Tier Low) }
+Test-SmokeFunction 'ProfileEngine' 'Import multimedia_mid'  { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase multimedia -Tier Mid) }
+Test-SmokeFunction 'ProfileEngine' 'Import multimedia_high' { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase multimedia -Tier High) }
+
 # ─── Stage 0 new modules (read-only paths only) ───────────────────────────────
 Test-SmokeFunction 'CoreIsolation' 'Get-CoreIsolationStatus' { Get-CoreIsolationStatus }
 

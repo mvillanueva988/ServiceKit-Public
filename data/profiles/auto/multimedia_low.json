@@ -1,0 +1,36 @@
+﻿{
+  "_schema_version": "1.0",
+  "_use_case": "multimedia",
+  "_tier": "low",
+  "_description": "PC de entretenimiento (streaming de series/deportes/peliculas) — tier Low",
+  "_rationale": "Prioriza throughput de red, decode de hardware y estabilidad termica para streaming. Preserva los 4 servicios Xbox (game streaming, juego casual, app Xbox como hub de media — DD1). Deshabilita solo el base inequivoco (telemetria, registry remoto, fax, WMP). Privacy medium con multimedia.cfg: apaga Bing/telemetria pero preserva Xbox apps. En hardware Low Balanced es el perfil correcto (no hay GPU para Full; el modulo Performance decide power plan segun laptop/desktop).",
+
+  "services": {
+    "disable": [
+      "Fax", "WMPNetworkSvc", "RemoteRegistry", "DiagTrack", "dmwappushservice"
+    ],
+    "preserve_note": "Preservados: XblAuthManager, XblGameSave, XboxNetApiSvc, XboxGipSvc (game/media streaming, app Xbox como hub de media). Spooler/RemoteAccess no se tocan (neutral, no asume impresion ni VPN en uso multimedia)."
+  },
+
+  "performance": {
+    "visual_profile": "Balanced",
+    "_stage2_note": "Stage 2 invoca Start-PerformanceProcess -VisualProfile <visual_profile>. Eso ya aplica power plan laptop-aware + system tweaks sanos (hibernacion off, svchost si <=8GB, shutdown timeout, GameDVR off). Los bloques de abajo quedan declarados para el seam de granularidad futura (D1) -- el engine de Stage 2 NO los lee aun.",
+    "power_plan": { "_future": true },
+    "system_tweaks": { "_future": true }
+  },
+
+  "privacy": {
+    "level": "medium",
+    "oosu10_cfg": "multimedia.cfg",
+    "fallback": "native",
+    "_note": "Si OOSU10.exe + data/oosu10-profiles/multimedia.cfg estan disponibles -> Invoke-OOSU10Profile. Si no -> Start-PrivacyJob -Profile Medium (registry nativo). multimedia.cfg apaga Bing/telemetria pero preserva Xbox apps (a diferencia de medium.cfg generico)."
+  },
+
+  "cleanup": { "clear_temp": true },
+
+  "startup": {
+    "auto_disable_known_bloat": false,
+    "report_only": true,
+    "_note": "D3: Stage 3 sigue report-only. Auto-disable diferido a Stage 4."
+  }
+}
