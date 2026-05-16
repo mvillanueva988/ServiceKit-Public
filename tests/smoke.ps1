@@ -261,6 +261,54 @@ Test-SmokeFunction 'ToolsSelector' 'Get-ToolStatus parsea manifest sin descargar
     $tl.Count
 }
 
+# ─── Stage 4.2-A: TimerResolution + ProcessPriority (read-only) ──────────────
+Test-SmokeFunction 'TimerResolution' 'Get-TimerResolutionStatus no throw' { Get-TimerResolutionStatus }
+Test-SmokeFunction 'TimerResolution' 'Get-TimerResolutionStatus shape' {
+    $s = Get-TimerResolutionStatus
+    foreach ($f in @('Enabled','RawValue','RegistryPath','WinBuild','GateWin11')) {
+        if ($null -eq $s.PSObject.Properties[$f]) { throw "Campo $f ausente en Get-TimerResolutionStatus" }
+    }
+}
+Test-SmokeFunction 'ProcessPriority' 'Get-ProcessPriorityIFEO no throw' { Get-ProcessPriorityIFEO }
+
+Test-SmokeFunction 'NamedProfileEditor' 'Schema acepta timer_resolution=on' {
+    $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $p.gaming_tweaks | Add-Member -NotePropertyName 'timer_resolution' -NotePropertyValue 'on' -Force
+    $null = Test-NamedProfileSchema -Profile $p
+}
+Test-SmokeFunction 'NamedProfileEditor' 'Schema acepta process_priority valido' {
+    $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $pp = [PSCustomObject]@{}
+    $pp | Add-Member -NotePropertyName 'game.exe' -NotePropertyValue 'High' -Force
+    $p.gaming_tweaks | Add-Member -NotePropertyName 'process_priority' -NotePropertyValue $pp -Force
+    $null = Test-NamedProfileSchema -Profile $p
+}
+Test-SmokeFunction 'NamedProfileEditor' 'Schema acepta sin timer_resolution ni process_priority' {
+    $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $null = Test-NamedProfileSchema -Profile $p
+}
+Test-SmokeFunction 'NamedProfileEditor' 'Schema rechaza timer_resolution invalido' {
+    $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $p.gaming_tweaks | Add-Member -NotePropertyName 'timer_resolution' -NotePropertyValue 'maybe' -Force
+    $threw = $false
+    try { $null = Test-NamedProfileSchema -Profile $p } catch { $threw = $true }
+    if (-not $threw) { throw 'Test-NamedProfileSchema debio rechazar timer_resolution=maybe' }
+}
+Test-SmokeFunction 'NamedProfileEditor' 'Schema rechaza process_priority clase invalida' {
+    $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $pp = [PSCustomObject]@{}
+    $pp | Add-Member -NotePropertyName 'game.exe' -NotePropertyValue 'Realtime' -Force
+    $p.gaming_tweaks | Add-Member -NotePropertyName 'process_priority' -NotePropertyValue $pp -Force
+    $threw = $false
+    try { $null = Test-NamedProfileSchema -Profile $p } catch { $threw = $true }
+    if (-not $threw) { throw 'Test-NamedProfileSchema debio rechazar process_priority clase=Realtime' }
+}
+
 # ─── Progress UX: Wait-ToolkitJobs sin -ShowProgress (R3 opt-IN) ─────────────
 # Verifica que Wait-ToolkitJobs SIN -ShowProgress sobre un job trivial devuelve
 # array y no throw. No valida la UX visual (eso es Sandbox/Opus).

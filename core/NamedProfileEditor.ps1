@@ -77,6 +77,19 @@ function Test-NamedProfileSchema {
     if ($null -ne $ooP -and ([string]$ooP.Value) -notin @('basic','medium','aggressive')) {
         throw "gaming_tweaks.oosu_profile invalido: '$($ooP.Value)'."
     }
+    [object] $trP = $gt.PSObject.Properties['timer_resolution']
+    if ($null -ne $trP -and ([string]$trP.Value) -notin $onOff) {
+        throw "gaming_tweaks.timer_resolution debe ser 'on' o 'off'. Valor: '$($trP.Value)'."
+    }
+    [object] $ppP = $gt.PSObject.Properties['process_priority']
+    if ($null -ne $ppP -and $null -ne $ppP.Value) {
+        [string[]] $validPriority = @('High', 'AboveNormal')
+        foreach ($prop in @($ppP.Value.PSObject.Properties)) {
+            if ([string]$prop.Value -notin $validPriority) {
+                throw "gaming_tweaks.process_priority: clase invalida para '$($prop.Name)': '$($prop.Value)'. Validos: High, AboveNormal."
+            }
+        }
+    }
 
     return $true
 }
@@ -307,6 +320,31 @@ function New-NamedProfileInteractive {
     Write-Host ''
     [string] $oo = (Read-Host '  OOSU profile [basic/medium/aggressive] o Enter=no tocar').Trim().ToLowerInvariant()
     if ($oo -in @('basic','medium','aggressive')) { Add-Tweak 'oosu_profile' $oo }
+
+    # timer_resolution (registry-only Win11, cost-zero, requiere reinicio)
+    Write-Host ''
+    [string] $tr = (Read-Host '  Timer Resolution [on/off] o Enter=no tocar').Trim().ToLowerInvariant()
+    if ($tr -in @('on', 'off')) { Add-Tweak 'timer_resolution' $tr }
+
+    # process_priority (IFEO estatico, ej. game.exe=High;otro.exe=AboveNormal)
+    Write-Host ''
+    [string] $ppRaw = (Read-Host '  Prioridad IFEO (ej. game.exe=High;otro.exe=AboveNormal) o Enter=no tocar').Trim()
+    if (-not [string]::IsNullOrWhiteSpace($ppRaw)) {
+        [PSCustomObject] $ppObj = [PSCustomObject]@{}
+        [bool] $ppHasEntries = $false
+        foreach ($ppPair in @($ppRaw -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            [string[]] $ppKv = $ppPair -split '=', 2
+            if ($ppKv.Count -eq 2) {
+                [string] $ppExe = $ppKv[0].Trim()
+                [string] $ppCls = $ppKv[1].Trim()
+                if (-not [string]::IsNullOrWhiteSpace($ppExe) -and $ppCls -in @('High', 'AboveNormal')) {
+                    $ppObj | Add-Member -NotePropertyName $ppExe -NotePropertyValue $ppCls -Force
+                    $ppHasEntries = $true
+                }
+            }
+        }
+        if ($ppHasEntries) { Add-Tweak 'process_priority' $ppObj }
+    }
 
     # Core auto-shaped (gaming-ready, neutro y seguro; el operador lo edita a mano si quiere)
     [string] $tier = if ($MachineProfile.PSObject.Properties['Tier']) { ([string]$MachineProfile.Tier).ToLowerInvariant() } else { 'high' }

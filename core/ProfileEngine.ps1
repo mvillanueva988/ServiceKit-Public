@@ -650,6 +650,7 @@ function Invoke-ProfileGamingTweaksStep {
     [PSCustomObject] $res = [PSCustomObject]@{
         Hvci = $null; Hags = $null; UsbSuspend = $null; GameMode = $null
         Wslconfig = $null; DefenderExcl = $null; OosuProfile = $null
+        TimerRes = $null; ProcessPriority = $null
         RebootNeeded = $false; Success = $true
     }
     [object] $gtP = $Profile.PSObject.Properties['gaming_tweaks']
@@ -687,9 +688,20 @@ function Invoke-ProfileGamingTweaksStep {
     $res.GameMode = Invoke-Toggle 'game_mode' {
         param($v); Set-GameMode -State $v }
 
+    $res.TimerRes = Invoke-Toggle 'timer_resolution' {
+        param($v); Set-TimerResolutionRegistry -State $v }
+    if ($null -ne $res.TimerRes -and -not $res.TimerRes.Skipped) {
+        [object] $trD = $res.TimerRes.Detail
+        if ($null -ne $trD -and
+            $null -ne $trD.PSObject.Properties['RestartRequired'] -and
+            [bool]$trD.RestartRequired) {
+            $res.RebootNeeded = $true
+        }
+    }
+
     # Agregacion de Success: un toggle ejecutado (no skipped) que no aplico
     # marca el step como no-exitoso (-> Status Partial en Invoke-NamedProfile).
-    foreach ($t in @($res.Hvci, $res.Hags, $res.UsbSuspend, $res.GameMode)) {
+    foreach ($t in @($res.Hvci, $res.Hags, $res.UsbSuspend, $res.GameMode, $res.TimerRes)) {
         if ($null -ne $t -and -not $t.Skipped -and -not $t.Applied) { $res.Success = $false }
     }
 
@@ -724,6 +736,21 @@ function Invoke-ProfileGamingTweaksStep {
         } catch {
             $res.Success = $false
             $res.DefenderExcl = [PSCustomObject]@{ Applied = $false; Skipped = $false; Detail = $_.Exception.Message }
+        }
+    }
+
+    [object] $ppP2 = $gt.PSObject.Properties['process_priority']
+    if ($null -eq $ppP2 -or $null -eq $ppP2.Value -or @($ppP2.Value.PSObject.Properties).Count -eq 0) {
+        $res.ProcessPriority = [PSCustomObject]@{ Applied = $false; Skipped = $true; Detail = 'sin entradas (ausente/vacio)' }
+    } else {
+        try {
+            [object] $ppRes = Set-ProcessPriorityIFEO -PriorityMap $ppP2.Value
+            [bool] $ppOk = ($null -eq $ppRes) -or (-not $ppRes.PSObject.Properties['Success']) -or [bool]$ppRes.Success
+            if (-not $ppOk) { $res.Success = $false }
+            $res.ProcessPriority = [PSCustomObject]@{ Applied = $ppOk; Skipped = $false; Detail = $ppRes }
+        } catch {
+            $res.Success = $false
+            $res.ProcessPriority = [PSCustomObject]@{ Applied = $false; Skipped = $false; Detail = $_.Exception.Message }
         }
     }
 
