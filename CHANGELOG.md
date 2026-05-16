@@ -4,35 +4,54 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
 ## [Unreleased]
 
-### Stage 0 — Audit técnico + módulos prerequisitos
+## [2.0.0] - 2026-05-15
 
-#### Fixed
-- **Encoding** UTF-8 BOM en 13 archivos `.ps1` con bytes non-ASCII (em-dash, tildes en strings literales). Sin BOM, PowerShell 5.1 en locale es-AR los leía como Windows-1252 y reventaba el parser en pleno string literal. Síntoma observado: `Router.ps1` no parseaba en una máquina en español.
-- **Network.ps1 `Optimize-Network`**: tres bugs reales — acceso a propiedad inexistente en StrictMode, `netsh fastopen` no válido para `set global` en Win11 24H2, y `autotuninglevel=normal` aplicado siempre aunque ya sea default. El output ahora expone `NetshIssues[]` con detalle.
-- **Network.ps1 `Get-NetworkDiagnostics`**: la primera fila de `Get-NetTCPSetting` (`Automatic`) tiene el campo vacío; ahora filtra por `SettingName='Internet'` y fallback locale-agnostic en netsh.
-- **Performance.ps1 `Set-UltimatePowerPlan`**: en laptops con TDP locked vía EC, Ultimate Performance degrada la performance sostenida (fuerza Min processor state alto → más temperatura → throttle más agresivo). Ahora detecta laptop y aplica Balanced; mantiene Ultimate sólo en desktop.
-- **Telemetry.ps1 AV passive mode**: `MultipleAvProblem` solía dar falso positivo cuando Defender estaba en Passive Mode con un AV de terceros activo. Ahora separa `Enabled` (registrado) de `IsActive` (escaneando en tiempo real) usando `Get-MpComputerStatus.AMRunningMode`.
-- **Telemetry.ps1 PowerPlan parsing**: el header real de `powercfg /getactivescheme` es `GUID de plan de energía:` (no `del esquema`). Regex reemplazado por uno locale-agnostic.
-- **Telemetry.ps1 Defender duplicado**: SecurityCenter2 enumera Defender; ahora se skipea allí para evitar el duplicado con `Get-MpComputerStatus`.
-- **UsbPower.ps1 regex**: locale-agnostic — matchea `Índice de configuración de corriente alterna actual` (es-AR), `Current AC Power Setting Index` (en-US) y `Índice da Configuração de Energia CA Atual` (pt-BR).
-- **RawAudit.ps1 cosmetic**: `%%` literal en línea de Volumes → `%`.
+Rework completo del toolkit. Arquitectura rediseñada de "menú con stubs" a **optimizador por perfiles**: el técnico elige el use-case del cliente (Generic / Office / Study / Multimedia), el toolkit detecta el hardware tier (Low / Mid / High) y aplica una receta pre-fabricada con snapshot PRE/POST automatizado.
 
-#### Added
-- **`modules/CoreIsolation.ps1`**: `Get-CoreIsolationStatus` + `Disable-Hvci` + `Enable-Hvci` — toggle de Memory Integrity preservando VBS para WSL2.
-- **`modules/UsbPower.ps1`**: `Get-UsbSelectiveSuspendStatus` + `Disable/Enable-UsbSelectiveSuspend` — apaga selective suspend en AC + DC con registro global como reaseguro.
-- **`modules/Hags.ps1`**: `Get-HagsStatus` + `Disable/Enable-Hags` — toggle de Hardware-Accelerated GPU Scheduling.
-- **`modules/Wsl.ps1`**: `Test-WslAvailable` + `Get-WslConfig` + `New-WslConfig` (presets Default/Gaming/DevHeavy/DevDocker) + `Set-WslConfig` + `Invoke-WslShutdown`.
-- **`modules/Privacy.ps1`**: `Add-WslDefenderExclusions` + `Remove-WslDefenderExclusions` con discovery dinámico de paths LXSS (Ubuntu/Debian/Kali/etc.) + Docker.
-- **`modules/RawAudit.ps1`**: `New-RawAuditReport` produce `.txt` human-readable en `output/audits/` desde el snapshot enriquecido.
-- **`modules/Telemetry.ps1` snapshot enriquecido** con 8 campos: `DeviceGuard`, `UsbDevices`, `HidDevices`, `DnsServers`, `ThermalZones`, `InstalledPrograms` (filtrado por vendors), `Steam` (autoexec + launch options), `PowerPlan`.
-- **`tests/smoke.ps1`**: harness read-only que valida 20 funciones de detección sin tocar el sistema.
+### Added
 
-#### Changed
-- **Branding**: `ServiceKit v2` → `PCTk v2` en `main.ps1` (mutex, error messages) y `core/Router.ps1` (banner, exit message). El resto del codebase ya usaba PCTk consistentemente.
-- **VERSION**: bump `1.0.3` → `2.0.0-alpha.1` para reflejar el rework completo en curso.
+- **Modelo de perfiles auto (4 use-cases × 3 tiers = 12 recetas)**: `data/profiles/auto/<use_case>_<tier>.json`. Cada receta declara qué servicios deshabilitar, perfil visual, nivel de privacidad y limpieza de temporales. El engine orquesta los módulos existentes a partir del JSON.
+- **`core/ProfileEngine.ps1`**: orquestador de recetas — carga JSON, valida schema, aplica steps (Debloat → Performance → Privacy → Cleanup → Startup report), genera log de ejecución.
+- **`core/MachineProfile.ps1` — tier classification**: detección de `Tier` (Low/Mid/High) basada en RAM, clase de CPU y VRAM de GPU. El banner del menú muestra el tier y el vendor OEM.
+- **`core/Router.ps1` — menú v2 Opción A**: cuatro secciones — PERFILES, DIAGNÓSTICO, ACCIONES MANUALES (submenú `[A]`), HERRAMIENTAS. Opción `[1]` aplica perfil auto con selector de use-case; `[R]` abre el generador de research prompts.
+- **`modules/ResearchPrompt.ps1`**: genera prompt estructurado para LLMs con el perfil de hardware + snapshot. 5 plantillas (Optimización, Troubleshooting, DriverAudit, MigrationReadiness, Custom). Copia al clipboard y guarda en `output/research/`.
+- **`modules/CoreIsolation.ps1`**: toggle de Memory Integrity (HVCI) preservando VBS/WSL2.
+- **`modules/UsbPower.ps1`**: deshabilitar/habilitar USB Selective Suspend via powercfg + registro global.
+- **`modules/Hags.ps1`**: toggle de Hardware-Accelerated GPU Scheduling (HAGS).
+- **`modules/Wsl.ps1`**: generador/editor de `.wslconfig` con presets (Default/Gaming/DevHeavy/DevDocker).
+- **`modules/RawAudit.ps1`**: `New-RawAuditReport` — genera `.txt` human-readable en `output/audits/` desde el snapshot.
+- **`modules/Privacy.ps1` — `Invoke-OOSU10Profile`**: invoca OOSU10.exe con el `.cfg` de la receta; fallback al perfil nativo si OOSU10 no está disponible.
+- **`modules/Privacy.ps1` — `Add/Remove-WslDefenderExclusions`**: discovery dinámico de paths LXSS + Docker para exclusiones de Defender.
+- **Snapshot enriquecido** (`Get-SystemSnapshot`): 8 campos nuevos — `DeviceGuard`, `UsbDevices`, `HidDevices`, `DnsServers`, `ThermalZones`, `InstalledPrograms`, `Steam`, `PowerPlan`. Snapshot PRE automático antes de aplicar receta; POST al final. Comparación mostrada en pantalla.
+- **VM-mode** (`Get-SystemSnapshot`): detección de hypervisor via WMI. Queries que no aplican en VM (SMART, PnP, ACPI, Battery) se omiten automáticamente; el banner muestra `VM : <vendor>`. Timeout per-query configurable para evitar cuelgues en entornos virtualizados.
+- **Carpeta de cliente**: `output/clients/<slug>_<fecha>/` creada automáticamente en cada run de receta — log de ejecución, snapshot PRE/POST y audit log en un solo lugar.
+- **Audit log distribuido**: `Write-ActionAudit` invocado desde cada handler; log a `output/audit/<date>.jsonl`.
+- **`Confirm-Action` helper**: preview de qué se va a aplicar + confirmación S/n antes de cada acción destructiva.
+- **`tests/smoke.ps1`**: harness read-only que valida 39 funciones de detección y carga de recetas sin tocar el sistema.
+- **`tools/manifest.json`**: DDU, LatencyMon, TimerResolution agregados. URLs rotas corregidas; versiones actualizadas (BCUninstaller 6.1.0.1, WizTree 4.31, CPU-Z 2.20, BleachBit 6.0.0).
+- **`tools/Check-ToolUpdates.ps1`** + **`tools/README.md`**: helper para verificar herramientas en el manifest.
 
-#### Notes
-- Stage 0 cerrado y pusheado. Próximo: Stage 1 (Router refactor a menú Opción A + Research prompt generator).
+### Changed
+
+- **Branding**: `ServiceKit v2` → `PCTk v2` en `main.ps1` y `core/Router.ps1`.
+- **Performance.ps1 `Set-UltimatePowerPlan`**: detecta laptop; en laptops aplica Balanced en lugar de Ultimate Performance (evita throttle por TDP locked vía EC). Muestra el power plan previo y el comando para revertir.
+- **`RestorePoint.ps1`**: muestra el punto de restauración existente y ofrece bypass de cooldown opt-in.
+- **`Release.ps1`**: excluye `_local-dev/`, `.claude/` y rigs de test/sandbox del ZIP de distribución.
+- **VERSION**: `1.0.3` → `2.0.0`.
+
+### Fixed
+
+- **Encoding**: UTF-8 BOM en 13 archivos `.ps1` — sin BOM, PowerShell 5.1 en locale es-AR leía con Windows-1252 y reventaba el parser en strings con tildes o em-dash.
+- **Network.ps1 `Optimize-Network`**: acceso a propiedad inexistente en StrictMode; `netsh fastopen` no válido para `set global` en Win11 24H2; autotuning ya default en 22H2+ (no-op eliminado).
+- **Network.ps1 `Get-NetworkDiagnostics`**: primera fila de `Get-NetTCPSetting` tenía campo vacío; filtra ahora por `SettingName='Internet'` + fallback locale-agnostic.
+- **Telemetry.ps1**: falso positivo en `MultipleAvProblem` cuando Defender está en Passive Mode con AV tercero activo; ahora separa `Enabled` de `IsActive` via `AMRunningMode`.
+- **Telemetry.ps1**: parsing de `powercfg /getactivescheme` reemplazado por regex locale-agnostic (el header varía entre locales de Windows).
+- **Telemetry.ps1**: Defender duplicado en SecurityCenter2 eliminado.
+- **UsbPower.ps1**: regex locale-agnostic para AC Power Setting Index (es-AR, en-US, pt-BR).
+- **Telemetry.ps1 `Compare-Snapshot`**: crash con `volDiff` vacío en PS5.1 StrictMode corregido.
+- **Router.ps1**: Enter vacío ya no crashea el dispatcher del menú principal.
+- **`main.ps1`**: dot-source inline de módulos corregido (bug de scope que tiraba "Falta Get-MachineProfile").
+- **`core/JobManager.ps1`**: `Wait-ToolkitJobs` devuelve array siempre para evitar unwrap incorrecto.
 
 ## [1.0.3] - 2026-03-14
 

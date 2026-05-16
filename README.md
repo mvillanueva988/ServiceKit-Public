@@ -20,12 +20,23 @@ Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión m
 
 ## Qué hace
 
-- **Optimización**: servicios bloat, temporales, registro, privacidad, telemetría
-- **Diagnóstico**: snapshot pre/post optimización y comparación de resultados
-- **Mantenimiento**: Windows Update, chkdsk, SFC, puntos de restauración
-- **Performance**: perfiles de energía, apps de inicio, RAM
-- **Herramientas externas**: descarga on-demand (Autoruns, WinUtil y más)
-- **Trazabilidad**: log persistente de acciones para revisar los cambios aplicados
+Optimizador por perfiles: el técnico elige el use-case del cliente desde el menú, el toolkit detecta el tier de hardware (Low/Mid/High) y aplica una receta pre-fabricada con snapshot PRE/POST automatizado.
+
+**Use-cases disponibles:**
+- **Generic** — PC sin contexto claro de uso (receta neutra y segura)
+- **Office** — trabajo administrativo con Office, Outlook, Teams
+- **Study** — estudiante con browser pesado y videollamadas
+- **Multimedia** — streaming de series, deportes y películas
+
+**Cada ejecución incluye:**
+- **Debloat**: servicios innecesarios deshabilitados según use-case (no toca impresión, VPN ni Xbox si el use-case los necesita)
+- **Performance**: power plan laptop-aware, perfil visual, tweaks seguros
+- **Privacy**: nivel Basic o Medium via registry nativo o OOSU10 (opcional)
+- **Cleanup**: temporales del usuario y del sistema
+- **Diagnóstico**: snapshot pre/post con comparación de resultados; carpeta de cliente en `output/clients/`
+- **Herramientas externas**: descarga on-demand (BCUninstaller, WizTree, CPU-Z y más)
+- **Research Prompt**: genera prompt estructurado para LLMs con el perfil del hardware detectado
+- **Trazabilidad**: log persistente de acciones por sesión
 
 ## Requisitos
 

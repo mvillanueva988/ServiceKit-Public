@@ -39,7 +39,7 @@ if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
 Copy-Item -Path $source -Destination $staging -Recurse
 
 # ── Eliminar artifacts de desarrollo del staging ──────────────────────────────
-[string[]] $excludeDirs = @('.git', '.gsd', '.github', 'Logs', 'output', 'dist', 'memories')
+[string[]] $excludeDirs = @('.git', '.claude', '.gsd', '.github', 'Logs', 'output', 'dist', 'memories', '_local-dev')
 foreach ($dir in $excludeDirs) {
     [string] $p = Join-Path $staging $dir
     if (Test-Path $p) { Remove-Item $p -Recurse -Force }
@@ -57,6 +57,16 @@ foreach ($file in $excludeFiles) {
 }
 # Workspace files
 Get-ChildItem -Path $staging -Filter '*.code-workspace' -File | Remove-Item -Force
+
+# Rigs de test/sandbox (contienen paths absolutos de la máquina de desarrollo — inútiles para terceros)
+[string] $testsDir = Join-Path $staging 'tests'
+if (Test-Path $testsDir) {
+    Get-ChildItem -Path $testsDir -Filter '*-sandbox*.wsb'            | Remove-Item -Force
+    Get-ChildItem -Path $testsDir -Filter '*-sandbox-launcher.ps1'   | Remove-Item -Force
+    Get-ChildItem -Path $testsDir -Filter 'snapshot-vm-validate.ps1' | Remove-Item -Force
+    Get-ChildItem -Path $testsDir -Filter 'stage3-validate.ps1'      | Remove-Item -Force
+    Get-ChildItem -Path $testsDir -Filter 'stage2-harness.ps1'       | Remove-Item -Force
+}
 
 # ── Generar ZIP ───────────────────────────────────────────────────────────────
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
