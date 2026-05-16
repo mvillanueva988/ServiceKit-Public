@@ -360,6 +360,88 @@ function Invoke-OOSU10Profile {
     }
 }
 
+# --- Add-CustomDefenderExclusion ---------------------------------------------
+function Add-CustomDefenderExclusion {
+    <#
+    .SYNOPSIS
+        Agrega uno o mas paths arbitrarios como exclusiones de Defender.
+        Defensivo e idempotente: Add-MpPreference no falla si el path ya existe.
+        D3 (stage4-plan §12): MVP = lista de paths libres (Steam auto-detect = Stage 4.2).
+
+        Si Defender no esta disponible (AV de terceros), no hace nada y reporta Skipped.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string[]] $Path
+    )
+
+    try {
+        $null = Get-MpPreference -ErrorAction Stop
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success = $true
+            Skipped = $true
+            Reason  = 'Get-MpPreference no disponible (probablemente AV de terceros activo). No se aplican exclusiones de Defender.'
+            Applied = @()
+            Errors  = @()
+        }
+    }
+
+    [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($p in $Path) {
+        if ([string]::IsNullOrWhiteSpace($p)) { continue }
+        try {
+            Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+            $applied.Add("Path: $p")
+        }
+        catch {
+            $errors.Add("Path $p : $($_.Exception.Message)")
+        }
+    }
+
+    return [PSCustomObject]@{
+        Success = ($errors.Count -eq 0)
+        Skipped = $false
+        Applied = $applied.ToArray()
+        Errors  = $errors.ToArray()
+        Reason  = 'Exclusiones de Defender aplicadas. Tamper Protection sigue ON.'
+    }
+}
+
+# --- Get-CustomDefenderExclusions --------------------------------------------
+function Get-CustomDefenderExclusions {
+    <#
+    .SYNOPSIS
+        Lee los paths de exclusion de Defender actualmente configurados.
+        Read-only. Smoke-safe.
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        $pref = Get-MpPreference -ErrorAction Stop
+        [string[]] $paths = @()
+        if ($null -ne $pref -and $null -ne $pref.PSObject.Properties['ExclusionPath']) {
+            $paths = @($pref.ExclusionPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+        return [PSCustomObject]@{
+            Available = $true
+            Paths     = $paths
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Available = $false
+            Paths     = @()
+            Reason    = $_.Exception.Message
+        }
+    }
+}
+
 # --- Remove-WslDefenderExclusions --------------------------------------------
 function Remove-WslDefenderExclusions {
     <#

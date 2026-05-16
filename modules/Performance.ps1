@@ -395,6 +395,112 @@ function Set-UltimatePowerPlan {
     }
 }
 
+# ─── Get-GameModeStatus ───────────────────────────────────────────────────────
+function Get-GameModeStatus {
+    <#
+    .SYNOPSIS
+        Lee el estado actual de Game Mode (GameBar/AllowAutoGameMode).
+        Registry HKCU: no requiere admin. Read-only. Smoke-safe.
+
+    .OUTPUTS
+        PSCustomObject con:
+          - AutoGameModeEnabled : $true | $false | $null (clave ausente = default Windows)
+          - AllowAutoGameMode   : $true | $false | $null (clave ausente = default Windows)
+          - EffectiveState      : 'On' | 'Off' | 'Default'
+    #>
+    [CmdletBinding()]
+    param()
+
+    [string] $gameBarPath = 'HKCU:\Software\Microsoft\GameBar'
+    [object] $autoEnabled = $null
+    [object] $allowAuto   = $null
+
+    try {
+        $reg = Get-ItemProperty -Path $gameBarPath -ErrorAction SilentlyContinue
+        if ($null -ne $reg) {
+            if ($null -ne $reg.PSObject.Properties['AutoGameModeEnabled']) {
+                $autoEnabled = [bool]([int]$reg.AutoGameModeEnabled -ne 0)
+            }
+            if ($null -ne $reg.PSObject.Properties['AllowAutoGameMode']) {
+                $allowAuto = [bool]([int]$reg.AllowAutoGameMode -ne 0)
+            }
+        }
+    }
+    catch { }
+
+    [string] $effective = 'Default'
+    if ($null -ne $autoEnabled -or $null -ne $allowAuto) {
+        [bool] $on = ($autoEnabled -eq $true) -or ($allowAuto -eq $true)
+        $effective = if ($on) { 'On' } else { 'Off' }
+    }
+
+    return [PSCustomObject]@{
+        AutoGameModeEnabled = $autoEnabled
+        AllowAutoGameMode   = $allowAuto
+        EffectiveState      = $effective
+        RegistryPath        = $gameBarPath
+    }
+}
+
+# ─── Set-GameMode ─────────────────────────────────────────────────────────────
+function Set-GameMode {
+    <#
+    .SYNOPSIS
+        Habilita o deshabilita Game Mode via registry HKCU.
+        No requiere admin. Crea la key si no existe (defensivo).
+
+        Game Mode prioriza la app en primer plano para CPU/GPU scheduling.
+        Default de Windows: on (habilitado). Para gaming puro no cambia mucho;
+        para PCs de trabajo puede causar stutter en background tasks.
+
+    .PARAMETER State
+        'on'  : habilita AutoGameModeEnabled=1 y AllowAutoGameMode=1
+        'off' : deshabilita ambos = 0
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('on', 'off')]
+        [string] $State
+    )
+
+    [string] $gameBarPath = 'HKCU:\Software\Microsoft\GameBar'
+    [int]    $val         = if ($State -eq 'on') { 1 } else { 0 }
+
+    [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        if (-not (Test-Path $gameBarPath)) {
+            New-Item -Path $gameBarPath -Force | Out-Null
+        }
+        Set-ItemProperty -Path $gameBarPath -Name 'AutoGameModeEnabled' -Value $val -Type DWord -ErrorAction Stop
+        $applied.Add(('AutoGameModeEnabled={0}' -f $val))
+    }
+    catch { $errors.Add("AutoGameModeEnabled: $($_.Exception.Message)") }
+
+    try {
+        if (-not (Test-Path $gameBarPath)) {
+            New-Item -Path $gameBarPath -Force | Out-Null
+        }
+        Set-ItemProperty -Path $gameBarPath -Name 'AllowAutoGameMode' -Value $val -Type DWord -ErrorAction Stop
+        $applied.Add(('AllowAutoGameMode={0}' -f $val))
+    }
+    catch { $errors.Add("AllowAutoGameMode: $($_.Exception.Message)") }
+
+    return [PSCustomObject]@{
+        Success  = ($errors.Count -eq 0)
+        State    = $State
+        Applied  = $applied.ToArray()
+        Errors   = $errors.ToArray()
+        Reason   = if ($State -eq 'on') {
+            'Game Mode habilitado: Windows prioriza la app en primer plano para CPU/GPU scheduling.'
+        } else {
+            'Game Mode deshabilitado: sin prioridad automatica para apps en primer plano.'
+        }
+    }
+}
+
 function Start-PerformanceProcess {
     <#
     .SYNOPSIS
