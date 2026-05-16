@@ -1,9 +1,10 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 
 param(
-    [string] $Version = '',
-    [string] $Repo    = '',       # e.g. 'TU_USUARIO/TU_REPO' — si se omite, se lee de Launch.ps1
-    [switch] $Publish             # Si se pasa: sube el ZIP a GitHub Releases (requiere $env:GITHUB_TOKEN)
+    [string] $Version    = '',
+    [string] $Repo       = '',          # e.g. 'TU_USUARIO/TU_REPO' (si se omite, se lee de Launch.ps1)
+    [switch] $Publish,                  # Si se pasa: sube el ZIP a GitHub Releases (requiere $env:GITHUB_TOKEN)
+    [switch] $AllowDirty                # Si se pasa: no aborta con arbol de trabajo sucio (ZIP sale de HEAD igual)
 )
 
 Set-StrictMode -Version Latest
@@ -24,84 +25,56 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     }
 }
 
-# ── Rutas ─────────────────────────────────────────────────────────────────────
+# -- Rutas -----------------------------------------------------------------------
 [string] $source  = $PSScriptRoot
-[string] $staging = Join-Path $env:TEMP 'PCTk-release-staging'
 [string] $outDir  = Join-Path $PSScriptRoot 'dist'
 [string] $zipName = "PCTk-$Version.zip"
 [string] $zipPath = Join-Path $outDir $zipName
 [string] $shaName = "$zipName.sha256"
 [string] $shaPath = Join-Path $outDir $shaName
 
-# ── Limpiar y crear staging ───────────────────────────────────────────────────
-Write-Host "  Preparando staging..." -ForegroundColor Cyan
-if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
-Copy-Item -Path $source -Destination $staging -Recurse
-
-# ── Eliminar artifacts de desarrollo del staging ──────────────────────────────
-[string[]] $excludeDirs = @('.git', '.claude', '.gsd', '.github', 'Logs', 'output', 'dist', 'memories', '_local-dev')
-foreach ($dir in $excludeDirs) {
-    [string] $p = Join-Path $staging $dir
-    if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+# -- Guard: arbol de trabajo sucio -----------------------------------------------
+# git archive empaqueta HEAD; cambios sin commitear NO entran al ZIP.
+# Abortar a menos que el operador pase -AllowDirty explicitamente.
+if (-not $AllowDirty) {
+    [string] $dirtyStatus = (& git -C $source status --porcelain 2>&1)
+    if (-not [string]::IsNullOrWhiteSpace($dirtyStatus)) {
+        Write-Host '  [!] El arbol de trabajo tiene cambios sin commitear.' -ForegroundColor Red
+        Write-Host '      El ZIP sale de HEAD; los cambios pendientes NO entraran.' -ForegroundColor Yellow
+        Write-Host '      Commitea o stashea antes de release, o pasa -AllowDirty para ignorar este guard.' -ForegroundColor Yellow
+        Write-Host '      Archivos modificados/sin trackear:' -ForegroundColor DarkGray
+        Write-Host "      $dirtyStatus" -ForegroundColor DarkGray
+        return
+    }
 }
 
-# tools\bin se preserva en la instalación (Launch.ps1 lo maneja), pero no se bundlea
-[string] $toolsBin = Join-Path $staging 'tools\bin'
-if (Test-Path $toolsBin) { Remove-Item $toolsBin -Recurse -Force }
-
-# Archivos raíz que no se distribuyen
-[string[]] $excludeFiles = @('Release.ps1', 'GSD-STYLE.md', 'CHANGELOG.md')
-foreach ($file in $excludeFiles) {
-    [string] $p = Join-Path $staging $file
-    if (Test-Path $p) { Remove-Item $p -Force }
-}
-# Workspace files
-Get-ChildItem -Path $staging -Filter '*.code-workspace' -File | Remove-Item -Force
-
-# Rigs de test/sandbox (contienen paths absolutos de la máquina de desarrollo — inútiles para terceros)
-[string] $testsDir = Join-Path $staging 'tests'
-if (Test-Path $testsDir) {
-    Get-ChildItem -Path $testsDir -Filter '*-sandbox*.wsb'            | Remove-Item -Force
-    Get-ChildItem -Path $testsDir -Filter '*-sandbox-launcher.ps1'   | Remove-Item -Force
-    Get-ChildItem -Path $testsDir -Filter 'snapshot-vm-validate.ps1' | Remove-Item -Force
-    Get-ChildItem -Path $testsDir -Filter 'stage3-validate.ps1'      | Remove-Item -Force
-    Get-ChildItem -Path $testsDir -Filter 'stage4-validate.ps1'      | Remove-Item -Force
-    Get-ChildItem -Path $testsDir -Filter 'stage2-harness.ps1'       | Remove-Item -Force
-}
-
-# Recetas nombradas (T-S4): son datos de clientes reales. Solo viajan el
-# placeholder y el fixture de smoke; cualquier <cliente>.json se excluye del ZIP.
-[string] $namedDir = Join-Path (Join-Path (Join-Path $staging 'data') 'profiles') 'named'
-if (Test-Path $namedDir) {
-    Get-ChildItem -Path $namedDir -File | Where-Object {
-        $_.Name -ne 'README.md' -and $_.Name -ne '_sample.json'
-    } | Remove-Item -Force
-}
-
-# ── Generar ZIP ───────────────────────────────────────────────────────────────
+# -- Generar ZIP via git archive -------------------------------------------------
+# git archive honra .gitattributes export-ignore: solo viajan archivos trackeados
+# y no marcados export-ignore. Basura/secretos untracked son imposible de filtrar.
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 if (Test-Path $shaPath) { Remove-Item $shaPath -Force }
 
-Write-Host "  Comprimiendo..." -ForegroundColor Cyan
-Compress-Archive -Path "$staging\*" -DestinationPath $zipPath
+Write-Host "  Comprimiendo (git archive HEAD)..." -ForegroundColor Cyan
+& git -C $source archive --format=zip -o $zipPath HEAD
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  [!] git archive fallo (exit $LASTEXITCODE). Verifica que el repo sea valido y HEAD exista." -ForegroundColor Red
+    return
+}
 
-# ── Generar checksum SHA-256 del ZIP ─────────────────────────────────────────
+# -- Generar checksum SHA-256 del ZIP --------------------------------------------
 [string] $zipSha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToUpperInvariant()
 [string] $shaLine   = '{0} *{1}' -f $zipSha256, $zipName
 [System.IO.File]::WriteAllText($shaPath, $shaLine + [Environment]::NewLine)
 
-# ── Limpiar staging ───────────────────────────────────────────────────────────
-Remove-Item $staging -Recurse -Force
-
-# ── Mostrar resultado ─────────────────────────────────────────────────────────
+# -- Mostrar resultado -----------------------------------------------------------
 [double] $sizeMB = (Get-Item $zipPath).Length / 1MB
 Write-Host ("  [v] {0}  ({1:N1} MB)" -f $zipName, $sizeMB) -ForegroundColor Green
 Write-Host "      $zipPath" -ForegroundColor DarkGray
 Write-Host ("  [v] {0}" -f $shaName) -ForegroundColor Green
 Write-Host "      $shaPath" -ForegroundColor DarkGray
 
-# ── Publicar a GitHub Releases (opcional) ────────────────────────────────────
+# -- Publicar a GitHub Releases (opcional) ---------------------------------------
 if ($Publish) {
     # Verificar token
     if ([string]::IsNullOrEmpty($env:GITHUB_TOKEN)) {
@@ -110,7 +83,7 @@ if ($Publish) {
         return
     }
 
-    # Leer $GitHubRepo de Launch.ps1 si no se pasó -Repo
+    # Leer $GitHubRepo de Launch.ps1 si no se paso -Repo
     if ([string]::IsNullOrEmpty($Repo)) {
         [string] $launchPath = Join-Path $PSScriptRoot 'Launch.ps1'
         if (Test-Path $launchPath) {

@@ -1,0 +1,25 @@
+# export-ignore: archivos trackeados pero no destinados al ZIP publico.
+# git archive honra esta lista; lo que NO aparece aqui viaja si esta trackeado.
+
+# Script de release (infra de desarrollo)
+Release.ps1 export-ignore
+
+# Changelog interno (no es documentacion de usuario final)
+CHANGELOG.md export-ignore
+
+# Rigs de validacion y sandbox (contienen paths absolutos del dev, inservibles para terceros)
+tests/snapshot-vm-validate.ps1 export-ignore
+tests/snapshot-vm-sandbox-launcher.ps1 export-ignore
+tests/snapshot-vm-sandbox.wsb export-ignore
+tests/stage2-harness.ps1 export-ignore
+tests/stage2-sandbox-launcher.ps1 export-ignore
+tests/stage2-sandbox-test.wsb export-ignore
+tests/stage3-validate.ps1 export-ignore
+tests/stage3-sandbox-launcher.ps1 export-ignore
+tests/stage3-sandbox.wsb export-ignore
+tests/stage4-validate.ps1 export-ignore
+tests/stage4-sandbox-launcher.ps1 export-ignore
+tests/stage4-sandbox.wsb export-ignore
+
+# Directorio de trabajo interno (defensivo aunque ya gitignored)
+_local-dev/ export-ignore
