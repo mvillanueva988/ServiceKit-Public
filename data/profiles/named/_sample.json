@@ -1,0 +1,41 @@
+{
+  "_schema_version": "1.0",
+  "_kind": "named",
+  "_name": "SAMPLE (fixture de smoke, no es cliente real)",
+  "_created": "2026-05-16T00:00:00-03:00",
+  "_last_applied": null,
+  "_hardware_snapshot": {
+    "Tier": "High",
+    "CpuName": "Sample CPU",
+    "RamMB": 16384,
+    "Manufacturer": "Sample",
+    "IsLaptop": false
+  },
+
+  "_use_case": "named",
+  "_tier": "high",
+  "_description": "Receta nombrada de ejemplo. Fixture versionado para validar el schema named en cada run de smoke. No representa un cliente real.",
+  "_rationale": "Core neutro+seguro (igual que las recetas auto); el valor de una receta nombrada esta en el bloque gaming_tweaks. Editable a mano.",
+
+  "services": {
+    "disable": ["Fax", "WMPNetworkSvc", "RemoteRegistry", "DiagTrack", "dmwappushservice"]
+  },
+  "performance": {
+    "visual_profile": "Balanced",
+    "power_plan": { "_future": true },
+    "system_tweaks": { "_future": true }
+  },
+  "privacy": { "level": "aggressive", "oosu10_cfg": "aggressive.cfg", "fallback": "native" },
+  "cleanup": { "clear_temp": true },
+  "startup": { "report_only": true },
+
+  "gaming_tweaks": {
+    "hvci": "off",
+    "hags": "on",
+    "usb_selective_suspend": "off",
+    "game_mode": "on",
+    "wslconfig": { "enabled": false, "preset": "Gaming" },
+    "defender_exclusions": [],
+    "oosu_profile": "aggressive"
+  }
+}

@@ -23,8 +23,11 @@ tools/bin/
 output/
 Logs/
 
-# Recetas nombradas del operador (datos de clientes específicos, no publicables)
-data/profiles/named/
+# Recetas nombradas del operador (datos de clientes específicos, no publicables).
+# Se versionan solo el placeholder y el fixture de smoke; el resto (clientes) NO.
+data/profiles/named/*
+!data/profiles/named/README.md
+!data/profiles/named/_sample.json
 
 # Build artifacts de Release.ps1
 dist/
