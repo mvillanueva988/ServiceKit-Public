@@ -106,7 +106,7 @@ try {
             }
             # wslconfig debe Skip (WSL ausente en Sandbox)
             if ($gt.PSObject.Properties['Wslconfig'] -and $gt.Wslconfig.Skipped -eq $true) {
-                Pass "gaming.Wslconfig Skipped (WSL ausente en Sandbox — correcto)"
+                Pass "gaming.Wslconfig Skipped (WSL ausente en Sandbox - correcto)"
             } else { Log "    [i] gaming.Wslconfig no skipped (revisar)" }
             if ($gt.PSObject.Properties['GameMode'] -and $gt.GameMode.Applied -eq $true) {
                 Pass "gaming.GameMode aplicado (registry HKCU)"
@@ -130,7 +130,7 @@ try {
 } catch { Fail ("relectura JSON: {0}" -f $_.Exception.Message) }
 Log ''
 
-# T4: audit — UNA sola entrada Profile.Apply.Named (no duplicada por el wrap)
+# T4: audit - UNA sola entrada Profile.Apply.Named (no duplicada por el wrap)
 Log '[T4] Audit consolidado (1 entrada Profile.Apply.Named, no doble)'
 try {
     $auditLog = Join-Path $RepoRoot ('output\audit\' + (Get-Date -Format 'yyyy-MM-dd') + '.jsonl')
