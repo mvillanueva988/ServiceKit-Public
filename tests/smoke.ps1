@@ -196,6 +196,53 @@ Test-SmokeFunction 'NamedProfileEditor' 'Import/validate _sample' { Import-Named
 Test-SmokeFunction 'Performance' 'Get-GameModeStatus' { Get-GameModeStatus }
 Test-SmokeFunction 'Privacy' 'Get-CustomDefenderExclusions' { Get-CustomDefenderExclusions }
 
+# ─── ITEM C: Test-StepSucceeded (D-SD2 adapters, structural-debt-plan.md) ────
+# Entradas read-only: solo ejercitan el helper con fixtures en memoria, sin mutar.
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded null -> false' {
+    $r = Test-StepSucceeded -StepResult $null
+    if ($r -ne $false) { throw ('null debe dar false; got {0}' -f $r) }
+}
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded Success=$true -> true' {
+    $obj = [PSCustomObject]@{ Success = $true }
+    $r = Test-StepSucceeded -StepResult $obj
+    if ($r -ne $true) { throw ('Success=$true debe dar true; got {0}' -f $r) }
+}
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded Success=$false -> false' {
+    $obj = [PSCustomObject]@{ Success = $false }
+    $r = Test-StepSucceeded -StepResult $obj
+    if ($r -ne $false) { throw ('Success=$false debe dar false; got {0}' -f $r) }
+}
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded Errors no vacio -> false' {
+    $obj = [PSCustomObject]@{ Errors = @('algo fallo') }
+    $r = Test-StepSucceeded -StepResult $obj
+    if ($r -ne $false) { throw ('Errors no-vacio debe dar false; got {0}' -f $r) }
+}
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded Errors vacio -> true' {
+    $obj = [PSCustomObject]@{ Errors = @() }
+    $r = Test-StepSucceeded -StepResult $obj
+    if ($r -ne $true) { throw ('Errors vacio debe dar true; got {0}' -f $r) }
+}
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded Failed>0 -> false' {
+    $obj = [PSCustomObject]@{ Failed = 3 }
+    $r = Test-StepSucceeded -StepResult $obj
+    if ($r -ne $false) { throw ('Failed=3 debe dar false; got {0}' -f $r) }
+}
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded Failed=0 -> true' {
+    $obj = [PSCustomObject]@{ Failed = 0 }
+    $r = Test-StepSucceeded -StepResult $obj
+    if ($r -ne $true) { throw ('Failed=0 debe dar true; got {0}' -f $r) }
+}
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded objeto plano no-null -> true' {
+    $obj = [PSCustomObject]@{ SomeField = 'valor' }
+    $r = Test-StepSucceeded -StepResult $obj
+    if ($r -ne $true) { throw ('objeto plano no-null debe dar true; got {0}' -f $r) }
+}
+Test-SmokeFunction 'JobManager' 'Test-StepSucceeded Error no vacio -> false' {
+    $obj = [PSCustomObject]@{ Error = 'mensaje de error' }
+    $r = Test-StepSucceeded -StepResult $obj
+    if ($r -ne $false) { throw ('Error no-vacio debe dar false; got {0}' -f $r) }
+}
+
 # ─── Progress UX: Wait-ToolkitJobs sin -ShowProgress (R3 opt-IN) ─────────────
 # Verifica que Wait-ToolkitJobs SIN -ShowProgress sobre un job trivial devuelve
 # array y no throw. No valida la UX visual (eso es Sandbox/Opus).

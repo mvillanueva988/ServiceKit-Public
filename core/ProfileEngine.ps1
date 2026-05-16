@@ -427,11 +427,14 @@ function Invoke-AutoProfile {
     }
 
     # ── Determinar status (lo necesitamos antes del ClientFolder) ─────────────
+    # D-SD2 adapters (structural-debt-plan.md ITEM C): Test-StepSucceeded evalua
+    # exito real por semantica del objeto, no solo null-check. Reclasifica runs
+    # que hoy dan 'Success' con un step roto -> 'Partial'/'Failed'. ESPERADO.
     [int] $jobsFailed = 0
-    if ($null -eq $debloatR) { $jobsFailed++ }
-    if ($null -eq $cleanupR) { $jobsFailed++ }
-    if ($null -eq $perfR)    { $jobsFailed++ }
-    if (-not $privResult.Success) { $jobsFailed++ }
+    if (-not (Test-StepSucceeded -StepResult $debloatR))        { $jobsFailed++ }
+    if (-not (Test-StepSucceeded -StepResult $cleanupR))        { $jobsFailed++ }
+    if (-not (Test-StepSucceeded -StepResult $perfR))           { $jobsFailed++ }
+    if (-not (Test-StepSucceeded -StepResult $privResult))      { $jobsFailed++ }
 
     $overallStatus = if ($jobsFailed -eq 0) { 'Success' } elseif ($jobsFailed -lt 4) { 'Partial' } else { 'Failed' }
 

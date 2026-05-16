@@ -217,3 +217,60 @@ function Invoke-ModuleJob {
 
     return Invoke-AsyncToolkitJob -ScriptBlock $jobScript -JobName $JobName -ArgumentList @($functionDefinitions, $EntryPoint, $Params)
 }
+
+# ─── Test-StepSucceeded ───────────────────────────────────────────────────────
+# Helper compartido: Invoke-AutoProfile y Invoke-NamedProfile lo usan via adapter
+# para determinar si un step de pipeline termino con exito real (no solo no-null).
+# Orden de inspeccion (D-SD2 adapters, structural-debt-plan.md §ITEM C):
+#   1. $null        -> fallo
+#   2. prop .Success presente -> usarla (semantica explicita)
+#   3. prop .Errors presente  -> @(.Errors).Count -eq 0
+#   4. prop .Failed numerico  -> .Failed -eq 0
+#   5. prop .Error no vacia   -> fallo
+#   6. objeto presente y no-null -> exito best-effort
+# NUNCA throw. StrictMode-safe: usa PSObject.Properties para chequear props.
+function Test-StepSucceeded {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter()] [object] $StepResult
+    )
+
+    # (1) null -> fallo
+    if ($null -eq $StepResult) { return $false }
+
+    # (2) .Success presente -> usarla
+    [object] $successProp = $StepResult.PSObject.Properties['Success']
+    if ($null -ne $successProp) {
+        return [bool]$successProp.Value
+    }
+
+    # (3) .Errors presente -> Count == 0
+    [object] $errorsProp = $StepResult.PSObject.Properties['Errors']
+    if ($null -ne $errorsProp) {
+        return (@($errorsProp.Value).Count -eq 0)
+    }
+
+    # (4) .Failed numerico -> Failed == 0
+    [object] $failedProp = $StepResult.PSObject.Properties['Failed']
+    if ($null -ne $failedProp) {
+        [int] $failedVal = 0
+        if ([int]::TryParse([string]$failedProp.Value, [ref]$failedVal)) {
+            return ($failedVal -eq 0)
+        }
+        # Si no parsea como int, tratar como desconocido -> fallo conservador
+        return $false
+    }
+
+    # (5) .Error no vacio -> fallo
+    [object] $errorProp = $StepResult.PSObject.Properties['Error']
+    if ($null -ne $errorProp) {
+        [string] $errVal = [string]$errorProp.Value
+        if (-not [string]::IsNullOrWhiteSpace($errVal)) {
+            return $false
+        }
+    }
+
+    # (6) presente y no-null -> exito best-effort
+    return $true
+}
