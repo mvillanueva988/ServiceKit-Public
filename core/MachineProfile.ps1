@@ -208,6 +208,18 @@ function Get-MachineVmInfo {
     )
 
     try {
+        # Self-query si no se pasan (§3a: paridad con Test-IsVirtualMachine de
+        # Telemetry). El caller real Get-MachineProfile siempre los pasa; este
+        # fallback evita el footgun de un standalone no-arg devolviendo False.
+        if ($null -eq $ComputerSystem) {
+            $ComputerSystem = Get-CimInstance -ClassName Win32_ComputerSystem `
+                -OperationTimeoutSec 5 -ErrorAction SilentlyContinue
+        }
+        if ($null -eq $Bios) {
+            $Bios = Get-CimInstance -ClassName Win32_BIOS `
+                -OperationTimeoutSec 5 -ErrorAction SilentlyContinue
+        }
+
         [string] $csManufacturer = if ($ComputerSystem) { [string]$ComputerSystem.Manufacturer } else { '' }
         [string] $csModel        = if ($ComputerSystem) { [string]$ComputerSystem.Model }        else { '' }
         [string] $biosManuf      = if ($Bios)           { [string]$Bios.Manufacturer }           else { '' }
