@@ -252,7 +252,11 @@ function Invoke-AutoProfile {
         # Restore Point falla DURO, NO prompts; continua sin RP (logueado). Default
         # (sin el switch) mantiene el Confirm-Action interactivo. Es el unico
         # prompt interno de Invoke-AutoProfile; el resto vive en el handler Router.
-        [Parameter()] [switch] $Unattended
+        [Parameter()] [switch] $Unattended,
+        # Stage 4: cuando Invoke-NamedProfile envuelve esta funcion, suprime la
+        # entrada de audit interna para escribir UNA sola consolidada (con
+        # gaming_tweaks). Sin el switch = audita normal (invariante intacto).
+        [Parameter()] [switch] $NoAudit
     )
 
     [datetime] $startedAt = Get-Date
@@ -539,12 +543,199 @@ function Invoke-AutoProfile {
     # Multimedia debe loguearse como tal, NO como Generic. Sigue siendo UNA
     # sola entrada (invariante Stage 2 ticket 6). $useCase validado no-vacio
     # por Test-AutoProfileSchema antes de llegar aca.
-    [string] $auditAction = 'Profile.Apply.' + $useCase.Substring(0,1).ToUpperInvariant() + $useCase.Substring(1)
-    Write-ActionAudit `
-        -Action  $auditAction `
-        -Status  $overallStatus `
-        -Summary "tier=$tier services=$disabledStr cleanup=$cleanupGb privacy=$($privResult.Path) compare=$compareScore" `
-        -Details $fullResult
+    if (-not $NoAudit) {
+        [string] $auditAction = 'Profile.Apply.' + $useCase.Substring(0,1).ToUpperInvariant() + $useCase.Substring(1)
+        Write-ActionAudit `
+            -Action  $auditAction `
+            -Status  $overallStatus `
+            -Summary "tier=$tier services=$disabledStr cleanup=$cleanupGb privacy=$($privResult.Path) compare=$compareScore" `
+            -Details $fullResult
+    }
 
     return $fullResult
+}
+
+# ─── Invoke-ProfileGamingTweaksStep ───────────────────────────────────────────
+function Invoke-ProfileGamingTweaksStep {
+    <#
+    .SYNOPSIS
+        Aplica el bloque gaming_tweaks de una receta nombrada delegando a los
+        modulos existentes (Stage 0) + helpers Stage 4. SOLO aplica los toggles
+        PRESENTES (ausente = no tocar, D2). Defensivo: un toggle que falla NO
+        aborta el resto. HVCI/HAGS marcan RebootNeeded.
+        oosu_profile NO se aplica aca: lo cubre el core (privacy.level del
+        recipe via Invoke-ProfilePrivacyStep) — evitar doble aplicacion.
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $Profile,
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile,
+        [Parameter()] [switch] $Unattended
+    )
+    $null = $MachineProfile; $null = $Unattended
+
+    [PSCustomObject] $res = [PSCustomObject]@{
+        Hvci = $null; Hags = $null; UsbSuspend = $null; GameMode = $null
+        Wslconfig = $null; DefenderExcl = $null; OosuProfile = $null
+        RebootNeeded = $false; Success = $true
+    }
+    [object] $gtP = $Profile.PSObject.Properties['gaming_tweaks']
+    if ($null -eq $gtP -or $null -eq $gtP.Value) { return $res }
+    [PSCustomObject] $gt = $gtP.Value
+
+    function Invoke-Toggle([string]$Key, [scriptblock]$Action) {
+        [object] $p = $gt.PSObject.Properties[$Key]
+        if ($null -eq $p -or $null -eq $p.Value) {
+            return [PSCustomObject]@{ Applied = $false; Skipped = $true; Detail = 'no tocar (ausente)' }
+        }
+        try {
+            [object] $d = & $Action ([string]$p.Value)
+            [bool] $ok = $true
+            if ($null -ne $d -and $d.PSObject.Properties['Success']) { $ok = [bool]$d.Success }
+            if (-not $ok) { $script:res.Success = $false }
+            return [PSCustomObject]@{ Applied = $ok; Skipped = $false; Value = [string]$p.Value; Detail = $d }
+        } catch {
+            $script:res.Success = $false
+            return [PSCustomObject]@{ Applied = $false; Skipped = $false; Value = [string]$p.Value; Detail = $_.Exception.Message }
+        }
+    }
+
+    $res.Hvci = Invoke-Toggle 'hvci' {
+        param($v); if ($v -eq 'off') { Disable-Hvci } else { Enable-Hvci } }
+    if ($null -ne $res.Hvci -and -not $res.Hvci.Skipped) { $res.RebootNeeded = $true }
+
+    $res.Hags = Invoke-Toggle 'hags' {
+        param($v); if ($v -eq 'off') { Disable-Hags } else { Enable-Hags } }
+    if ($null -ne $res.Hags -and -not $res.Hags.Skipped) { $res.RebootNeeded = $true }
+
+    $res.UsbSuspend = Invoke-Toggle 'usb_selective_suspend' {
+        param($v); if ($v -eq 'off') { Disable-UsbSelectiveSuspend } else { Enable-UsbSelectiveSuspend } }
+
+    $res.GameMode = Invoke-Toggle 'game_mode' {
+        param($v); Set-GameMode -State $v }
+
+    # wslconfig: objeto { enabled; preset }. Solo si enabled y WSL disponible.
+    [object] $wP = $gt.PSObject.Properties['wslconfig']
+    if ($null -eq $wP -or $null -eq $wP.Value -or $wP.Value.enabled -ne $true) {
+        $res.Wslconfig = [PSCustomObject]@{ Applied = $false; Skipped = $true; Detail = 'no tocar (ausente/disabled)' }
+    } elseif (-not (Test-WslAvailable)) {
+        $res.Wslconfig = [PSCustomObject]@{ Applied = $false; Skipped = $true; Detail = 'WSL no instalado' }
+    } else {
+        try {
+            [string] $preset = if ($wP.Value.PSObject.Properties['preset']) { [string]$wP.Value.preset } else { 'Default' }
+            [string] $content = New-WslConfig -Preset $preset
+            $null = Set-WslConfig -Content $content
+            $null = Invoke-WslShutdown
+            $res.Wslconfig = [PSCustomObject]@{ Applied = $true; Skipped = $false; Detail = "preset $preset" }
+        } catch {
+            $res.Success = $false
+            $res.Wslconfig = [PSCustomObject]@{ Applied = $false; Skipped = $false; Detail = $_.Exception.Message }
+        }
+    }
+
+    [object] $deP = $gt.PSObject.Properties['defender_exclusions']
+    if ($null -eq $deP -or $null -eq $deP.Value -or @($deP.Value).Count -eq 0) {
+        $res.DefenderExcl = [PSCustomObject]@{ Applied = $false; Skipped = $true; Detail = 'sin paths' }
+    } else {
+        try {
+            [object] $d = Add-CustomDefenderExclusion -Path @($deP.Value)
+            [bool] $ok = ($null -eq $d) -or (-not $d.PSObject.Properties['Success']) -or [bool]$d.Success
+            if (-not $ok) { $res.Success = $false }
+            $res.DefenderExcl = [PSCustomObject]@{ Applied = $ok; Skipped = $false; Detail = $d }
+        } catch {
+            $res.Success = $false
+            $res.DefenderExcl = [PSCustomObject]@{ Applied = $false; Skipped = $false; Detail = $_.Exception.Message }
+        }
+    }
+
+    [object] $ooP = $gt.PSObject.Properties['oosu_profile']
+    $res.OosuProfile = [PSCustomObject]@{
+        Applied = $false; Skipped = $true
+        Detail  = if ($null -ne $ooP) { "via core privacy (level=$($ooP.Value))" } else { 'ausente' }
+    }
+
+    return $res
+}
+
+# ─── Invoke-NamedProfile ──────────────────────────────────────────────────────
+function Invoke-NamedProfile {
+    <#
+    .SYNOPSIS
+        Orquesta una receta nombrada: chequea hardware vs _hardware_snapshot,
+        reusa Invoke-AutoProfile (-NoAudit) para el core, aplica gaming_tweaks,
+        actualiza _last_applied y escribe UNA sola entrada de audit consolidada
+        (Profile.Apply.Named). Retorna el result del core + extras named.
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $Profile,
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile,
+        [Parameter()] [switch] $SkipRestorePoint,
+        [Parameter()] [switch] $Unattended,
+        [Parameter()] [string] $ClientSlug = '',
+        [Parameter()] [string] $SourcePath = ''
+    )
+
+    # Hardware changed vs snapshot guardado (warn, no bloquea)
+    [bool] $hwChanged = $false
+    [object] $hsP = $Profile.PSObject.Properties['_hardware_snapshot']
+    if ($null -ne $hsP -and $null -ne $hsP.Value) {
+        foreach ($k in @('CpuName','RamMB','Manufacturer','Tier')) {
+            [object] $a = $hsP.Value.PSObject.Properties[$k]
+            [object] $b = $MachineProfile.PSObject.Properties[$k]
+            if ($null -ne $a -and $null -ne $b -and ([string]$a.Value) -ne ([string]$b.Value)) {
+                $hwChanged = $true
+                Write-Host ("  [AVISO] Hardware cambio ({0}): '{1}' -> '{2}'" -f $k, $a.Value, $b.Value) -ForegroundColor Yellow
+            }
+        }
+    }
+
+    # Core (reusa el motor validado; -NoAudit para 1 sola entrada consolidada)
+    [PSCustomObject] $core = Invoke-AutoProfile -Profile $Profile -MachineProfile $MachineProfile `
+        -SkipRestorePoint:$SkipRestorePoint -Unattended:$Unattended -ClientSlug $ClientSlug -NoAudit
+
+    # gaming_tweaks
+    Write-Host '  Aplicando gaming_tweaks...' -ForegroundColor Cyan
+    [PSCustomObject] $gaming = Invoke-ProfileGamingTweaksStep -Profile $Profile -MachineProfile $MachineProfile -Unattended:$Unattended
+
+    # _last_applied + reescribir el JSON fuente (si existe)
+    [string] $appliedAt = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
+    if (-not [string]::IsNullOrWhiteSpace($SourcePath) -and (Test-Path -LiteralPath $SourcePath)) {
+        try {
+            if ($Profile.PSObject.Properties['_last_applied']) { $Profile._last_applied = $appliedAt }
+            else { $Profile | Add-Member -NotePropertyName '_last_applied' -NotePropertyValue $appliedAt -Force }
+            [string] $json = $Profile | ConvertTo-Json -Depth 8
+            [System.IO.File]::WriteAllText($SourcePath, $json, (New-Object System.Text.UTF8Encoding($true)))
+        } catch {
+            Write-Host ("  [!] No se pudo actualizar _last_applied: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+
+    # Status consolidado
+    [string] $coreStatus = if ($core -and $core.PSObject.Properties['Status']) { [string]$core.Status } else { 'Failed' }
+    [string] $named = if ($coreStatus -eq 'Failed') { 'Failed' }
+        elseif (-not $gaming.Success) { 'Partial' }
+        else { $coreStatus }
+
+    # Result consolidado (core + extras named)
+    [PSCustomObject] $result = $core
+    Add-Member -InputObject $result -NotePropertyName 'Name'            -NotePropertyValue ([string]$Profile._name) -Force
+    Add-Member -InputObject $result -NotePropertyName 'GamingTweaks'    -NotePropertyValue $gaming               -Force
+    Add-Member -InputObject $result -NotePropertyName 'HardwareChanged' -NotePropertyValue $hwChanged            -Force
+    Add-Member -InputObject $result -NotePropertyName 'RebootNeeded'    -NotePropertyValue ([bool]$gaming.RebootNeeded) -Force
+    Add-Member -InputObject $result -NotePropertyName 'NamedStatus'     -NotePropertyValue $named                -Force
+
+    # UNA sola entrada de audit consolidada (invariante: 1 entrada por run)
+    Write-ActionAudit `
+        -Action  'Profile.Apply.Named' `
+        -Status  $named `
+        -Summary "name=$([string]$Profile._name) core=$coreStatus gaming=$(if ($gaming.Success){'ok'}else{'partial'}) reboot=$($gaming.RebootNeeded)" `
+        -Details $result
+
+    if ($gaming.RebootNeeded) {
+        Write-Host '  [i] HVCI/HAGS aplicados: requieren REINICIO para efecto pleno.' -ForegroundColor Yellow
+    }
+    return $result
 }
