@@ -708,13 +708,16 @@ function Invoke-NamedProfile {
 
     # _last_applied + reescribir el JSON fuente (si existe)
     [string] $appliedAt = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
+    [PSCustomObject] $laWrite = [PSCustomObject]@{ Done = $false; Path = $SourcePath; Reason = 'SourcePath vacio/inexistente' }
     if (-not [string]::IsNullOrWhiteSpace($SourcePath) -and (Test-Path -LiteralPath $SourcePath)) {
         try {
             if ($Profile.PSObject.Properties['_last_applied']) { $Profile._last_applied = $appliedAt }
             else { $Profile | Add-Member -NotePropertyName '_last_applied' -NotePropertyValue $appliedAt -Force }
             [string] $json = $Profile | ConvertTo-Json -Depth 8
             [System.IO.File]::WriteAllText($SourcePath, $json, (New-Object System.Text.UTF8Encoding($true)))
+            $laWrite = [PSCustomObject]@{ Done = $true; Path = $SourcePath; Reason = "_last_applied=$appliedAt" }
         } catch {
+            $laWrite = [PSCustomObject]@{ Done = $false; Path = $SourcePath; Reason = $_.Exception.Message }
             Write-Host ("  [!] No se pudo actualizar _last_applied: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
         }
     }
@@ -732,6 +735,7 @@ function Invoke-NamedProfile {
     Add-Member -InputObject $result -NotePropertyName 'HardwareChanged' -NotePropertyValue $hwChanged            -Force
     Add-Member -InputObject $result -NotePropertyName 'RebootNeeded'    -NotePropertyValue ([bool]$gaming.RebootNeeded) -Force
     Add-Member -InputObject $result -NotePropertyName 'NamedStatus'     -NotePropertyValue $named                -Force
+    Add-Member -InputObject $result -NotePropertyName 'LastAppliedWrite' -NotePropertyValue $laWrite             -Force
 
     # UNA sola entrada de audit consolidada (invariante: 1 entrada por run)
     Write-ActionAudit `

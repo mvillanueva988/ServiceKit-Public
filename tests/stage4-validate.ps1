@@ -113,6 +113,11 @@ try {
             }
         } else { Fail "result.GamingTweaks ausente" }
 
+        if ($r.PSObject.Properties['LastAppliedWrite'] -and $null -ne $r.LastAppliedWrite) {
+            Log ("    LastAppliedWrite: Done={0} Path={1} Reason={2}" -f `
+                $r.LastAppliedWrite.Done, $r.LastAppliedWrite.Path, $r.LastAppliedWrite.Reason)
+        } else { Log "    [i] result sin LastAppliedWrite" }
+
         $crDir = if ($r.PSObject.Properties['ClientRun'] -and $r.ClientRun) { [string]$r.ClientRun.Dir } else { '' }
         if ($crDir -and (Test-Path $crDir)) { Pass ("ClientRun folder: {0}" -f (Split-Path $crDir -Leaf)) }
         else { Fail "ClientRun folder no creado" }
@@ -120,13 +125,28 @@ try {
 } catch { Fail ("Invoke-NamedProfile THREW: {0}" -f $_.Exception.Message) }
 Log ''
 
-# T3: _last_applied escrito en el JSON fuente
+# T3: _last_applied escrito en el JSON fuente (instrumentado: vuelca datos)
 Log '[T3] _last_applied actualizado en el JSON'
 try {
-    $after = Get-Content -LiteralPath $recipePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($null -ne $after._last_applied -and -not [string]::IsNullOrWhiteSpace([string]$after._last_applied)) {
-        Pass ("_last_applied = {0}" -f $after._last_applied)
-    } else { Fail "_last_applied NO se actualizo" }
+    Log ("    recipePath = {0}" -f $recipePath)
+    Log ("    Test-Path  = {0}" -f (Test-Path -LiteralPath $recipePath))
+    [string] $raw = ''
+    if (Test-Path -LiteralPath $recipePath) {
+        $raw = Get-Content -LiteralPath $recipePath -Raw -Encoding UTF8
+    }
+    Log ("    raw len    = {0}" -f $raw.Length)
+    Log ("    raw[0..300]= {0}" -f ($raw.Substring(0, [Math]::Min(300, $raw.Length)) -replace '\s+', ' '))
+    [bool] $hasSub = ($raw -match '"_last_applied"')
+    Log ("    substring '_last_applied' presente = {0}" -f $hasSub)
+    $after = $raw | ConvertFrom-Json
+    [object] $laProp = if ($null -ne $after) { $after.PSObject.Properties['_last_applied'] } else { $null }
+    if ($null -ne $laProp -and $null -ne $laProp.Value -and -not [string]::IsNullOrWhiteSpace([string]$laProp.Value)) {
+        Pass ("_last_applied = {0}" -f $laProp.Value)
+    } elseif ($null -ne $laProp) {
+        Fail ("_last_applied existe pero es null/vacio (rewrite no actualizo el valor)")
+    } else {
+        Fail ("_last_applied AUSENTE del JSON (rewrite no persistio o no corrio)")
+    }
 } catch { Fail ("relectura JSON: {0}" -f $_.Exception.Message) }
 Log ''
 
