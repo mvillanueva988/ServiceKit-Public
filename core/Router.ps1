@@ -355,42 +355,126 @@ function Invoke-ResearchPrompt {
     Write-ActionAudit -Action 'Research.Prompt' -Status 'Success' -Summary ('{0} ({1} bytes)' -f $tplKey, $r.FileSize) -Details $r
 }
 
-# ─── Tools menu (basico — Stage 1: lanza Bootstrap-Tools o abre tools\bin) ────
+# ─── Helper: estado de instalacion liviano (D-TS1) ────────────────────────────
+# Devuelve $true si la herramienta parece instalada en $BinDir, SIN descargar.
+# Para tools tipo zip usa extractDir; para el resto usa filename.
+function Get-ToolStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $Tool,
+        [Parameter(Mandatory)] [string]         $BinDir
+    )
+    $prop = $Tool.PSObject.Properties['extractDir']
+    if ($null -ne $prop -and -not [string]::IsNullOrWhiteSpace($prop.Value)) {
+        return [bool] (Test-Path (Join-Path $BinDir $prop.Value) -PathType Container)
+    }
+    return [bool] (Test-Path (Join-Path $BinDir $Tool.filename) -PathType Leaf)
+}
 
+# ─── Tools menu (selector interactivo D-TS1) ──────────────────────────────────
 function Show-ToolsMenu {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
 
-    [string] $toolkitRoot = Split-Path -Parent $PSScriptRoot
-    [string] $binDir = Join-Path $toolkitRoot 'tools\bin'
-    [string] $bootstrap = Join-Path $toolkitRoot 'Bootstrap-Tools.ps1'
+    [string] $toolkitRoot  = Split-Path -Parent $PSScriptRoot
+    [string] $binDir       = Join-Path $toolkitRoot 'tools\bin'
+    [string] $bootstrap    = Join-Path $toolkitRoot 'Bootstrap-Tools.ps1'
+    [string] $manifestPath = Join-Path $toolkitRoot 'tools\manifest.json'
+    [bool]   $forceToggle  = $false
 
-    Write-Host '  HERRAMIENTAS EXTERNAS' -ForegroundColor DarkCyan
-    Write-Host '  ====================='
-    Write-Host ('  Binarios en: {0}' -f $binDir)
-    Write-Host ''
-    Write-Host '  [1]  Descargar/actualizar todas las herramientas (Bootstrap-Tools.ps1)'
-    Write-Host '  [2]  Abrir carpeta tools\bin'
-    Write-Host '  [B]  Volver al menu principal' -ForegroundColor DarkYellow
-    Write-Host ''
-    [string] $choice = (Read-Host '  Selecciona una opcion').Trim().ToUpperInvariant()
-
-    switch ($choice) {
-        '1' {
-            if (Test-Path $bootstrap) {
-                & $bootstrap
-            } else {
-                Write-Host ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap) -ForegroundColor Red
-            }
-        }
-        '2' {
-            if (-not (Test-Path $binDir)) {
-                New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-            }
-            Start-Process explorer.exe $binDir
-        }
+    if (-not (Test-Path $manifestPath)) {
+        Write-Host ('  [!] tools\manifest.json no encontrado en {0}' -f $manifestPath) -ForegroundColor Red
+        return
     }
+
+    $manifest = $null
+    try   { $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json }
+    catch { Write-Host ('  [!] Error leyendo manifest.json: {0}' -f $_.Exception.Message) -ForegroundColor Red; return }
+
+    [object[]] $tools = @($manifest.tools)
+    if ($tools.Count -eq 0) {
+        Write-Host '  [!] manifest.json no contiene herramientas.' -ForegroundColor Yellow
+        return
+    }
+
+    do {
+        Write-Host ''
+        Write-Host '  HERRAMIENTAS EXTERNAS' -ForegroundColor DarkCyan
+        Write-Host '  ====================='
+        Write-Host ''
+
+        for ([int] $i = 0; $i -lt $tools.Count; $i++) {
+            $t     = $tools[$i]
+            $ok    = Get-ToolStatus -Tool $t -BinDir $binDir
+            $label = if ($ok) { 'OK   ' } else { 'falta' }
+            $clr   = if ($ok) { 'Green' } else { 'DarkYellow' }
+            Write-Host ('  [{0,2}]  {1,-26}  [{2,-12}]  {3}' -f ($i + 1), $t.name, $t.category, $label) -ForegroundColor $clr
+        }
+
+        Write-Host ''
+        [string] $fLabel = if ($forceToggle) { 'ON ' } else { 'off' }
+        Write-Host ('  [T] Todas  [F] -Force: {0}  [O] Abrir carpeta  [B] Volver' -f $fLabel)
+        Write-Host ('  Binarios: {0}' -f $binDir) -ForegroundColor DarkGray
+        Write-Host ''
+        [string] $raw = (Read-Host '  Seleccion (numero/s, T/F/O/B)').Trim()
+
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        [string] $up = $raw.ToUpperInvariant()
+
+        if ($up -eq 'B') { return }
+
+        if ($up -eq 'F') {
+            $forceToggle = -not $forceToggle
+            Write-Host ('  -Force: {0}' -f $(if ($forceToggle) { 'ON' } else { 'off' })) -ForegroundColor Cyan
+            continue
+        }
+
+        if ($up -eq 'O') {
+            if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
+            Start-Process explorer.exe $binDir
+            continue
+        }
+
+        if ($up -eq 'T') {
+            if (-not (Test-Path $bootstrap)) {
+                Write-Host ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap) -ForegroundColor Red
+            } elseif ($forceToggle) {
+                & $bootstrap -Force
+            } else {
+                & $bootstrap
+            }
+            continue
+        }
+
+        # Parsear numero/s: "1,3,5" o "1 3 5" o mezcla
+        [string[]] $tokens = $raw -split '[,\s]+' | Where-Object { $_ -ne '' }
+        [System.Collections.Generic.List[int]] $sel = [System.Collections.Generic.List[int]]::new()
+        [bool] $valid = $true
+        foreach ($tok in $tokens) {
+            [int] $n = 0
+            if ([int]::TryParse($tok, [ref] $n) -and $n -ge 1 -and $n -le $tools.Count) {
+                if (-not $sel.Contains($n - 1)) { $sel.Add($n - 1) }
+            } else {
+                Write-Host ('  [!] "{0}" no valido (1-{1}, T, F, O, B).' -f $tok, $tools.Count) -ForegroundColor Red
+                $valid = $false; break
+            }
+        }
+        if (-not $valid -or $sel.Count -eq 0) { continue }
+
+        if (-not (Test-Path $bootstrap)) {
+            Write-Host ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap) -ForegroundColor Red
+            continue
+        }
+
+        foreach ($idx in $sel) {
+            $t = $tools[$idx]
+            Write-Host ('  Procesando: {0}...' -f $t.name) -ForegroundColor Cyan
+            if ($forceToggle) { & $bootstrap -ToolName $t.name -Force }
+            else              { & $bootstrap -ToolName $t.name }
+        }
+
+    } while ($true)
 }
 
 # ─── Show-IndividualActionsSubmenu ────────────────────────────────────────────

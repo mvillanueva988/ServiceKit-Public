@@ -243,6 +243,24 @@ Test-SmokeFunction 'JobManager' 'Test-StepSucceeded Error no vacio -> false' {
     if ($r -ne $false) { throw ('Error no-vacio debe dar false; got {0}' -f $r) }
 }
 
+# ─── ToolsSelector: listado/estado read-only (D-TS1) ─────────────────────────
+# Verifica que Get-ToolStatus parsea manifest.json y devuelve bool por herramienta
+# sin descargar nada (read-only).
+Test-SmokeFunction 'ToolsSelector' 'Get-ToolStatus parsea manifest sin descargar' {
+    [string] $rRoot  = Split-Path -Parent $PSScriptRoot
+    [string] $mPath  = Join-Path $rRoot 'tools\manifest.json'
+    [string] $binDir = Join-Path $rRoot 'tools\bin'
+    if (-not (Test-Path $mPath)) { throw 'tools\manifest.json no encontrado' }
+    $m = Get-Content $mPath -Raw | ConvertFrom-Json
+    [object[]] $tl = @($m.tools)
+    if ($tl.Count -eq 0) { throw 'Manifest sin herramientas' }
+    foreach ($t in $tl) {
+        $r = Get-ToolStatus -Tool $t -BinDir $binDir
+        if ($r -isnot [bool]) { throw ('Get-ToolStatus devolvio no-bool para {0}' -f $t.name) }
+    }
+    $tl.Count
+}
+
 # ─── Progress UX: Wait-ToolkitJobs sin -ShowProgress (R3 opt-IN) ─────────────
 # Verifica que Wait-ToolkitJobs SIN -ShowProgress sobre un job trivial devuelve
 # array y no throw. No valida la UX visual (eso es Sandbox/Opus).
