@@ -247,7 +247,12 @@ function Invoke-AutoProfile {
         [Parameter(Mandatory)] [PSCustomObject] $Profile,
         [Parameter(Mandatory)] [PSCustomObject] $MachineProfile,
         [Parameter()] [switch] $SkipRestorePoint,
-        [Parameter()] [string] $ClientSlug = ''
+        [Parameter()] [string] $ClientSlug = '',
+        # Headless/batch (reaplicar receta nombrada — Stage 4): si la creacion de
+        # Restore Point falla DURO, NO prompts; continua sin RP (logueado). Default
+        # (sin el switch) mantiene el Confirm-Action interactivo. Es el unico
+        # prompt interno de Invoke-AutoProfile; el resto vive en el handler Router.
+        [Parameter()] [switch] $Unattended
     )
 
     [datetime] $startedAt = Get-Date
@@ -302,14 +307,19 @@ function Invoke-AutoProfile {
             # Falla dura: System Restore deshabilitado o error
             [string] $failMsg = if ($null -ne $rpRaw -and $rpRaw.PSObject.Properties['Message']) { [string]$rpRaw.Message } else { 'No se pudo crear el Restore Point.' }
             Write-Host ("  [!] Restore Point fallo: $failMsg") -ForegroundColor Red
-            [bool] $continuar = Confirm-Action `
-                -Title 'Continuar sin Restore Point?' `
-                -Lines @(
-                    'No se pudo crear un punto de restauracion del sistema.',
-                    'Si continuas y algo sale mal, no habra ancla de reversion automatica.',
-                    'Recomendado: cancelar y verificar que System Restore este habilitado.'
-                ) `
-                -DefaultYes:$false
+            [bool] $continuar = if ($Unattended) {
+                Write-Host '  [i] -Unattended: continuando sin Restore Point (sin prompt).' -ForegroundColor DarkYellow
+                $true
+            } else {
+                Confirm-Action `
+                    -Title 'Continuar sin Restore Point?' `
+                    -Lines @(
+                        'No se pudo crear un punto de restauracion del sistema.',
+                        'Si continuas y algo sale mal, no habra ancla de reversion automatica.',
+                        'Recomendado: cancelar y verificar que System Restore este habilitado.'
+                    ) `
+                    -DefaultYes:$false
+            }
 
             if (-not $continuar) {
                 $rpResult = [PSCustomObject]@{ Done = $false; Skipped = $false; CooldownActive = $false; Message = "Abortado por operador. RP error: $failMsg" }
