@@ -525,8 +525,13 @@ function Invoke-AutoProfile {
         ClientRun    = $clientRun
     }
 
+    # Audit action derivado del use-case (Stage 3): un run de Office/Study/
+    # Multimedia debe loguearse como tal, NO como Generic. Sigue siendo UNA
+    # sola entrada (invariante Stage 2 ticket 6). $useCase validado no-vacio
+    # por Test-AutoProfileSchema antes de llegar aca.
+    [string] $auditAction = 'Profile.Apply.' + $useCase.Substring(0,1).ToUpperInvariant() + $useCase.Substring(1)
     Write-ActionAudit `
-        -Action  'Profile.Apply.Generic' `
+        -Action  $auditAction `
         -Status  $overallStatus `
         -Summary "tier=$tier services=$disabledStr cleanup=$cleanupGb privacy=$($privResult.Path) compare=$compareScore" `
         -Details $fullResult
