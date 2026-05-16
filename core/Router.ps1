@@ -212,7 +212,7 @@ function Invoke-MainMenuDispatch {
             return
         }
         '2' {
-            Write-Host '  [Receta nombrada] [pendiente Stage 4: editor de recetas + toggles]' -ForegroundColor DarkYellow
+            Invoke-NamedProfileMenu -MachineProfile $MachineProfile
             return
         }
         '3' { Invoke-DiagnosticSnapshot -Phase Pre  -MachineProfile $MachineProfile; return }
@@ -1013,4 +1013,157 @@ function Invoke-ApplyAutoProfile {
     if ($null -ne $crDir -and -not [string]::IsNullOrWhiteSpace([string]$crDir.Value)) {
         Write-Host ('  Carpeta de run: {0}' -f [string]$crDir.Value) -ForegroundColor Cyan
     }
+}
+
+# ─── Invoke-NamedProfileMenu (handler [2] — receta nombrada / gaming) ─────────
+function Invoke-NamedProfileMenu {
+    <#
+    .SYNOPSIS
+        Submenu de recetas nombradas (Stage 4): Nueva / Cargar / Reaplicar
+        ultima. Reusa Confirm-Action, prompt de cliente y gate RP (mismo patron
+        que Invoke-ApplyAutoProfile). Invoke-NamedProfile escribe la entrada de
+        audit consolidada; aca solo se auditan Cancelled/Failed.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
+    )
+
+    function script:_Np_ClientSlug {
+        [string] $raw = (Read-Host '  Identificador del cliente (Enter para autogenerar)').Trim()
+        if ([string]::IsNullOrWhiteSpace($raw)) { return 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant() }
+        [string] $s = $raw.ToLowerInvariant()
+        $s = $s -replace '\s+', '-'
+        $s = $s -replace '[^a-z0-9-]', ''
+        $s = ($s -replace '-{2,}', '-').Trim('-')
+        if ([string]::IsNullOrWhiteSpace($s)) { return 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant() }
+        return $s
+    }
+    function script:_Np_RpGate {
+        return (Confirm-Action -Title 'Crear Restore Point automaticamente?' -Lines @(
+            'Crea un punto de restauracion antes de aplicar la receta.',
+            'Permite revertir con System Restore si algo sale mal.',
+            'Recomendado.') -DefaultYes:$true)
+    }
+    function script:_Np_ShowResult($r) {
+        [string] $st = if ($null -ne $r -and $r.PSObject.Properties['NamedStatus']) { [string]$r.NamedStatus }
+                       elseif ($null -ne $r -and $r.PSObject.Properties['Status']) { [string]$r.Status }
+                       else { 'Unknown' }
+        [string] $clr = switch ($st) { 'Success' { 'Green' } 'Partial' { 'Yellow' } default { 'Red' } }
+        Write-Host ''
+        Write-Host ('  === Resultado receta nombrada: {0} ===' -f $st) -ForegroundColor $clr
+        if ($null -ne $r -and $r.PSObject.Properties['RebootNeeded'] -and [bool]$r.RebootNeeded) {
+            Write-Host '  [i] Requiere REINICIO para efecto pleno (HVCI/HAGS).' -ForegroundColor Yellow
+        }
+        if ($null -ne $r -and $r.PSObject.Properties['ClientRun'] -and $null -ne $r.ClientRun) {
+            [object] $d = $r.ClientRun.PSObject.Properties['Dir']
+            if ($null -ne $d -and -not [string]::IsNullOrWhiteSpace([string]$d.Value)) {
+                Write-Host ('  Carpeta de run: {0}' -f [string]$d.Value) -ForegroundColor Cyan
+            }
+        }
+    }
+
+    Write-Host ''
+    Write-Host '  ================================================' -ForegroundColor DarkCyan
+    Write-Host '    RECETA NOMBRADA (gaming personalizado)' -ForegroundColor Cyan
+    Write-Host '  ================================================' -ForegroundColor DarkCyan
+    Write-Host '  [1]  Nueva'
+    Write-Host '  [2]  Cargar existente'
+    Write-Host '  [3]  Reaplicar ultima'
+    Write-Host '  [B]  Volver'
+    Write-Host ''
+    [string] $c = (Read-Host '  Selecciona').Trim().ToUpperInvariant()
+
+    if ($c -eq 'B') { return }
+
+    if ($c -eq '1') {
+        [PSCustomObject] $prof = New-NamedProfileInteractive -MachineProfile $MachineProfile
+        [string[]] $lines = Get-NamedProfilePreviewLines -Profile $prof -MachineProfile $MachineProfile
+        if (-not (Confirm-Action -Title ("Guardar receta '{0}'?" -f [string]$prof._name) -Lines $lines)) {
+            Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Cancelled'
+            return
+        }
+        [string] $slug = (Read-Host '  Nombre de archivo (slug, ej. pc-carlos-cs2)').Trim()
+        [string] $path = Save-NamedProfile -Profile $prof -Slug $slug
+        Write-Host ('  [OK] Guardada: {0}' -f $path) -ForegroundColor Green
+        if (Confirm-Action -Title 'Aplicar la receta ahora?' -DefaultYes:$true) {
+            [string] $cs = _Np_ClientSlug
+            [bool]   $rp = _Np_RpGate
+            Write-Host ''
+            Write-Host '  Iniciando pipeline (core + gaming_tweaks)...' -ForegroundColor Cyan
+            $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
+                -ClientSlug $cs -SourcePath $path -SkipRestorePoint:(-not $rp)
+            _Np_ShowResult $r
+        }
+        return
+    }
+
+    if ($c -eq '2' -or $c -eq '3') {
+        [object[]] $list = @(Get-NamedProfileList)
+        if ($c -eq '3') { $list = @($list | Where-Object { -not $_.IsSample }) }
+        if ($list.Count -eq 0) {
+            Write-Host '  No hay recetas nombradas guardadas.' -ForegroundColor Yellow
+            return
+        }
+
+        [PSCustomObject] $sel = $null
+        if ($c -eq '3') {
+            # Reaplicar ultima: la de _last_applied mas reciente; si ninguna se
+            # aplico, la de archivo mas nuevo.
+            [object[]] $applied = @($list | Where-Object { $null -ne $_.LastApplied -and -not [string]::IsNullOrWhiteSpace([string]$_.LastApplied) })
+            if ($applied.Count -gt 0) {
+                $sel = ($applied | Sort-Object { [string]$_.LastApplied } -Descending | Select-Object -First 1)
+            } else {
+                $sel = ($list | Sort-Object { (Get-Item -LiteralPath $_.Path).LastWriteTime } -Descending | Select-Object -First 1)
+            }
+            Write-Host ('  Ultima receta: {0}  (last_applied: {1})' -f $sel.Name, $(if ($sel.LastApplied) { $sel.LastApplied } else { 'nunca' })) -ForegroundColor Cyan
+        } else {
+            Write-Host ''
+            for ($i = 0; $i -lt $list.Count; $i++) {
+                [string] $tag = if ($list[$i].IsSample) { '  [fixture]' } else { '' }
+                Write-Host ('  [{0}] {1}{2}' -f ($i + 1), $list[$i].Name, $tag)
+            }
+            Write-Host ''
+            [string] $pick = (Read-Host '  Numero de receta').Trim()
+            [int] $idx = 0
+            if (-not [int]::TryParse($pick, [ref]$idx) -or $idx -lt 1 -or $idx -gt $list.Count) {
+                Write-Host '  Seleccion invalida.' -ForegroundColor Red
+                return
+            }
+            $sel = $list[$idx - 1]
+        }
+
+        [PSCustomObject] $prof = $null
+        try {
+            $prof = Import-NamedProfile -Path $sel.Path
+        } catch {
+            Write-Host ('  [!] No se pudo cargar: {0}' -f $_.Exception.Message) -ForegroundColor Red
+            Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Failed' -Summary $_.Exception.Message
+            return
+        }
+
+        [string[]] $lines = Get-NamedProfilePreviewLines -Profile $prof -MachineProfile $MachineProfile
+        if (-not (Confirm-Action -Title ("Aplicar receta '{0}'?" -f [string]$prof._name) -Lines $lines)) {
+            Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Cancelled'
+            return
+        }
+
+        [string] $cs = _Np_ClientSlug
+        Write-Host ''
+        Write-Host '  Iniciando pipeline (core + gaming_tweaks)...' -ForegroundColor Cyan
+        if ($c -eq '3') {
+            # Reaplicar = headless (prereq #3): -Unattended evita que la falla
+            # dura de RP cuelgue. RP igual se intenta (no -SkipRestorePoint).
+            $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
+                -ClientSlug $cs -SourcePath $sel.Path -Unattended
+        } else {
+            [bool] $rp = _Np_RpGate
+            $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
+                -ClientSlug $cs -SourcePath $sel.Path -SkipRestorePoint:(-not $rp)
+        }
+        _Np_ShowResult $r
+        return
+    }
+
+    Write-Host '  Opcion invalida.' -ForegroundColor Red
 }
