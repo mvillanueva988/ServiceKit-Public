@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 # R4: flags script-scope inicializados siempre post Set-StrictMode.
 # PctkProgressEnabled: el engine lo pone $true al arrancar un run con -ShowProgress,

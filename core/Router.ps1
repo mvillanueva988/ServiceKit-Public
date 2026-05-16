@@ -998,7 +998,8 @@ function Invoke-ApplyAutoProfile {
         -Profile       $profile `
         -MachineProfile $MachineProfile `
         -ClientSlug    $clientSlug `
-        -SkipRestorePoint:(-not $createRp)
+        -SkipRestorePoint:(-not $createRp) `
+        -ShowProgress
 
     # ── Mostrar resumen final ─────────────────────────────────────────────────
     Write-Host ''
@@ -1092,7 +1093,7 @@ function Invoke-NamedProfileMenu {
             Write-Host ''
             Write-Host '  Iniciando pipeline (core + gaming_tweaks)...' -ForegroundColor Cyan
             $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
-                -ClientSlug $cs -SourcePath $path -SkipRestorePoint:(-not $rp)
+                -ClientSlug $cs -SourcePath $path -SkipRestorePoint:(-not $rp) -ShowProgress
             _Np_ShowResult $r
         }
         return
@@ -1159,7 +1160,7 @@ function Invoke-NamedProfileMenu {
         } else {
             [bool] $rp = _Np_RpGate
             $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
-                -ClientSlug $cs -SourcePath $sel.Path -SkipRestorePoint:(-not $rp)
+                -ClientSlug $cs -SourcePath $sel.Path -SkipRestorePoint:(-not $rp) -ShowProgress
         }
         _Np_ShowResult $r
         return
