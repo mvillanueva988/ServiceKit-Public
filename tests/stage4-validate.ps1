@@ -47,8 +47,12 @@ try {
 } catch { Fail ("Get-MachineProfile: {0}" -f $_.Exception.Message) }
 Log ''
 
-# Receta de prueba en TEMP del Sandbox (no toca el worktree mapeado)
-[string] $recipePath = Join-Path $env:TEMP '_stage4-validate-named.json'
+# Receta de prueba en data/profiles/named/ - ubicacion REAL de las recetas
+# nombradas. NO usar $env:TEMP: el core auto que corre Invoke-NamedProfile
+# incluye Start-CleanupProcess que limpia TEMP y borraria la receta a mitad
+# (bug del harness en runs previos). named/ es gitignored (no commitea) y
+# Release.ps1 lo excluye del ZIP; el script borra el archivo al final.
+[string] $recipePath = Join-Path (Get-NamedProfileDir) '_validate-run.json'
 $recipe = [PSCustomObject]@{
     _schema_version = '1.0'; _kind = 'named'; _name = 'VALIDATE Stage4 (sandbox)'
     _created = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'); _last_applied = $null
