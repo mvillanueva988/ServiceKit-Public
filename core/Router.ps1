@@ -249,7 +249,7 @@ function Invoke-DiagnosticSnapshot {
     Write-ActionAudit -Action $action -Status 'Started'
     Write-Host ('  Capturando snapshot {0}-service...' -f $Phase) -ForegroundColor Cyan
     $job = Start-TelemetryJob -Phase $Phase
-    $results = Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120
+    $results = Invoke-JobWithProgress -Jobs @($job) -Activity ('Snapshot {0}' -f $Phase) -TimeoutSeconds 120
     if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
         $r = $results[0]
         Write-Host ('  [OK] Snapshot guardado: {0}' -f $r.FileName) -ForegroundColor Green
@@ -284,7 +284,7 @@ function Invoke-DiagnosticBsod {
     Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Started'
     Write-Host '  Analizando Event Log (ultimos 90 dias)...' -ForegroundColor Cyan
     $job = Start-BsodHistoryJob -Days 90
-    $results = Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120
+    $results = Invoke-JobWithProgress -Jobs @($job) -Activity 'Historial BSOD' -TimeoutSeconds 120
     if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
         Show-BsodHistory -Data $results[0]
         Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Success' -Summary ('{0} eventos en {1} dias' -f $results[0].TotalCrashes, $results[0].DaysScanned)
@@ -588,7 +588,7 @@ function Invoke-ActionDebloat {
     Write-ActionAudit -Action 'Debloat' -Status 'Started'
     Write-Host '  Deshabilitando servicios bloat...' -ForegroundColor Cyan
     $job = Start-DebloatProcess
-    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
+    $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Debloat' -TimeoutSeconds 120)[0]
     if ($null -eq $r) {
         Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow
         Write-ActionAudit -Action 'Debloat' -Status 'Failed' -Summary 'No result'
@@ -621,7 +621,7 @@ function Invoke-ActionCleanup {
         Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Started'
         Write-Host '  Escaneando rutas de limpieza...' -ForegroundColor Cyan
         $job = Start-CleanupPreviewJob
-        $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180)[0]
+        $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Escaneo temporales' -TimeoutSeconds 180)[0]
         if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Failed'; return }
         Write-Host ('  Total a liberar: {0} MB ({1} GB)' -f $r.TotalMB, $r.TotalGB) -ForegroundColor Green
         foreach ($f in $r.Folders) {
@@ -634,7 +634,7 @@ function Invoke-ActionCleanup {
         Write-ActionAudit -Action 'Cleanup.Run' -Status 'Started'
         Write-Host '  Limpiando temporales y caches...' -ForegroundColor Cyan
         $job = Start-CleanupProcess
-        $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 300)[0]
+        $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Limpieza de disco' -TimeoutSeconds 300)[0]
         if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Cleanup.Run' -Status 'Failed'; return }
         Write-Host ('  [OK] Liberado: {0} MB ({1} GB)  |  Errores: {2}' -f $r.FreedMB, $r.FreedGB, $r.SoftErrors) -ForegroundColor Green
         Write-ActionAudit -Action 'Cleanup.Run' -Status 'Success' -Summary ('Freed {0} MB' -f $r.FreedMB) -Details $r
@@ -652,7 +652,7 @@ function Invoke-ActionMaintenance {
     Write-ActionAudit -Action 'Maintenance' -Status 'Started'
     Write-Host '  Ejecutando DISM RestoreHealth + SFC scannow...' -ForegroundColor Cyan
     $job = Start-MaintenanceProcess
-    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 1800)[0]
+    $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'DISM + SFC' -TimeoutSeconds 1800)[0]
     if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Maintenance' -Status 'Failed'; return }
     Write-Host ('  [OK] DISM exit={0}  SFC exit={1}' -f $r.DismExitCode, $r.SfcExitCode) -ForegroundColor Green
     Write-ActionAudit -Action 'Maintenance' -Status 'Success' -Summary ('DISM={0} SFC={1}' -f $r.DismExitCode, $r.SfcExitCode)
@@ -665,7 +665,7 @@ function Invoke-ActionRestorePoint {
     Write-ActionAudit -Action 'RestorePoint' -Status 'Started'
     Write-Host '  Creando punto de restauracion...' -ForegroundColor Cyan
     $job = Start-RestorePointProcess
-    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 180)[0]
+    $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Restore Point' -TimeoutSeconds 180)[0]
     if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'RestorePoint' -Status 'Failed'; return }
 
     if ($r.Success) {
@@ -690,7 +690,7 @@ function Invoke-ActionRestorePoint {
         ) -DefaultYes $false) {
             Write-Host '  Forzando nuevo RP...' -ForegroundColor Cyan
             $bypassJob = Start-RestorePointProcess -BypassCooldown
-            $r2 = (Wait-ToolkitJobs -Jobs @($bypassJob) -TimeoutSeconds 180)[0]
+            $r2 = (Invoke-JobWithProgress -Jobs @($bypassJob) -Activity 'Restore Point bypass' -TimeoutSeconds 180)[0]
             if ($null -ne $r2 -and $r2.Success) {
                 Write-Host ('  [OK] {0}  (bypass aplicado)' -f $r2.Message) -ForegroundColor Green
                 Write-ActionAudit -Action 'RestorePoint' -Status 'Success' -Summary 'Created with bypass' -Details $r2
@@ -724,7 +724,7 @@ function Invoke-ActionNetwork {
         Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Started'
         Write-Host '  Recopilando diagnostico de red...' -ForegroundColor Cyan
         $job = Start-NetworkDiagnosticsProcess
-        $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 60)[0]
+        $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Diagnostico de red' -TimeoutSeconds 60)[0]
         if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Failed'; return }
         Write-Host ('  TCP AutoTuning : {0}' -f $r.TcpAutoTuning)
         Write-Host ('  Ping 8.8.8.8   : {0} ms' -f $r.PingMs)
@@ -755,7 +755,7 @@ function Invoke-ActionNetwork {
         Write-ActionAudit -Action 'Network.Optimize' -Status 'Started'
         Write-Host '  Optimizando red (NIC power props + TCP global)...' -ForegroundColor Cyan
         $job = Start-NetworkProcess
-        $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
+        $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Optimizar red' -TimeoutSeconds 120)[0]
         if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Network.Optimize' -Status 'Failed'; return }
         if ($r.AdaptersOptimized.Count -eq 0) {
             Write-Host '  [i] No se encontraron adapters fisicos (802.3 Ethernet / Wi-Fi 802.11) para optimizar.' -ForegroundColor DarkYellow
@@ -823,7 +823,7 @@ function Invoke-ActionPerformance {
     Write-ActionAudit -Action 'Performance' -Status 'Started' -Summary ('Profile={0}' -f $vp)
     Write-Host ('  Aplicando perfil {0} + power plan + system tweaks...' -f $vp) -ForegroundColor Cyan
     $job = Start-PerformanceProcess -VisualProfile $vp
-    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
+    $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Rendimiento' -TimeoutSeconds 120)[0]
     if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Performance' -Status 'Failed'; return }
     if ($null -ne $r.Visuals)    { Write-Host ('  Visuales:  Success={0}  Applied={1}' -f $r.Visuals.Success, $r.Visuals.Applied.Count) }
     if ($null -ne $r.PowerPlan)  {
@@ -846,7 +846,7 @@ function Invoke-ActionDriverBackup {
     Write-ActionAudit -Action 'Drivers.Backup' -Status 'Started'
     Write-Host ('  Exportando drivers a {0}...' -f $outDir) -ForegroundColor Cyan
     $job = Start-DriverBackupJob -OutputRoot $outDir
-    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 600)[0]
+    $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Backup drivers' -TimeoutSeconds 600)[0]
     if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed'; return }
     if ($r.Success) {
         Write-Host ('  [OK] {0} drivers exportados de {1} candidatos. {2}' -f $r.Exported, $r.Total, $r.Message) -ForegroundColor Green
@@ -866,7 +866,7 @@ function Invoke-ActionApps {
     Write-Host '  Listando apps Win32 + UWP (puede tardar)...' -ForegroundColor Cyan
     $win32Job = Start-Win32AppsJob
     $uwpJob   = Start-UwpAppsJob
-    $results  = Wait-ToolkitJobs -Jobs @($win32Job, $uwpJob) -TimeoutSeconds 180
+    $results  = Invoke-JobWithProgress -Jobs @($win32Job, $uwpJob) -Activity 'Listado de apps' -TimeoutSeconds 180
     $win32 = @(); $uwp = @()
     if ($results.Count -ge 1 -and $null -ne $results[0]) { $win32 = @($results[0]) }
     if ($results.Count -ge 2 -and $null -ne $results[1]) { $uwp   = @($results[1]) }
@@ -945,7 +945,7 @@ function Invoke-ActionPrivacy {
     Write-ActionAudit -Action 'Privacy.Apply' -Status 'Started' -Summary ('Profile={0}' -f $profile)
     Write-Host ('  Aplicando perfil {0} (registry tweaks)...' -f $profile) -ForegroundColor Cyan
     $job = Start-PrivacyJob -Profile $profile
-    $r = (Wait-ToolkitJobs -Jobs @($job) -TimeoutSeconds 120)[0]
+    $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Privacidad' -TimeoutSeconds 120)[0]
     if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Privacy.Apply' -Status 'Failed'; return }
     Write-Host ('  [OK] Aplicados: {0}  |  Errores: {1}' -f $r.Applied.Count, $r.Errors.Count) -ForegroundColor Green
     Write-ActionAudit -Action 'Privacy.Apply' -Status 'Success' -Summary ('{0}: Applied={1} Errors={2}' -f $profile, $r.Applied.Count, $r.Errors.Count) -Details $r

@@ -134,6 +134,50 @@ function Wait-ToolkitJobs {
     return ,$resultsList.ToArray()
 }
 
+# ─── Invoke-JobWithProgress ───────────────────────────────────────────────────
+# Wrapper de accion suelta: habilita la barra de progreso indeterminada para
+# llamadas fuera del pipeline auto/named (acciones del submenu individual).
+# Contrato de retorno IDENTICO a Wait-ToolkitJobs: return ,$result (array
+# siempre). El finally garantiza Write-Progress -Completed para que la barra
+# no quede colgada al volver al menu. StrictMode-safe; costo-cero.
+function Invoke-JobWithProgress {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.Job[]] $Jobs,
+
+        # Activity no puede ser vacio: Write-Progress lo requiere.
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $Activity,
+
+        [Parameter()]
+        [int] $TimeoutSeconds = 300
+    )
+
+    # Habilitar el flag de progreso para esta llamada standalone.
+    # Save/restore: si $script:PctkProgressEnabled fue puesto $false por un
+    # contexto -Unattended, se restaura en el finally.
+    # $script:PctkProgressOk silencia la barra si el host no es interactivo
+    # (primer Write-Progress fallido -> flag $false permanente, defensivo).
+    [bool] $prevEnabled = $script:PctkProgressEnabled
+    $script:PctkProgressEnabled = $true
+
+    [object[]] $result = @()
+    try {
+        $result = Wait-ToolkitJobs -Jobs $Jobs -TimeoutSeconds $TimeoutSeconds `
+                    -ShowProgress -ActivityLabel $Activity -PercentHint -1
+    } finally {
+        $script:PctkProgressEnabled = $prevEnabled
+        # Nunca dejar la barra colgada al volver al menu.
+        try { Write-Progress -Id 1 -Activity $Activity -Completed } catch { }
+    }
+
+    # Preservar el idiom de retorno: ',' evita que PowerShell unwrapee el array.
+    # El caller usa [0] o itera sobre el resultado igual que con Wait-ToolkitJobs.
+    return ,$result
+}
+
 function Invoke-ModuleJob {
     [CmdletBinding()]
     param(

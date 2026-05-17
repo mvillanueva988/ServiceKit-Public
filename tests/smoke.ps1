@@ -325,6 +325,17 @@ Test-SmokeFunction 'JobManager' 'Wait-ToolkitJobs no-ShowProgress devuelve array
     if ($arr.Count -lt 1) { throw ('Array vacio; esperado Count>=1; Count={0}' -f $arr.Count) }
 }
 
+# ─── Progress UX extension: Invoke-JobWithProgress (wrapper acciones sueltas) ─
+# Verifica que el wrapper devuelve array y no throw sobre un job trivial.
+# No valida la UX visual (la barra se suprime en host no interactivo por
+# $script:PctkProgressOk; eso es comportamiento correcto en rig).
+Test-SmokeFunction 'JobManager' 'Invoke-JobWithProgress devuelve array sin throw' {
+    $j = Start-Job -ScriptBlock { 'ok' }
+    $arr = Invoke-JobWithProgress -Jobs @($j) -Activity 'Smoke test' -TimeoutSeconds 10
+    if ($null -eq $arr) { throw 'Invoke-JobWithProgress retorno $null (esperado array)' }
+    if ($arr.Count -lt 1) { throw ('Array vacio; esperado Count>=1; Count={0}' -f $arr.Count) }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'
