@@ -1092,18 +1092,71 @@ function Invoke-ActionStartup {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+
     Write-ActionAudit -Action 'Startup.List' -Status 'Started'
-    [object[]] $entries = @(Get-StartupEntries)
-    if ($entries.Count -eq 0) { Write-Host '  Sin entradas de inicio.' -ForegroundColor DarkGray; Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary '0 entries'; return }
-    Write-Host ('  Entradas de inicio detectadas: {0}' -f $entries.Count) -ForegroundColor Green
-    for ([int] $i = 0; $i -lt $entries.Count; $i++) {
-        $e = $entries[$i]
-        [string] $state = if ($e.Enabled) { 'ON ' } else { 'OFF' }
-        Write-Host ('  [{0,3}] {1}  {2,-25}  {3,-30}' -f $i, $state, $e.Location, $e.Name)
-    }
-    Write-Host ''
-    Write-Host '  (Toggle interactivo: Stage 2+ extiende este handler)'
-    Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary ('{0} entries' -f $entries.Count)
+    [int]  $toggleCount = 0
+    [bool] $listed      = $false
+
+    do {
+        [object[]] $entries = @(Get-StartupEntries)
+        if ($entries.Count -eq 0) {
+            Write-Host '  Sin entradas de inicio.' -ForegroundColor DarkGray
+            if (-not $listed) { Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary '0 entries' }
+            return
+        }
+
+        Write-Host ''
+        Write-Host ('  INICIO DEL SISTEMA  ({0} entradas detectadas)' -f $entries.Count) -ForegroundColor DarkCyan
+        for ([int] $i = 0; $i -lt $entries.Count; $i++) {
+            [PSCustomObject] $e = $entries[$i]
+            [string] $state = if ($e.Enabled) { 'ON ' } else { 'OFF' }
+            [string] $extra = if (-not $e.CanToggle) { '  (RunOnce - no editable)' } else { '' }
+            Write-Host ('  [{0,3}] {1}  {2,-25}  {3}{4}' -f $i, $state, $e.Location, $e.Name, $extra)
+        }
+        if (-not $listed) {
+            Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary ('{0} entries' -f $entries.Count)
+            $listed = $true
+        }
+        Write-Host ''
+        Write-Host '  Ingresa un indice para alternar, V para volver:' -ForegroundColor DarkGray
+        [string] $raw = (Read-Host '  >').Trim().ToUpperInvariant()
+
+        if ($raw -eq 'V' -or [string]::IsNullOrEmpty($raw)) { break }
+
+        [int] $idx = -1
+        if (-not [int]::TryParse($raw, [ref] $idx) -or $idx -lt 0 -or $idx -ge $entries.Count) {
+            Write-Host ('  [!] Indice invalido. Ingresa un numero entre 0 y {0}.' -f ($entries.Count - 1)) -ForegroundColor Red
+            continue
+        }
+
+        [PSCustomObject] $entry = $entries[$idx]
+
+        if (-not $entry.CanToggle) {
+            Write-Host '  Las entradas RunOnce no se pueden modificar.' -ForegroundColor DarkGray
+            continue
+        }
+
+        [bool] $target = -not $entry.Enabled
+        [PSCustomObject] $r = Set-StartupEntry -Entry $entry -Enabled $target
+
+        if ($r.Success) {
+            [string] $newState = if ($target) { 'ON' } else { 'OFF' }
+            Write-Host ('  [OK] {0} {1} -> {2}' -f $entry.Location, $entry.Name, $newState) -ForegroundColor Green
+            $toggleCount++
+            Write-ActionAudit -Action 'Startup.Toggle' -Status 'Success' `
+                -Summary ('{0} {1} -> {2}' -f $entry.Location, $entry.Name, $(if ($target) { 'ON' } else { 'OFF' })) `
+                -Details $r
+        }
+        else {
+            Write-Host ('  [!] {0}' -f $r.Error) -ForegroundColor Red
+            Write-ActionAudit -Action 'Startup.Toggle' -Status 'Failed' `
+                -Summary ('{0} {1}' -f $entry.Location, $entry.Name) -Details $r
+        }
+
+    } while ($true)
+
+    Write-ActionAudit -Action 'Startup.Toggle.Session' -Status 'Success' `
+        -Summary ('{0} cambios en esta sesion' -f $toggleCount)
 }
 
 function Invoke-ActionWindowsUpdate {

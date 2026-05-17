@@ -142,6 +142,19 @@ Test-SmokeFunction 'Privacy' 'Get-ShutUp10Path'       { Get-ShutUp10Path }
 
 Test-SmokeFunction 'StartupManager' 'Get-StartupEntries' { Get-StartupEntries }
 
+# §6.3: Set-StartupEntry early-return paths — entradas SINTETICAS, cero mutacion
+Test-SmokeFunction 'StartupManager' 'Set-StartupEntry rechaza RunOnce' {
+    $e = [PSCustomObject]@{ Name='x'; Enabled=$true; CanToggle=$false; Type='Registry'; ApprovedPath=$null; FilePath=$null }
+    $r = Set-StartupEntry -Entry $e -Enabled $false
+    if ($r.Success -ne $false) { throw ('Success debe ser $false para RunOnce; got {0}' -f $r.Success) }
+}
+Test-SmokeFunction 'StartupManager' 'Set-StartupEntry no-op si ya en estado' {
+    $e = [PSCustomObject]@{ Name='x'; Enabled=$true; CanToggle=$true; Type='Registry'; ApprovedPath=$null; FilePath=$null }
+    $r = Set-StartupEntry -Entry $e -Enabled $true
+    if ($r.Success -ne $true)    { throw ('Success debe ser $true para no-op; got {0}' -f $r.Success) }
+    if ($r.AlreadySet -ne $true) { throw ('AlreadySet debe ser $true para no-op; got {0}' -f $r.AlreadySet) }
+}
+
 Test-SmokeFunction 'Telemetry' 'Test-IsVirtualMachine' { Test-IsVirtualMachine }
 Test-SmokeFunction 'Telemetry' 'Invoke-WithTimeout returns on time' {
     $r = Invoke-WithTimeout -ScriptBlock { 42 } -TimeoutSeconds 5
