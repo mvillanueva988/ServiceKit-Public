@@ -439,6 +439,27 @@ Test-SmokeFunction 'Uninstall' 'New-PctkUninstallScript genera contenido esperad
     if ($s -notmatch 'PSCommandPath') { throw 'Script no contiene auto-borrado del propio script (PSCommandPath)' }
 }
 
+# ─── Handlers interactivos del Router: abort-seguro (gap que dejo pasar Bug2) ──
+# Bugs 2/3 shippearon porque NINGUN test ejercitaba los handlers interactivos.
+# Cada test shadowea Read-Host con un valor que ABORTA en el 1er prompt SIN
+# mutar (tokens verificados contra el codigo: '' => break/return temprano).
+# Solo handlers con abort-seguro PROBADO; ApplyAutoProfile/NamedProfileMenu se
+# excluyen a proposito (flujos multi-prompt que llegan a aplicar -> peligroso
+# en smoke que corre en la PC real). Asercion = no-throw (caza crash StrictMode
+# en el path interactivo, la familia de Bug2).
+Test-SmokeFunction 'RouterInteractive' 'Invoke-ActionStartup abort-seguro no crashea' {
+    function Read-Host { '' }   # l.~1122: '' => break, sin Set-StartupEntry
+    Invoke-ActionStartup -MachineProfile (Get-MachineProfile) | Out-Null
+}
+Test-SmokeFunction 'RouterInteractive' 'Invoke-ActionApps abort-seguro no crashea' {
+    function Read-Host { '' }   # '' => return tras listar (jobs read-only), sin uninstall
+    Invoke-ActionApps -MachineProfile (Get-MachineProfile) | Out-Null
+}
+Test-SmokeFunction 'RouterInteractive' 'Invoke-ResearchPrompt cancel no crashea' {
+    function Read-Host { '' }   # l.324: '' => return ANTES de New-ResearchPrompt
+    Invoke-ResearchPrompt -MachineProfile (Get-MachineProfile) | Out-Null
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'
