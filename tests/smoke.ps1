@@ -230,6 +230,21 @@ Test-SmokeFunction 'Wsl' 'New-WslConfig (DevHeavy)' { New-WslConfig -Preset DevH
 Test-SmokeFunction 'NamedProfileEditor' 'Get-NamedProfileDir'  { Get-NamedProfileDir }
 Test-SmokeFunction 'NamedProfileEditor' 'Get-NamedProfileList' { Get-NamedProfileList }
 Test-SmokeFunction 'NamedProfileEditor' 'Import/validate _sample' { Import-NamedProfile -Path (Join-Path (Get-NamedProfileDir) '_sample.json') }
+# Regresion Bug2 (v2.0.1): Add-Tweak escribia $script:gt -> crash StrictMode al
+# 1er toggle; ademas 410/438 leian $gt local -> receta vacia. Read-only: el
+# builder solo construye/retorna un objeto (Get-*Status son deteccion).
+# Shadow de Read-Host (funcion local) -> headless: 'f' hace toggles 'off'.
+Test-SmokeFunction 'NamedProfileEditor' 'New-NamedProfileInteractive escribe gaming_tweaks' {
+    function Read-Host { 'f' }
+    $p = New-NamedProfileInteractive -MachineProfile (Get-MachineProfile)
+    if ($null -eq $p) { throw 'New-NamedProfileInteractive devolvio $null' }
+    $gtp = $p.PSObject.Properties['gaming_tweaks']
+    if ($null -eq $gtp) { throw 'falta gaming_tweaks en la receta' }
+    $hv = $gtp.Value.PSObject.Properties['hvci']
+    if ($null -eq $hv -or [string]$hv.Value -ne 'off') {
+        throw ("gaming_tweaks.hvci esperado 'off'; got {0}" -f $(if ($hv) { $hv.Value } else { '(ausente)' }))
+    }
+}
 Test-SmokeFunction 'Performance' 'Get-GameModeStatus' { Get-GameModeStatus }
 Test-SmokeFunction 'Privacy' 'Get-CustomDefenderExclusions' { Get-CustomDefenderExclusions }
 

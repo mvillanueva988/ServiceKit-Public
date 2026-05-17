@@ -325,7 +325,11 @@ function New-NamedProfileInteractive {
 
     [PSCustomObject] $gt = [PSCustomObject]@{}
     function Add-Tweak([string]$Key, $Value) {
-        if ($null -ne $Value) { $script:gt | Add-Member -NotePropertyName $Key -NotePropertyValue $Value -Force }
+        # $gt es local de New-NamedProfileInteractive; Add-Tweak lo resuelve por
+        # scope dinamico y muta el MISMO objeto que se lee/retorna abajo (410/438).
+        # NO usar $script:gt: crashea con StrictMode (nunca seteado) y ademas
+        # arrastraria estado entre llamadas.
+        if ($null -ne $Value) { $gt | Add-Member -NotePropertyName $Key -NotePropertyValue $Value -Force }
     }
 
     # Estados actuales (defensivo: si el Get-*Status no esta o falla, 'N/A')
