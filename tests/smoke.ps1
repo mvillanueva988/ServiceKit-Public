@@ -377,6 +377,22 @@ Test-SmokeFunction 'NamedProfileEditor' 'Schema rechaza nvidia_sysmem_fallback i
     if (-not $threw) { throw 'Test-NamedProfileSchema debio rechazar nvidia_sysmem_fallback=maybe' }
 }
 
+# ─── Uninstall: New-PctkUninstallScript (read-only, no ejecuta nada) ─────────
+Test-SmokeFunction 'Uninstall' 'New-PctkUninstallScript genera contenido esperado' {
+    [string] $fakeRoot = 'C:\FakePCTk'
+    [int]    $fakePid  = 99999
+    [string] $s = New-PctkUninstallScript -InstallRoot $fakeRoot -PctkPid $fakePid
+    # 1. Contiene Remove-Item y el root pasado
+    if ($s -notmatch 'Remove-Item') { throw 'Script no contiene Remove-Item' }
+    if ($s -notmatch [regex]::Escape($fakeRoot)) { throw "Script no contiene el install root '$fakeRoot'" }
+    # 2. Limpieza de artefactos temporales PCTk-*
+    if ($s -notmatch 'PCTk-\*') { throw "Script no contiene glob PCTk-*" }
+    # 3. Espera al PID
+    if ($s -notmatch [string]$fakePid) { throw "Script no contiene el PID $fakePid" }
+    # 4. Auto-borrado del propio script
+    if ($s -notmatch 'PSCommandPath') { throw 'Script no contiene auto-borrado del propio script (PSCommandPath)' }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

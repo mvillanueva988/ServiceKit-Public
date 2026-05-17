@@ -172,7 +172,8 @@ function Show-MainMenu {
         Write-Host ''
         Write-Host '  HERRAMIENTAS' -ForegroundColor DarkCyan
         Write-Host '  [T]  Herramientas externas'
-        Write-Host '  [X]  Limpiar y salir' -ForegroundColor DarkRed
+        Write-Host '  [X]  Salir'
+        Write-Host '  [U]  Desinstalar PCTk de esta PC (borra todo)' -ForegroundColor DarkRed
         Write-Host ''
 
         [string] $choice = (Read-Host '  Selecciona una opcion').Trim().ToUpperInvariant()
@@ -184,6 +185,14 @@ function Show-MainMenu {
         if ($choice -eq 'X') {
             Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
             return 'X'
+        }
+
+        if ($choice -eq 'U') {
+            [bool] $ok = Invoke-UninstallToolkit
+            if ($ok) { return 'U' }
+            Write-Host ''
+            Read-Host '  [Enter] para continuar' | Out-Null
+            continue
         }
 
         Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
@@ -225,6 +234,10 @@ function Invoke-MainMenuDispatch {
             return
         }
         'T' { Show-ToolsMenu -MachineProfile $MachineProfile; return }
+        'U' {
+            $null = Invoke-UninstallToolkit
+            return
+        }
         'X' {
             Write-Host '  Saliendo de PCTk v2...' -ForegroundColor Cyan
             return
