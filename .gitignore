@@ -40,6 +40,8 @@ dist/*.sha256
 *.code-workspace
 GSD-STYLE.md
 _local-dev/
+# Worktrees auxiliares creadas por tooling local (nunca publicar)
+.clone/
 # ==========================================
 # GSD Framework / Copilot AI
 # ==========================================

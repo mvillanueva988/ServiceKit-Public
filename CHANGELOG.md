@@ -4,7 +4,7 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
 ## [Unreleased]
 
-## [2.0.0] - 2026-05-15
+## [2.0.0] - 2026-05-17
 
 Rework completo del toolkit. Arquitectura rediseñada de "menú con stubs" a **optimizador por perfiles**: el técnico elige el use-case del cliente (Generic / Office / Study / Multimedia), el toolkit detecta el hardware tier (Low / Mid / High) y aplica una receta pre-fabricada con snapshot PRE/POST automatizado.
 
@@ -27,9 +27,13 @@ Rework completo del toolkit. Arquitectura rediseñada de "menú con stubs" a **o
 - **Carpeta de cliente**: `output/clients/<slug>_<fecha>/` creada automáticamente en cada run de receta — log de ejecución, snapshot PRE/POST y audit log en un solo lugar.
 - **Audit log distribuido**: `Write-ActionAudit` invocado desde cada handler; log a `output/audit/<date>.jsonl`.
 - **`Confirm-Action` helper**: preview de qué se va a aplicar + confirmación S/n antes de cada acción destructiva.
-- **`tests/smoke.ps1`**: harness read-only que valida 39 funciones de detección y carga de recetas sin tocar el sistema.
+- **`tests/smoke.ps1`**: harness read-only que valida 76 funciones de detección y carga de recetas sin tocar el sistema.
 - **`tools/manifest.json`**: DDU, LatencyMon, TimerResolution agregados. URLs rotas corregidas; versiones actualizadas (BCUninstaller 6.1.0.1, WizTree 4.31, CPU-Z 2.20, BleachBit 6.0.0).
 - **`tools/Check-ToolUpdates.ps1`** + **`tools/README.md`**: helper para verificar herramientas en el manifest.
+- **Self-uninstall (`core/Router.ps1` + `modules/UninstallToolkit.ps1`)**: `[X]` pasa a **"Salir"** (deja todo instalado); nueva opción **`[U]` "Desinstalar PCTk de esta PC"** — doble confirmación (preview + tipear `BORRAR`), preserva `output/clients/` fuera de la instalación, y un desinstalador desprendido borra solo el footprint de PCTk (carpeta de instalación + `%TEMP%\PCTk-*`) recién después de cerrar el proceso. Validado en Windows Sandbox.
+- **Apps — desinstalación interactiva (`core/Router.ps1` `Invoke-ActionApps` + `modules/Apps.ps1`)**: la opción `[8]` ahora lista Win32 + UWP indexado, selección múltiple, preview del método (Quiet / MSI / Interactive para Win32, `Remove-AppxPackage` usuario actual para UWP) y confirmación única; desinstala con audit por app + batch.
+- **Startup — toggle interactivo (`core/Router.ps1` `Invoke-ActionStartup` + `modules/StartupManager.ps1`)**: la opción `[10]` ahora activa/desactiva entradas de inicio (Registry StartupApproved + carpeta Startup), respeta `RunOnce` (no editable) y re-lee el estado tras cada cambio.
+- Con lo anterior se cierran los **2 últimos stubs de menú** (`Stage 2+ extiende este handler`): la transición de "menú con stubs" a optimizador por perfiles queda 100% real.
 
 ### Changed
 
