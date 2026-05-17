@@ -113,6 +113,24 @@ Test-SmokeFunction 'MachineProfile' 'IsVirtualMachine field' {
 Test-SmokeFunction 'Apps' 'Get-InstalledWin32Apps' { Get-InstalledWin32Apps }
 Test-SmokeFunction 'Apps' 'Get-InstalledUwpApps'   { Get-InstalledUwpApps }
 
+# §6.4 — read-only: preview shapes, NUNCA llamar Invoke-*Uninstall en smoke
+Test-SmokeFunction 'Apps' 'Get-Win32UninstallPreview MSI' {
+    $fake = [PSCustomObject]@{
+        Name                 = 'Fake App'
+        UninstallString      = 'MsiExec.exe /X{12345678-1234-1234-1234-1234567890AB}'
+        QuietUninstallString = ''
+    }
+    $p = Get-Win32UninstallPreview -App $fake
+    if ($p.Method -ne 'MSI')             { throw ('Method MSI esperado; got {0}' -f $p.Method) }
+    if ($p.CommandLine -notmatch '/X\{') { throw ('CommandLine debe tener /X{; got {0}' -f $p.CommandLine) }
+}
+Test-SmokeFunction 'Apps' 'Get-UwpUninstallPreview shape' {
+    $fake = [PSCustomObject]@{ PackageFullName = 'Foo_1.0_x64__abc' }
+    $p = Get-UwpUninstallPreview -App $fake
+    if ($p.Success -ne $true)                           { throw ('Success=$true esperado; got {0}' -f $p.Success) }
+    if ($p.CommandLine -notmatch 'Remove-AppxPackage')  { throw ('CommandLine debe tener Remove-AppxPackage; got {0}' -f $p.CommandLine) }
+}
+
 Test-SmokeFunction 'Cleanup' 'Get-CleanupPreview' { Get-CleanupPreview }
 
 Test-SmokeFunction 'Diagnostics' 'Get-BsodHistory' { Get-BsodHistory -Days 7 }

@@ -189,6 +189,61 @@ function Invoke-Win32Uninstall {
     return [PSCustomObject]@{ Success = $false; Method = 'None'; App = $App.Name; Command = ''; ExitCode = $null; Error = 'Sin UninstallString en el registro' }
 }
 
+# ─── Invoke-UwpUninstall ─────────────────────────────────────────────────────
+function Invoke-UwpUninstall {
+    <#
+    .SYNOPSIS
+        Desinstala un paquete UWP del usuario actual via Remove-AppxPackage.
+        No afecta otros usuarios (-AllUsers no se usa). Return shape igual a
+        Invoke-Win32Uninstall para loop uniforme en el caller.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject] $App
+    )
+
+    $pfnProp = $App.PSObject.Properties['PackageFullName']
+    $dnProp  = $App.PSObject.Properties['DisplayName']
+    $nProp   = $App.PSObject.Properties['Name']
+    [string] $pfn         = if ($null -ne $pfnProp) { [string] $pfnProp.Value } else { '' }
+    [string] $displayName = if ($null -ne $dnProp -and -not [string]::IsNullOrWhiteSpace([string] $dnProp.Value)) {
+                                [string] $dnProp.Value
+                            } elseif ($null -ne $nProp) {
+                                [string] $nProp.Value
+                            } else { '' }
+
+    if ([string]::IsNullOrWhiteSpace($pfn)) {
+        return [PSCustomObject]@{
+            Success  = $false
+            Method   = 'UWP'
+            App      = $displayName
+            ExitCode = $null
+            Error    = 'PackageFullName ausente en el objeto app'
+        }
+    }
+
+    try {
+        Remove-AppxPackage -Package $pfn -ErrorAction Stop
+        return [PSCustomObject]@{
+            Success  = $true
+            Method   = 'UWP'
+            App      = $displayName
+            ExitCode = $null
+            Error    = ''
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success  = $false
+            Method   = 'UWP'
+            App      = $displayName
+            ExitCode = $null
+            Error    = $_.Exception.Message
+        }
+    }
+}
+
 function Get-Win32UninstallPreview {
     [CmdletBinding()]
     param(
@@ -253,6 +308,42 @@ function Get-Win32UninstallPreview {
         CommandLine      = ''
         ExecutableExists = $false
         Error            = 'Sin UninstallString en el registro'
+    }
+}
+
+# ─── Get-UwpUninstallPreview ─────────────────────────────────────────────────
+function Get-UwpUninstallPreview {
+    <#
+    .SYNOPSIS
+        Devuelve el preview de desinstalacion UWP SIN ejecutar nada.
+        Shape identico a Get-Win32UninstallPreview en campos clave (Success,
+        Method, MethodLabel, CommandLine, Error) para loop uniforme en UI.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject] $App
+    )
+
+    $pfnProp = $App.PSObject.Properties['PackageFullName']
+    [string] $pfn = if ($null -ne $pfnProp) { [string] $pfnProp.Value } else { '' }
+
+    if ([string]::IsNullOrWhiteSpace($pfn)) {
+        return [PSCustomObject]@{
+            Success     = $false
+            Method      = 'UWP'
+            MethodLabel = 'UWP (Remove-AppxPackage)'
+            CommandLine = ''
+            Error       = 'PackageFullName ausente en el objeto app'
+        }
+    }
+
+    return [PSCustomObject]@{
+        Success     = $true
+        Method      = 'UWP'
+        MethodLabel = 'UWP (Remove-AppxPackage)'
+        CommandLine = ('Remove-AppxPackage -Package {0}' -f $pfn)
+        Error       = ''
     }
 }
 

@@ -875,18 +875,142 @@ function Invoke-ActionApps {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+
     Write-ActionAudit -Action 'Apps.List' -Status 'Started'
     Write-Host '  Listando apps Win32 + UWP (puede tardar)...' -ForegroundColor Cyan
-    $win32Job = Start-Win32AppsJob
-    $uwpJob   = Start-UwpAppsJob
-    $results  = Invoke-JobWithProgress -Jobs @($win32Job, $uwpJob) -Activity 'Listado de apps' -TimeoutSeconds 180
-    $win32 = @(); $uwp = @()
-    if ($results.Count -ge 1 -and $null -ne $results[0]) { $win32 = @($results[0]) }
-    if ($results.Count -ge 2 -and $null -ne $results[1]) { $uwp   = @($results[1]) }
-    Write-Host ('  Win32 instaladas: {0}' -f $win32.Count) -ForegroundColor Green
-    Write-Host ('  UWP   instaladas: {0}' -f $uwp.Count)   -ForegroundColor Green
-    Write-Host '  (UI completa de uninstall: Stage 2+ extiende este handler)'
+    $win32Job   = Start-Win32AppsJob
+    $uwpJob     = Start-UwpAppsJob
+    $jobResults = Invoke-JobWithProgress -Jobs @($win32Job, $uwpJob) -Activity 'Listado de apps' -TimeoutSeconds 180
+
+    [PSCustomObject[]] $win32 = @()
+    [PSCustomObject[]] $uwp   = @()
+    if ($jobResults.Count -ge 1 -and $null -ne $jobResults[0]) { $win32 = @($jobResults[0]) }
+    if ($jobResults.Count -ge 2 -and $null -ne $jobResults[1]) { $uwp   = @($jobResults[1]) }
     Write-ActionAudit -Action 'Apps.List' -Status 'Success' -Summary ('Win32={0} UWP={1}' -f $win32.Count, $uwp.Count)
+
+    if ($win32.Count -eq 0 -and $uwp.Count -eq 0) {
+        Write-Host '  Sin apps instaladas detectadas.' -ForegroundColor Yellow
+        return
+    }
+
+    # Build unified index list: Win32 first, UWP after
+    [System.Collections.Generic.List[PSCustomObject]] $allApps =
+        [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($a in $win32) { $allApps.Add([PSCustomObject]@{ Type = 'Win32'; App = $a }) }
+    foreach ($a in $uwp)   { $allApps.Add([PSCustomObject]@{ Type = 'UWP';   App = $a }) }
+
+    Write-Host ''
+    if ($win32.Count -gt 0) {
+        Write-Host ('  Win32 ({0}):' -f $win32.Count) -ForegroundColor Cyan
+        for ([int] $i = 0; $i -lt $win32.Count; $i++) {
+            $a = $win32[$i]
+            [string] $nm  = ($a.Name -replace '[\r\n]', ' ')
+            if ($nm.Length -gt 38) { $nm = $nm.Substring(0, 35) + '...' }
+            [string] $ver = if (-not [string]::IsNullOrWhiteSpace($a.Version))   { $a.Version.Substring(0, [Math]::Min($a.Version.Length, 12)) }   else { '' }
+            [string] $pub = if (-not [string]::IsNullOrWhiteSpace($a.Publisher)) { $a.Publisher.Substring(0, [Math]::Min($a.Publisher.Length, 28)) } else { '' }
+            Write-Host ('  [{0,3}] {1,-38}  {2,-12}  {3}' -f $i, $nm, $ver, $pub)
+        }
+    }
+
+    [int] $uwpOffset = $win32.Count
+    if ($uwp.Count -gt 0) {
+        Write-Host ''
+        Write-Host ('  UWP ({0}):' -f $uwp.Count) -ForegroundColor Cyan
+        for ([int] $i = 0; $i -lt $uwp.Count; $i++) {
+            $a       = $uwp[$i]
+            [int]    $idx   = $uwpOffset + $i
+            [string] $dn    = ($a.DisplayName -replace '[\r\n]', ' ')
+            if ($dn.Length -gt 38) { $dn = $dn.Substring(0, 35) + '...' }
+            [string] $msLbl = if ($a.IsMicrosoft) { '  (MS)' } else { '' }
+            Write-Host ('  [{0,3}] {1}{2}' -f $idx, $dn, $msLbl)
+        }
+    }
+
+    Write-Host ''
+    Write-Host ('  Total: {0} Win32 + {1} UWP = {2}. Numeros (coma/espacio) o V para volver:' -f $win32.Count, $uwp.Count, $allApps.Count) -ForegroundColor DarkGray
+    [string] $raw = (Read-Host '  >').Trim()
+    if ([string]::IsNullOrWhiteSpace($raw) -or $raw.ToUpperInvariant() -eq 'V') { return }
+
+    # Parse multi-selection
+    [string[]] $tokens = $raw -split '[,\s]+' | Where-Object { $_ -ne '' }
+    [System.Collections.Generic.List[int]] $selIdx = [System.Collections.Generic.List[int]]::new()
+    foreach ($tok in $tokens) {
+        [int] $n = 0
+        if ([int]::TryParse($tok, [ref] $n) -and $n -ge 0 -and $n -lt $allApps.Count) {
+            if (-not $selIdx.Contains($n)) { $selIdx.Add($n) }
+        } else {
+            Write-Host ('  [!] "{0}" no valido (rango 0-{1}), ignorado.' -f $tok, ($allApps.Count - 1)) -ForegroundColor Yellow
+        }
+    }
+    if ($selIdx.Count -eq 0) {
+        Write-Host '  Sin seleccion valida. Cancelado.' -ForegroundColor DarkGray
+        return
+    }
+
+    # Preview por app seleccionada
+    Write-Host ''
+    Write-Host '  Preview:' -ForegroundColor Cyan
+    [System.Collections.Generic.List[PSCustomObject]] $queue = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($idx in @($selIdx | Sort-Object)) {
+        $entry = $allApps[$idx]
+        if ($entry.Type -eq 'Win32') {
+            $preview = Get-Win32UninstallPreview -App $entry.App
+            [string] $appName = $entry.App.Name
+        } else {
+            $preview = Get-UwpUninstallPreview -App $entry.App
+            [string] $appName = $entry.App.DisplayName
+        }
+        Write-Host ('  [{0,3}] {1}' -f $idx, ($appName -replace '[\r\n]', ' ')) -ForegroundColor White
+        Write-Host ('         Metodo:  {0}' -f $preview.MethodLabel) -ForegroundColor DarkGray
+        Write-Host ('         Comando: {0}' -f $preview.CommandLine) -ForegroundColor DarkGray
+        if (-not $preview.Success) {
+            Write-Host ('         AVISO:   {0}' -f $preview.Error) -ForegroundColor Yellow
+        }
+        $queue.Add([PSCustomObject]@{ Idx = $idx; Entry = $entry; Preview = $preview; AppName = $appName })
+    }
+
+    # Confirmacion unica — DefaultYes=$false (Enter = NO, seguro para PC de cliente)
+    [string[]] $confirmLines = @($queue | ForEach-Object {
+        [string]('{0} ({1}) via {2}' -f $_.AppName, $_.Entry.Type, $_.Preview.MethodLabel)
+    })
+    Write-Host ''
+    if (-not (Confirm-Action -Title ('Desinstalar {0} app(s)?' -f $queue.Count) `
+                             -Lines $confirmLines -DefaultYes $false)) {
+        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'Apps.Uninstall' -Status 'Cancelled' -Summary ('Seleccion={0}' -f $queue.Count)
+        return
+    }
+
+    # Desinstalar app por app
+    Write-Host ''
+    [int] $okCount   = 0
+    [int] $failCount = 0
+    foreach ($item in $queue) {
+        Write-Host ('  Desinstalando: {0}...' -f $item.AppName) -ForegroundColor Cyan -NoNewline
+        if ($item.Entry.Type -eq 'Win32') {
+            $r = Invoke-Win32Uninstall -App $item.Entry.App
+        } else {
+            $r = Invoke-UwpUninstall -App $item.Entry.App
+        }
+        if ($r.Success) {
+            $okCount++
+            Write-Host ' [OK]' -ForegroundColor Green
+            Write-ActionAudit -Action 'Apps.Uninstall' -Status 'Success' `
+                -Summary ('{0} via {1}' -f $item.AppName, $r.Method) -Details $r
+        } else {
+            $failCount++
+            Write-Host (' [!] {0}' -f $r.Error) -ForegroundColor Red
+            Write-ActionAudit -Action 'Apps.Uninstall' -Status 'Failed' `
+                -Summary ('{0} via {1}' -f $item.AppName, $r.Method) -Details $r
+        }
+    }
+
+    # Resumen + audit batch
+    Write-Host ''
+    [string] $summaryColor = if ($failCount -gt 0) { 'Yellow' } else { 'Green' }
+    Write-Host ('  Resultado: {0} OK / {1} fallidas' -f $okCount, $failCount) -ForegroundColor $summaryColor
+    Write-ActionAudit -Action 'Apps.Uninstall.Batch' -Status 'Success' `
+        -Summary ('OK={0} Failed={1}' -f $okCount, $failCount)
 }
 
 function Invoke-ActionPrivacy {
