@@ -58,3 +58,5 @@ hooks/dist/
 # Animation assets
 animation/
 *.gif
+
+_local-dev/
