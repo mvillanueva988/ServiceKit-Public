@@ -342,6 +342,41 @@ Test-SmokeFunction 'JobManager' 'Invoke-JobWithProgress devuelve array sin throw
     if ($arr.Count -lt 1) { throw ('Array vacio; esperado Count>=1; Count={0}' -f $arr.Count) }
 }
 
+# ─── Stage 4.2-B: NvidiaTweaks (read-only, no aplica nada) ──────────────────
+Test-SmokeFunction 'NvidiaTweaks' 'Get-NvidiaSysmemStatus no throw' {
+    Get-NvidiaSysmemStatus
+}
+Test-SmokeFunction 'NvidiaTweaks' 'Get-NvidiaSysmemStatus shape' {
+    $s = Get-NvidiaSysmemStatus
+    foreach ($f in @('IsNvidiaDedicated','Enabled','Reason')) {
+        if ($null -eq $s.PSObject.Properties[$f]) {
+            throw "Campo $f ausente en Get-NvidiaSysmemStatus"
+        }
+    }
+}
+Test-SmokeFunction 'NvidiaTweaks' 'Test-NvidiaInspectorAvailable no throw' {
+    Test-NvidiaInspectorAvailable
+}
+Test-SmokeFunction 'NamedProfileEditor' 'Schema acepta nvidia_sysmem_fallback=prefer_no' {
+    $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $p.gaming_tweaks | Add-Member -NotePropertyName 'nvidia_sysmem_fallback' -NotePropertyValue 'prefer_no' -Force
+    $null = Test-NamedProfileSchema -Profile $p
+}
+Test-SmokeFunction 'NamedProfileEditor' 'Schema acepta sin nvidia_sysmem_fallback' {
+    $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $null = Test-NamedProfileSchema -Profile $p
+}
+Test-SmokeFunction 'NamedProfileEditor' 'Schema rechaza nvidia_sysmem_fallback invalido' {
+    $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $p.gaming_tweaks | Add-Member -NotePropertyName 'nvidia_sysmem_fallback' -NotePropertyValue 'maybe' -Force
+    $threw = $false
+    try { $null = Test-NamedProfileSchema -Profile $p } catch { $threw = $true }
+    if (-not $threw) { throw 'Test-NamedProfileSchema debio rechazar nvidia_sysmem_fallback=maybe' }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

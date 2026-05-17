@@ -81,6 +81,10 @@ function Test-NamedProfileSchema {
     if ($null -ne $trP -and ([string]$trP.Value) -notin $onOff) {
         throw "gaming_tweaks.timer_resolution debe ser 'on' o 'off'. Valor: '$($trP.Value)'."
     }
+    [object] $nsfP = $gt.PSObject.Properties['nvidia_sysmem_fallback']
+    if ($null -ne $nsfP -and ([string]$nsfP.Value) -notin @('prefer_no','default')) {
+        throw "gaming_tweaks.nvidia_sysmem_fallback invalido: '$($nsfP.Value)'. Validos: prefer_no, default."
+    }
     [object] $ppP = $gt.PSObject.Properties['process_priority']
     if ($null -ne $ppP -and $null -ne $ppP.Value) {
         [string[]] $validPriority = @('High', 'AboveNormal')
@@ -395,6 +399,11 @@ function New-NamedProfileInteractive {
         }
         if ($ppHasEntries) { Add-Tweak 'process_priority' $ppObj }
     }
+
+    # nvidia_sysmem_fallback (gateado por GPU NVIDIA dedicada + inspector en tools\bin)
+    Write-Host ''
+    [string] $nsf = (Read-Host '  NVIDIA Sysmem Fallback [prefer_no/default] o Enter=no tocar').Trim().ToLowerInvariant()
+    if ($nsf -in @('prefer_no', 'default')) { Add-Tweak 'nvidia_sysmem_fallback' $nsf }
 
     # Core auto-shaped (gaming-ready, neutro y seguro; el operador lo edita a mano si quiere)
     [string] $tier = if ($MachineProfile.PSObject.Properties['Tier']) { ([string]$MachineProfile.Tier).ToLowerInvariant() } else { 'high' }

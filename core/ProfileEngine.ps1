@@ -650,7 +650,7 @@ function Invoke-ProfileGamingTweaksStep {
     [PSCustomObject] $res = [PSCustomObject]@{
         Hvci = $null; Hags = $null; UsbSuspend = $null; GameMode = $null
         Wslconfig = $null; DefenderExcl = $null; OosuProfile = $null
-        TimerRes = $null; ProcessPriority = $null
+        TimerRes = $null; ProcessPriority = $null; NvidiaSysmem = $null
         RebootNeeded = $false; Success = $true
     }
     [object] $gtP = $Profile.PSObject.Properties['gaming_tweaks']
@@ -699,9 +699,20 @@ function Invoke-ProfileGamingTweaksStep {
         }
     }
 
+    $res.NvidiaSysmem = Invoke-Toggle 'nvidia_sysmem_fallback' {
+        param($v); Set-NvidiaSysmemFallback -State $v }
+    if ($null -ne $res.NvidiaSysmem -and -not $res.NvidiaSysmem.Skipped) {
+        [object] $nsfD = $res.NvidiaSysmem.Detail
+        if ($null -ne $nsfD -and
+            $null -ne $nsfD.PSObject.Properties['RestartRequired'] -and
+            [bool]$nsfD.RestartRequired) {
+            $res.RebootNeeded = $true
+        }
+    }
+
     # Agregacion de Success: un toggle ejecutado (no skipped) que no aplico
     # marca el step como no-exitoso (-> Status Partial en Invoke-NamedProfile).
-    foreach ($t in @($res.Hvci, $res.Hags, $res.UsbSuspend, $res.GameMode, $res.TimerRes)) {
+    foreach ($t in @($res.Hvci, $res.Hags, $res.UsbSuspend, $res.GameMode, $res.TimerRes, $res.NvidiaSysmem)) {
         if ($null -ne $t -and -not $t.Skipped -and -not $t.Applied) { $res.Success = $false }
     }
 
