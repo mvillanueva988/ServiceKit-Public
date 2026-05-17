@@ -80,6 +80,16 @@ function Get-ResearchPromptTemplates {
     })
 }
 
+# ─── Internal helper: safe PSObject property accessor ─────────────────────────
+# Devuelve $p.Value si la propiedad existe en $Obj; $Default si no (o si $Obj es $null).
+function _Rp_Prop {
+    param([object] $Obj, [string] $Name, [object] $Default = 'N/A')
+    if ($null -eq $Obj) { return $Default }
+    $p = $Obj.PSObject.Properties[$Name]
+    if ($null -ne $p) { return $p.Value }
+    return $Default
+}
+
 # ─── New-ResearchPrompt ───────────────────────────────────────────────────────
 function New-ResearchPrompt {
     <#
@@ -144,8 +154,14 @@ function New-ResearchPrompt {
     if ($null -eq $Snapshot)       { $Snapshot       = Get-SystemSnapshot -Phase Pre }
 
     # Privacy: scrub por default en OS no-Home; bypass via -IncludeIdentifiers.
-    [bool] $scrub = (-not $IncludeIdentifiers) -and (-not $MachineProfile.IsHome)
-    [string] $computerLabel = if ($scrub) { '[scrubbed]' } else { $Snapshot.ComputerName }
+    [bool] $isHome = $false
+    if ($MachineProfile.PSObject.Properties['IsHome'] -and $null -ne $MachineProfile.IsHome) {
+        $isHome = [bool] $MachineProfile.IsHome
+    }
+    [bool] $scrub = (-not $IncludeIdentifiers) -and (-not $isHome)
+    [string] $computerLabel = if ($scrub) { '[scrubbed]' } else {
+        [string] (_Rp_Prop $Snapshot 'ComputerName' '[unknown]')
+    }
 
     # Resolver template
     $tplData = $script:PromptTemplates[$Template]
@@ -156,69 +172,164 @@ function New-ResearchPrompt {
     $L.Add('# Contexto del equipo')
     $L.Add('')
     $L.Add('## Hardware')
-    $L.Add(('- **CPU**: {0}' -f $Snapshot.CPU.Name))
-    $L.Add(('  - Class: {0}, Cores/Threads: {1}/{2}' -f $MachineProfile.CpuClass, $Snapshot.CPU.Cores, $Snapshot.CPU.Threads))
-    $L.Add(('- **RAM**: {0:N1} GB en {1} slots @ {2} MHz' -f $Snapshot.RamTotalGb, $Snapshot.RamSlots.Count, ($Snapshot.RamSlots[0].SpeedMhz)))
-    foreach ($g in $Snapshot.GPU) {
-        [string] $vramTag = ''
-        if ($g.Type -eq 'Dedicated' -and $MachineProfile.DGpuVramMb -gt 0) {
-            $vramTag = (' — {0} GB VRAM estimada' -f [math]::Round($MachineProfile.DGpuVramMb / 1024, 1))
+
+    # CPU — guardar el sub-objeto antes de acceder propiedades anidadas
+    $cpuObjProp = $Snapshot.PSObject.Properties['CPU']
+    $cpuObj = if ($null -ne $cpuObjProp) { $cpuObjProp.Value } else { $null }
+    [string] $cpuName    = [string] (_Rp_Prop $cpuObj 'Name'    'N/A')
+    [string] $cpuCores   = [string] (_Rp_Prop $cpuObj 'Cores'   '?')
+    [string] $cpuThreads = [string] (_Rp_Prop $cpuObj 'Threads' '?')
+    [string] $cpuClass   = if ($MachineProfile.PSObject.Properties['CpuClass']) { [string] $MachineProfile.CpuClass } else { 'N/A' }
+    $L.Add(('- **CPU**: {0}' -f $cpuName))
+    $L.Add(('  - Class: {0}, Cores/Threads: {1}/{2}' -f $cpuClass, $cpuCores, $cpuThreads))
+
+    # RAM
+    [string] $ramTotal = if ($Snapshot.PSObject.Properties['RamTotalGb'] -and $null -ne $Snapshot.RamTotalGb) {
+        ('{0:N1}' -f [double] $Snapshot.RamTotalGb)
+    } else { 'N/A' }
+    $slotsProp = $Snapshot.PSObject.Properties['RamSlots']
+    $slotsArr  = if ($null -ne $slotsProp -and $null -ne $slotsProp.Value) { @($slotsProp.Value) } else { $null }
+    [string] $slotsCount = if ($null -ne $slotsArr) { [string] $slotsArr.Count } else { '?' }
+    [string] $speedMhz   = '?'
+    if ($null -ne $slotsArr -and $slotsArr.Count -gt 0) {
+        $sp = $slotsArr[0].PSObject.Properties['SpeedMhz']
+        if ($null -ne $sp) { $speedMhz = [string] $sp.Value }
+    }
+    $L.Add(('- **RAM**: {0} GB en {1} slots @ {2} MHz' -f $ramTotal, $slotsCount, $speedMhz))
+
+    # GPU
+    $gpusProp = $Snapshot.PSObject.Properties['GPU']
+    if ($null -ne $gpusProp -and $null -ne $gpusProp.Value -and @($gpusProp.Value).Count -gt 0) {
+        foreach ($g in @($gpusProp.Value)) {
+            [string] $gType   = [string] (_Rp_Prop $g 'Type'          '')
+            [string] $gName   = [string] (_Rp_Prop $g 'Name'          'N/A')
+            [string] $gDriver = [string] (_Rp_Prop $g 'DriverVersion' '?')
+            [string] $vramTag = ''
+            if ($gType -eq 'Dedicated' -and
+                $MachineProfile.PSObject.Properties['DGpuVramMb'] -and
+                $null -ne $MachineProfile.DGpuVramMb -and
+                $MachineProfile.DGpuVramMb -gt 0) {
+                $vramTag = (' — {0} GB VRAM estimada' -f [math]::Round($MachineProfile.DGpuVramMb / 1024, 1))
+            }
+            $L.Add(('- **GPU**: {0} [{1}{2}] driver {3}' -f $gName, $gType, $vramTag, $gDriver))
         }
-        $L.Add(('- **GPU**: {0} [{1}{2}] driver {3}' -f $g.Name, $g.Type, $vramTag, $g.DriverVersion))
     }
-    foreach ($d in $Snapshot.Disks) {
-        [string] $health = if ($null -ne $d.HealthStatus) { $d.HealthStatus } else { '?' }
-        $L.Add(('- **Disco**: {0} {1:N1} GB [{2}] health={3}' -f $d.Name, $d.SizeGb, $d.MediaType, $health))
+
+    # Disks
+    $disksProp = $Snapshot.PSObject.Properties['Disks']
+    if ($null -ne $disksProp -and $null -ne $disksProp.Value -and @($disksProp.Value).Count -gt 0) {
+        foreach ($d in @($disksProp.Value)) {
+            [string] $dName   = [string] (_Rp_Prop $d 'Name'      'N/A')
+            [double] $dSize   = if ($d.PSObject.Properties['SizeGb'] -and $null -ne $d.SizeGb) { [double] $d.SizeGb } else { 0 }
+            [string] $dMedia  = [string] (_Rp_Prop $d 'MediaType' '?')
+            [string] $dHealth = if ($d.PSObject.Properties['HealthStatus'] -and $null -ne $d.HealthStatus) { [string] $d.HealthStatus } else { '?' }
+            $L.Add(('- **Disco**: {0} {1:N1} GB [{2}] health={3}' -f $dName, $dSize, $dMedia, $dHealth))
+        }
     }
-    $L.Add(('- **OEM**: {0}' -f $MachineProfile.Manufacturer))
-    $L.Add(('- **Tier resuelto**: {0}' -f $MachineProfile.Tier))
-    $L.Add(('- **Form factor**: {0}' -f $(if ($MachineProfile.IsLaptop) { 'Laptop' } else { 'Desktop' })))
+
+    # OEM / Tier / Form factor
+    [string] $manufacturer = if ($MachineProfile.PSObject.Properties['Manufacturer'] -and
+                                  -not [string]::IsNullOrWhiteSpace([string] $MachineProfile.Manufacturer)) {
+        [string] $MachineProfile.Manufacturer
+    } else { 'Unknown' }
+    [string] $tier     = if ($MachineProfile.PSObject.Properties['Tier'])     { [string] $MachineProfile.Tier }     else { 'N/A' }
+    [bool]   $isLaptop = if ($MachineProfile.PSObject.Properties['IsLaptop'] -and $null -ne $MachineProfile.IsLaptop) { [bool] $MachineProfile.IsLaptop } else { $false }
+    $L.Add(('- **OEM**: {0}' -f $manufacturer))
+    $L.Add(('- **Tier resuelto**: {0}' -f $tier))
+    $L.Add(('- **Form factor**: {0}' -f $(if ($isLaptop) { 'Laptop' } else { 'Desktop' })))
     $L.Add('')
 
     $L.Add('## Sistema operativo')
-    [string] $osName = if ($MachineProfile.IsWin11) { 'Windows 11' } else { 'Windows 10' }
-    if ($MachineProfile.IsHome) { $osName = "$osName Home" } else { $osName = "$osName Pro/Enterprise" }
-    $L.Add(('- {0} build {1}' -f $osName, $MachineProfile.Build))
-    if ($null -ne $Snapshot.DeviceGuard) {
-        $L.Add(('- VBS running: {0}  |  HVCI running: {1}' -f $Snapshot.DeviceGuard.VbsRunning, $Snapshot.DeviceGuard.HvciRunning))
+    [bool] $isWin11 = if ($MachineProfile.PSObject.Properties['IsWin11'] -and $null -ne $MachineProfile.IsWin11) { [bool] $MachineProfile.IsWin11 } else { $false }
+    [string] $osName = if ($isWin11) { 'Windows 11' } else { 'Windows 10' }
+    if ($isHome) { $osName = "$osName Home" } else { $osName = "$osName Pro/Enterprise" }
+    [string] $build = if ($MachineProfile.PSObject.Properties['Build'] -and $null -ne $MachineProfile.Build) { [string] $MachineProfile.Build } else { 'N/A' }
+    $L.Add(('- {0} build {1}' -f $osName, $build))
+
+    # DeviceGuard — la prop puede no existir; el null-check de la prop misma ya tira bajo StrictMode
+    $dgProp = $Snapshot.PSObject.Properties['DeviceGuard']
+    if ($null -ne $dgProp -and $null -ne $dgProp.Value) {
+        $dg = $dgProp.Value
+        $L.Add(('- VBS running: {0}  |  HVCI running: {1}' -f ([string] (_Rp_Prop $dg 'VbsRunning' '?')), ([string] (_Rp_Prop $dg 'HvciRunning' '?'))))
     }
-    if ($null -ne $Snapshot.PowerPlan -and -not [string]::IsNullOrWhiteSpace($Snapshot.PowerPlan.ActiveName)) {
-        $L.Add(('- Power plan activo: {0}' -f $Snapshot.PowerPlan.ActiveName))
+
+    # PowerPlan — mismo patrón
+    $ppProp = $Snapshot.PSObject.Properties['PowerPlan']
+    if ($null -ne $ppProp -and $null -ne $ppProp.Value) {
+        $pp = $ppProp.Value
+        $anProp = $pp.PSObject.Properties['ActiveName']
+        if ($null -ne $anProp -and -not [string]::IsNullOrWhiteSpace([string] $anProp.Value)) {
+            $L.Add(('- Power plan activo: {0}' -f [string] $anProp.Value))
+        }
     }
     $L.Add('')
 
     $L.Add('## Estado actual relevante')
-    $L.Add(('- Servicios en ejecución: {0}' -f $Snapshot.Services.RunningCount))
-    if ($Snapshot.Services.BloatRunning.Count -gt 0) {
-        $L.Add(('- Servicios bloat corriendo: {0}' -f ($Snapshot.Services.BloatRunning -join ', ')))
-    }
-    $L.Add(('- Entradas de inicio: {0}' -f $Snapshot.StartupCount))
-    $L.Add(('- Uptime: {0:N1} horas' -f $Snapshot.UptimeHours))
-    if ($null -ne $Snapshot.CpuTempC) { $L.Add(('- Temperatura CPU: {0} C' -f $Snapshot.CpuTempC)) }
 
-    foreach ($av in $Snapshot.Antivirus) {
-        [string] $tag = if ($av.IsNative) { 'native' } else { '3rd-party' }
-        [string] $mode = if (-not [string]::IsNullOrEmpty($av.AMRunningMode)) { (' [' + $av.AMRunningMode + ']') } else { '' }
-        $L.Add(('- AV: {0} [{1}]  active={2}{3}' -f $av.Name, $tag, $av.IsActive, $mode))
+    # Services
+    $svcProp = $Snapshot.PSObject.Properties['Services']
+    if ($null -ne $svcProp -and $null -ne $svcProp.Value) {
+        $svc = $svcProp.Value
+        [string] $runCount = if ($svc.PSObject.Properties['RunningCount'] -and $null -ne $svc.RunningCount) { [string] $svc.RunningCount } else { 'N/A' }
+        $L.Add(('- Servicios en ejecución: {0}' -f $runCount))
+        $bloatProp = $svc.PSObject.Properties['BloatRunning']
+        if ($null -ne $bloatProp -and $null -ne $bloatProp.Value -and @($bloatProp.Value).Count -gt 0) {
+            $L.Add(('- Servicios bloat corriendo: {0}' -f (@($bloatProp.Value) -join ', ')))
+        }
+    } else {
+        $L.Add('- Servicios en ejecución: N/A')
+    }
+
+    [string] $startupStr = if ($Snapshot.PSObject.Properties['StartupCount'] -and $null -ne $Snapshot.StartupCount) { [string] $Snapshot.StartupCount } else { 'N/A' }
+    [string] $uptimeStr  = if ($Snapshot.PSObject.Properties['UptimeHours']  -and $null -ne $Snapshot.UptimeHours)  { ('{0:N1}' -f [double] $Snapshot.UptimeHours) } else { 'N/A' }
+    $L.Add(('- Entradas de inicio: {0}' -f $startupStr))
+    $L.Add(('- Uptime: {0} horas' -f $uptimeStr))
+
+    # CpuTempC — acceso directo tira bajo StrictMode si la prop no existe
+    $tempProp = $Snapshot.PSObject.Properties['CpuTempC']
+    if ($null -ne $tempProp -and $null -ne $tempProp.Value) { $L.Add(('- Temperatura CPU: {0} C' -f $tempProp.Value)) }
+
+    # Antivirus
+    $avProp = $Snapshot.PSObject.Properties['Antivirus']
+    if ($null -ne $avProp -and $null -ne $avProp.Value) {
+        foreach ($av in @($avProp.Value)) {
+            [bool]   $avNative  = if ($av.PSObject.Properties['IsNative'] -and $null -ne $av.IsNative) { [bool] $av.IsNative } else { $false }
+            [string] $tag       = if ($avNative) { 'native' } else { '3rd-party' }
+            [string] $avModeVal = [string] (_Rp_Prop $av 'AMRunningMode' '')
+            [string] $avMode    = if (-not [string]::IsNullOrEmpty($avModeVal)) { (' [' + $avModeVal + ']') } else { '' }
+            [string] $avName    = [string] (_Rp_Prop $av 'Name'     'N/A')
+            [string] $avActive  = [string] (_Rp_Prop $av 'IsActive' '?')
+            $L.Add(('- AV: {0} [{1}]  active={2}{3}' -f $avName, $tag, $avActive, $avMode))
+        }
     }
 
     # BSOD history NO se incluye automáticamente (es un dataset separado del snapshot).
     # El LLM puede pedir contexto adicional si la pregunta lo requiere.
     $L.Add('')
 
-    if ($null -ne $Snapshot.Steam -and $Snapshot.Steam.Installed -and $Snapshot.Steam.Cs2Installed) {
-        $L.Add('## Steam / CS2')
-        $L.Add(('- CS2 instalado en: {0}' -f $Snapshot.Steam.Cs2Path))
-        if (-not [string]::IsNullOrWhiteSpace($Snapshot.Steam.Cs2LaunchOptions)) {
-            $L.Add(('- Launch options: `{0}`' -f $Snapshot.Steam.Cs2LaunchOptions))
+    # Steam / CS2
+    $steamProp = $Snapshot.PSObject.Properties['Steam']
+    if ($null -ne $steamProp -and $null -ne $steamProp.Value) {
+        $steam       = $steamProp.Value
+        $stInstProp  = $steam.PSObject.Properties['Installed']
+        $cs2InstProp = $steam.PSObject.Properties['Cs2Installed']
+        if ($null -ne $stInstProp  -and [bool] $stInstProp.Value -and
+            $null -ne $cs2InstProp -and [bool] $cs2InstProp.Value) {
+            $L.Add('## Steam / CS2')
+            $L.Add(('- CS2 instalado en: {0}' -f [string] (_Rp_Prop $steam 'Cs2Path' 'N/A')))
+            $cs2LocProp = $steam.PSObject.Properties['Cs2LaunchOptions']
+            if ($null -ne $cs2LocProp -and -not [string]::IsNullOrWhiteSpace([string] $cs2LocProp.Value)) {
+                $L.Add(('- Launch options: `{0}`' -f [string] $cs2LocProp.Value))
+            }
+            $autoExecProp = $steam.PSObject.Properties['AutoexecLines']
+            if ($null -ne $autoExecProp -and $null -ne $autoExecProp.Value -and @($autoExecProp.Value).Count -gt 0) {
+                $L.Add('- autoexec.cfg:')
+                $L.Add('  ```')
+                foreach ($a in @($autoExecProp.Value)) { $L.Add(('  ' + $a)) }
+                $L.Add('  ```')
+            }
+            $L.Add('')
         }
-        if ($Snapshot.Steam.AutoexecLines.Count -gt 0) {
-            $L.Add('- autoexec.cfg:')
-            $L.Add('  ```')
-            foreach ($a in $Snapshot.Steam.AutoexecLines) { $L.Add(('  ' + $a)) }
-            $L.Add('  ```')
-        }
-        $L.Add('')
     }
 
     if (-not [string]::IsNullOrWhiteSpace($UseCase)) {

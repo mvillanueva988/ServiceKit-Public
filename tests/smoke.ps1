@@ -460,6 +460,17 @@ Test-SmokeFunction 'RouterInteractive' 'Invoke-ResearchPrompt cancel no crashea'
     Invoke-ResearchPrompt -MachineProfile (Get-MachineProfile) | Out-Null
 }
 
+# ─── ResearchPrompt: snapshot sparse (regresion proactiva Bug3) ───────────────
+# Con el bug original: StrictMode tira "property cannot be found" en el primer
+# acceso crudo (ej. $Snapshot.RamSlots[0]). Con el fix: no lanza y Success=$true.
+Test-SmokeFunction 'ResearchPrompt' 'New-ResearchPrompt sobrevive snapshot sparse' {
+    $snap = [PSCustomObject]@{ CPU = [PSCustomObject]@{ Name = 'x' } }
+    $mp   = [PSCustomObject]@{ }
+    $r = New-ResearchPrompt -Template Optimization -Snapshot $snap -MachineProfile $mp
+    if ($null -eq $r)    { throw 'New-ResearchPrompt retorno $null' }
+    if (-not $r.Success) { throw ('Success=$false; esperado $true') }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

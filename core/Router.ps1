@@ -331,7 +331,7 @@ function Invoke-ResearchPrompt {
 
     [string] $useCase = (Read-Host '  Use-case del cliente (opcional, Enter para skip)').Trim()
     [bool] $includeId = $false
-    if (-not $MachineProfile.IsHome) {
+    if ($MachineProfile.PSObject.Properties['IsHome'] -and -not [bool] $MachineProfile.IsHome) {
         Write-Host '  Privacy: identificadores se scrubean por default (OS no-Home).' -ForegroundColor DarkGray
         [string] $ans = (Read-Host '  Incluir identificadores reales? [s/N]').Trim().ToUpperInvariant()
         $includeId = ($ans -eq 'S')
