@@ -256,6 +256,39 @@ function Get-NamedProfilePreviewLines {
     return $lines.ToArray()
 }
 
+# ─── Get-SteamLibraryPaths (privada, read-only, no-throw) ────────────────────
+function Get-SteamLibraryPaths {
+    <#
+    .SYNOPSIS
+        Lee las rutas de librerias Steam desde el registro y libraryfolders.vdf.
+        Read-only, no-throw, StrictMode-safe. Devuelve array vacio si no hay Steam.
+        D-S42c: autodeteccion para sugerir defender_exclusions en el builder.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param()
+    try {
+        [object] $reg = Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' `
+            -Name 'SteamPath' -ErrorAction SilentlyContinue
+        if ($null -eq $reg) { return @() }
+        [object] $spP = $reg.PSObject.Properties['SteamPath']
+        if ($null -eq $spP -or [string]::IsNullOrWhiteSpace([string]$spP.Value)) { return @() }
+        [string] $steamRoot = [string]$spP.Value
+        [string] $vdfPath = Join-Path (Join-Path $steamRoot 'steamapps') 'libraryfolders.vdf'
+        if (-not (Test-Path -LiteralPath $vdfPath -ErrorAction SilentlyContinue)) { return @() }
+        [string] $vdf = Get-Content -LiteralPath $vdfPath -Raw -ErrorAction SilentlyContinue
+        if ([string]::IsNullOrWhiteSpace($vdf)) { return @() }
+        [System.Collections.Generic.List[string]] $found = [System.Collections.Generic.List[string]]::new()
+        foreach ($m in [regex]::Matches($vdf, '"path"\s+"([^"]+)"')) {
+            [string] $p = $m.Groups[1].Value -replace '\\\\', '\'
+            if (-not [string]::IsNullOrWhiteSpace($p)) { $found.Add($p) }
+        }
+        return $found.ToArray()
+    } catch {
+        return @()
+    }
+}
+
 # ─── New-NamedProfileInteractive ──────────────────────────────────────────────
 function New-NamedProfileInteractive {
     <#
@@ -308,13 +341,30 @@ function New-NamedProfileInteractive {
         Add-Tweak 'wslconfig' ([PSCustomObject]@{ enabled = $true; preset = $w })
     }
 
-    # Defender exclusions
+    # Defender exclusions -- sugerencias Steam opt-in (D-S42c)
     Write-Host ''
-    [string] $de = (Read-Host '  Defender exclusions (paths separados por ; o Enter=ninguno)').Trim()
-    if (-not [string]::IsNullOrWhiteSpace($de)) {
-        [string[]] $paths = @($de -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        if ($paths.Count -gt 0) { Add-Tweak 'defender_exclusions' $paths }
+    [string[]] $steamSugg = @(Get-SteamLibraryPaths)
+    [System.Collections.Generic.List[string]] $dePaths = [System.Collections.Generic.List[string]]::new()
+    if ($steamSugg.Count -gt 0) {
+        Write-Host '  Sugerencias Steam detectadas:' -ForegroundColor DarkYellow
+        for ([int] $si = 0; $si -lt $steamSugg.Count; $si++) {
+            Write-Host ("    [{0}] {1}" -f ($si + 1), $steamSugg[$si]) -ForegroundColor DarkYellow
+        }
+        [string] $numIn = (Read-Host '  Numeros a incluir (ej. 1 3) o Enter=ninguno').Trim()
+        foreach ($tok in @($numIn -split '\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            [int] $idx = 0
+            if ([int]::TryParse($tok, [ref] $idx) -and $idx -ge 1 -and $idx -le $steamSugg.Count) {
+                $dePaths.Add($steamSugg[$idx - 1])
+            }
+        }
     }
+    [string] $deExtra = (Read-Host '  Paths adicionales de exclusion (sep. ;) o Enter=ninguno').Trim()
+    if (-not [string]::IsNullOrWhiteSpace($deExtra)) {
+        foreach ($ep in @($deExtra -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            $dePaths.Add($ep)
+        }
+    }
+    if ($dePaths.Count -gt 0) { Add-Tweak 'defender_exclusions' $dePaths.ToArray() }
 
     # OOSU profile
     Write-Host ''

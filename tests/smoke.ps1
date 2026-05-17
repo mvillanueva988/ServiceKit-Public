@@ -315,6 +315,12 @@ Test-SmokeFunction 'NamedProfileEditor' 'Schema rechaza process_priority clase i
     if (-not $threw) { throw 'Test-NamedProfileSchema debio rechazar process_priority clase=Realtime' }
 }
 
+# ─── Stage 4.2-C: Steam-autodetect read-only ────────────────────────────────
+Test-SmokeFunction 'NamedProfileEditor' 'Get-SteamLibraryPaths no-throw devuelve array' {
+    [string[]] $r = @(Get-SteamLibraryPaths)
+    if ($null -eq $r) { throw 'Get-SteamLibraryPaths retorno $null (esperado array, posiblemente vacio)' }
+}
+
 # ─── Progress UX: Wait-ToolkitJobs sin -ShowProgress (R3 opt-IN) ─────────────
 # Verifica que Wait-ToolkitJobs SIN -ShowProgress sobre un job trivial devuelve
 # array y no throw. No valida la UX visual (eso es Sandbox/Opus).
