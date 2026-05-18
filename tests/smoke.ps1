@@ -403,6 +403,20 @@ Test-SmokeFunction 'NvidiaTweaks' 'Get-NvidiaSysmemStatus shape' {
 Test-SmokeFunction 'NvidiaTweaks' 'Test-NvidiaInspectorAvailable no throw' {
     Test-NvidiaInspectorAvailable
 }
+Test-SmokeFunction 'NvidiaTweaks' 'New-NvidiaSysmemNip formato real' {
+    [string] $pn = New-NvidiaSysmemNip -State prefer_no
+    [string] $df = New-NvidiaSysmemNip -State default
+    foreach ($xml in @($pn, $df)) {
+        if ($xml -notmatch '<ArrayOfProfile>')                                              { throw 'Falta <ArrayOfProfile>' }
+        if ($xml -notmatch '<SettingID>283962569</SettingID>')                              { throw 'Falta SettingID 283962569' }
+        if ($xml -notmatch '<SettingNameInfo>CUDA Sysmem Fallback Policy</SettingNameInfo>'){ throw 'Falta SettingNameInfo CUDA Sysmem Fallback Policy' }
+        if ($xml -notmatch '<ValueType>Dword</ValueType>')                                  { throw 'Falta ValueType Dword' }
+        if ($xml -match 'NvidiaInspectorProfile')                                           { throw 'Contiene schema incorrecto NvidiaInspectorProfile' }
+        if ($xml -match '0x00A06871')                                                       { throw 'Contiene ID incorrecto 0x00A06871' }
+    }
+    if ($pn -notmatch '<SettingValue>1</SettingValue>') { throw 'prefer_no debe tener SettingValue=1' }
+    if ($df -notmatch '<SettingValue>0</SettingValue>') { throw 'default debe tener SettingValue=0' }
+}
 Test-SmokeFunction 'NamedProfileEditor' 'Schema acepta nvidia_sysmem_fallback=prefer_no' {
     $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
     $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json

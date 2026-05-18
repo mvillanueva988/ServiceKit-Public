@@ -5,11 +5,49 @@
 # NO proceso residente (cost-zero).
 # Validacion funcional PENDIENTE de PC NVIDIA real (D-S42b stage4.2-plan.md).
 #
-# Apply path invoca nvidiaProfileInspector.exe con un perfil NIP temporal.
-# Setting ID 0x00A06871 (Sysmem Fallback Policy): VERIFICAR en PC NVIDIA real.
+# Apply path invoca nvidiaProfileInspector.exe con un perfil NIP temporal (ArrayOfProfile).
+# Setting ID 283962569 (CUDA Sysmem Fallback Policy), schema verificado en RTX 3050 Ti.
 # El gate garantiza que el apply path no corre sin inspector instalado + GPU NVIDIA.
 
 [string] $script:NvInspBin = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\bin') 'nvidiaProfileInspector'
+
+# ─── New-NvidiaSysmemNip ─────────────────────────────────────────────────────
+function New-NvidiaSysmemNip {
+    <#
+    .SYNOPSIS
+        Genera el XML NIP real para nvidiaProfileInspector (Orbmu2k 2.4.0.31).
+        Funcion PURA: devuelve [string], no escribe, no ejecuta, no spawnea.
+        Schema verificado contra export real RTX 3050 Ti, driver 596.36.
+    .PARAMETER State
+        'prefer_no' -> SettingValue=1  (CUDA Sysmem Fallback Policy: no preferido)
+        'default'   -> SettingValue=0  (comportamiento por defecto del driver)
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('prefer_no','default')]
+        [string] $State
+    )
+    [string] $val = if ($State -eq 'prefer_no') { '1' } else { '0' }
+    return @"
+<?xml version="1.0" encoding="utf-16"?>
+<ArrayOfProfile>
+  <Profile>
+    <ProfileName>Base Profile</ProfileName>
+    <Executeables />
+    <Settings>
+      <ProfileSetting>
+        <SettingNameInfo>CUDA Sysmem Fallback Policy</SettingNameInfo>
+        <SettingID>283962569</SettingID>
+        <SettingValue>$val</SettingValue>
+        <ValueType>Dword</ValueType>
+      </ProfileSetting>
+    </Settings>
+  </Profile>
+</ArrayOfProfile>
+"@
+}
 
 # ─── Test-NvidiaInspectorAvailable ───────────────────────────────────────────
 function Test-NvidiaInspectorAvailable {
@@ -83,8 +121,8 @@ function Set-NvidiaSysmemFallback {
         'prefer_no' -> Sysmem Fallback Policy = no preferido (0x00000001)
         'default'   -> Sysmem Fallback Policy = defecto (0x00000000)
     .NOTES
-        VALIDACION PENDIENTE de PC NVIDIA real (D-S42b).
-        Setting ID 0x00A06871 debe verificarse con nvidiaProfileInspector en PC real.
+        Setting ID 283962569 (CUDA Sysmem Fallback Policy), verificado en RTX 3050 Ti driver 596.36.
+        Apply-test real (arg CLI de nvidiaProfileInspector) pendiente — D3 §6.3.
     #>
     [CmdletBinding()]
     param(
@@ -123,23 +161,15 @@ function Set-NvidiaSysmemFallback {
     [System.Collections.Generic.List[string]] $errors  =
         [System.Collections.Generic.List[string]]::new()
 
-    # Sysmem Fallback Policy values (ID 0x00A06871 -- verificar en PC real):
-    #   prefer_no -> 0x00000001  (preferir no usar memoria de sistema)
-    #   default   -> 0x00000000  (comportamiento por defecto del driver)
     [string] $nipPath = ''
     try {
         [string] $inspPath = Join-Path $script:NvInspBin 'nvidiaProfileInspector.exe'
-        [string] $nipVal   = if ($State -eq 'prefer_no') { '0x00000001' } else { '0x00000000' }
-        [string] $nipXml   = ('<?xml version="1.0" encoding="utf-16"?>' +
-            '<NvidiaInspectorProfile version="2.0.0.1">' +
-            '<Profile name="Base Profile" ProfileType="1">' +
-            '<Setting name="Sysmem Fallback Policy" id="0x00A06871" value="{0}" />' +
-            '</Profile></NvidiaInspectorProfile>') -f $nipVal
+        [string] $nipXml   = New-NvidiaSysmemNip -State $State
 
         $nipPath = [System.IO.Path]::ChangeExtension(
             [System.IO.Path]::GetTempFileName(), '.nip')
         [System.IO.File]::WriteAllText(
-            $nipPath, $nipXml, [System.Text.Encoding]::Unicode)
+            $nipPath, $nipXml, [System.Text.UnicodeEncoding]::new($false, $true))
 
         [object] $proc = Start-Process `
             -FilePath     $inspPath `
@@ -150,7 +180,7 @@ function Set-NvidiaSysmemFallback {
         if ($exitCode -ne 0) {
             $errors.Add(("nvidiaProfileInspector exited with code {0}" -f $exitCode))
         } else {
-            $applied.Add(("NvidiaSysmemFallback={0} (id=0x00A06871, val={1})" -f $State, $nipVal))
+            $applied.Add(("NvidiaSysmemFallback={0} (id=283962569, format=ArrayOfProfile)" -f $State))
         }
     } catch {
         $errors.Add("Set-NvidiaSysmemFallback: $($_.Exception.Message)")
