@@ -4,6 +4,26 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-05-18
+
+Patch: bugs hallados probando el v2.0.0 publicado + endurecimiento.
+
+### Fixed
+
+- **Instalación rota**: el one-liner `irm … | iex` fallaba porque `Launch.ps1` arranca con BOM UTF-8 + `#Requires` (el BOM queda como carácter antes de `#Requires` y PowerShell lo trata como comando). Las instrucciones del README ahora **descargan a archivo y lo ejecutan** (`& $f`), que maneja BOM/`#Requires` correctamente.
+- **`New-NamedProfileInteractive` (`core/NamedProfileEditor.ps1`)**: `Add-Tweak` escribía `$script:gt` (scope nunca seteado) → crash StrictMode al primer toggle; rompía **todo** el builder interactivo de recetas nombradas (`[2] → [1] Nueva`). Además leía un `$gt` local distinto del retornado (receta vacía). Corregido a `$gt` (scope dinámico) + regresión en smoke.
+- **`New-ResearchPrompt` (`modules/ResearchPrompt.ps1`)**: decenas de accesos anidados a `$Snapshot`/`$MachineProfile` sin guarda bajo StrictMode podían crashear el generador de research según el hardware/PC. Blindados con helper `_Rp_Prop` + `PSObject.Properties` (modelo `Show-MachineBanner`); output de campos presentes intacto. + regresión smoke (snapshot sparse).
+- **`.gitattributes`**: los rigs `tests/uninstall-*` se filtraron al ZIP público de v2.0.0 (la lista enumeraba rigs por nombre y no incluía los nuevos). Glob `tests/*-{validate.ps1,sandbox-launcher.ps1,sandbox.wsb,sandbox-test.wsb,harness.ps1}` cubre presente y futuro sin enumerar (no afecta `tests/smoke.ps1`).
+
+### Changed
+
+- **`README.md`**: método de instalación documentado = descargar-a-archivo + ejecutar (no `irm|iex`); one-liner pineado a `v2.0.1`.
+- **`data/oosu10-profiles/README.md`**: set real de `.cfg` que consumen las recetas — `basic.cfg` (generic), `medium.cfg` (office/study), **`multimedia.cfg`** (multimedia); `aggressive.cfg` solo el named. CLI real `OOSU10.exe <cfg> /quiet` (antes documentaba `/ofile=`, incorrecto).
+
+### Added
+
+- **`tests/smoke.ps1` — harness de abort-seguro de handlers interactivos**: Bugs StrictMode (named-builder, research-prompt) shippearon porque ningún test ejercitaba los handlers interactivos del Router. Nuevos tests drivean `Invoke-ActionStartup` / `Invoke-ActionApps` / `Invoke-ResearchPrompt` a su abort-seguro verificado (Read-Host shadow) y asertan no-crash bajo StrictMode.
+
 ## [2.0.0] - 2026-05-17
 
 Rework completo del toolkit. Arquitectura rediseñada de "menú con stubs" a **optimizador por perfiles**: el técnico elige el use-case del cliente (Generic / Office / Study / Multimedia), el toolkit detecta el hardware tier (Low / Mid / High) y aplica una receta pre-fabricada con snapshot PRE/POST automatizado.

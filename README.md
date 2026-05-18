@@ -7,10 +7,10 @@ Toolkit de optimización y diagnóstico para Windows 10/11. Diseñado para uso t
 Abrir PowerShell como administrador y ejecutar:
 
 ```powershell
-$f = "$env:TEMP\PCTk-Launch.ps1"; irm https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.0.0/Launch.ps1 -OutFile $f; & $f
+$f = "$env:TEMP\PCTk-Launch.ps1"; irm https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.0.1/Launch.ps1 -OutFile $f; & $f
 ```
 
-Reemplaza `v2.0.0` por el tag de la última release estable. Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión más reciente y valida su integridad (SHA-256) antes de instalar.
+Reemplaza `v2.0.1` por el tag de la última release estable. Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión más reciente y valida su integridad (SHA-256) antes de instalar.
 
 > Nota: se descarga a un archivo y se ejecuta como script (`& $f`), no `| iex`. Launch.ps1 usa `#Requires` y se guarda con BOM UTF-8 (necesario para el parser PowerShell en locales no-inglés); piparlo a `iex` rompe el parseo. Ejecutarlo como archivo lo maneja correctamente.
 
@@ -20,7 +20,7 @@ Para validar Launch.ps1 antes de ejecutarlo, comparar el SHA-256 contra el valor
 
 ```powershell
 $f = "$env:TEMP\Launch.ps1"
-Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.0.0/Launch.ps1' -OutFile $f
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.0.1/Launch.ps1' -OutFile $f
 (Get-FileHash $f -Algorithm SHA256).Hash
 # Si el hash coincide con el publicado, ejecutar el archivo:
 # & $f
