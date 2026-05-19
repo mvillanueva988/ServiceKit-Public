@@ -4,6 +4,14 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-05-19
+
+Patch: icono de PCTk en la ventana de consola en runtime (branding cosmético; no toca la cadena de confianza ni el one-liner).
+
+### Added
+
+- **Icono de consola en runtime (`utils/ConsoleIcon.ps1`, `assets/pctk.ico`)**: `Set-PctkConsoleIcon` setea el icono de la ventana de PowerShell al arrancar `main.ps1`, vía P/Invoke (`GetConsoleWindow` + `LoadImageW` + `SendMessageW`/`WM_SETICON`, ICON_SMALL+ICON_BIG). Defensivo total: no-op silencioso si no hay consola / falta el `.ico` / falla la API; jamás aborta el toolkit. Sin proceso residente ni timers. NO toca `Launch.ps1` ni el one-liner → SHA-256 de la cadena de confianza intacto. Smoke read-only nuevo (presencia de la función + header ICO; no muta la ventana del runner).
+
 ## [2.1.0] - 2026-05-19
 
 Minor: perfiles O&O ShutUp10++ para la rama de privacidad por receta + dos bugfixes de v2.0.1 hallados probando el release publicado en Windows Sandbox limpia.
