@@ -927,19 +927,35 @@ function Invoke-ActionApps {
     }
 
     Write-Host ''
-    Write-Host ('  Total: {0} Win32 + {1} UWP = {2}. Numeros (coma/espacio) o V para volver:' -f $win32.Count, $uwp.Count, $allApps.Count) -ForegroundColor DarkGray
+    Write-Host ('  Total: {0} Win32 + {1} UWP = {2}. Numeros, lista (3,7), rango (4-8) o V para volver:' -f $win32.Count, $uwp.Count, $allApps.Count) -ForegroundColor DarkGray
     [string] $raw = (Read-Host '  >').Trim()
     if ([string]::IsNullOrWhiteSpace($raw) -or $raw.ToUpperInvariant() -eq 'V') { return }
 
-    # Parse multi-selection
+    # Parse multi-selection: numeros sueltos, lista con coma/espacio, rangos N-M
     [string[]] $tokens = $raw -split '[,\s]+' | Where-Object { $_ -ne '' }
     [System.Collections.Generic.List[int]] $selIdx = [System.Collections.Generic.List[int]]::new()
     foreach ($tok in $tokens) {
         [int] $n = 0
-        if ([int]::TryParse($tok, [ref] $n) -and $n -ge 0 -and $n -lt $allApps.Count) {
-            if (-not $selIdx.Contains($n)) { $selIdx.Add($n) }
+        if ([int]::TryParse($tok, [ref] $n)) {
+            if ($n -ge 0 -and $n -lt $allApps.Count) {
+                if (-not $selIdx.Contains($n)) { $selIdx.Add($n) }
+            } else {
+                Write-Host ('  [!] "{0}" fuera de rango (0-{1}), ignorado.' -f $tok, ($allApps.Count - 1)) -ForegroundColor Yellow
+            }
+        } elseif ($tok -match '^\d+-\d+$') {
+            [string[]] $parts = $tok -split '-'
+            [int] $from = [int] $parts[0]
+            [int] $to   = [int] $parts[1]
+            if ($from -gt $to) { [int] $tmp = $from; $from = $to; $to = $tmp }
+            for ([int] $r = $from; $r -le $to; $r++) {
+                if ($r -ge 0 -and $r -lt $allApps.Count) {
+                    if (-not $selIdx.Contains($r)) { $selIdx.Add($r) }
+                } else {
+                    Write-Host ('  [!] Indice {0} fuera de rango (0-{1}), ignorado.' -f $r, ($allApps.Count - 1)) -ForegroundColor Yellow
+                }
+            }
         } else {
-            Write-Host ('  [!] "{0}" no valido (rango 0-{1}), ignorado.' -f $tok, ($allApps.Count - 1)) -ForegroundColor Yellow
+            Write-Host ('  [!] "{0}" no valido, ignorado.' -f $tok) -ForegroundColor Yellow
         }
     }
     if ($selIdx.Count -eq 0) {
