@@ -1118,39 +1118,69 @@ function Invoke-ActionStartup {
             $listed = $true
         }
         Write-Host ''
-        Write-Host '  Ingresa un indice para alternar, V para volver:' -ForegroundColor DarkGray
+        Write-Host '  Indice/s (ej: 3  o  1,4  o  2-5), V para volver:' -ForegroundColor DarkGray
         [string] $raw = (Read-Host '  >').Trim().ToUpperInvariant()
 
         if ($raw -eq 'V' -or [string]::IsNullOrEmpty($raw)) { break }
 
-        [int] $idx = -1
-        if (-not [int]::TryParse($raw, [ref] $idx) -or $idx -lt 0 -or $idx -ge $entries.Count) {
-            Write-Host ('  [!] Indice invalido. Ingresa un numero entre 0 y {0}.' -f ($entries.Count - 1)) -ForegroundColor Red
+        # Parsear seleccion: individual, lista o rango
+        [int[]] $selRaw = @()
+        foreach ($part in ($raw -split ',')) {
+            [string] $p = $part.Trim()
+            if ($p -match '^(\d+)-(\d+)$') {
+                [int] $from = [int] $Matches[1]
+                [int] $to   = [int] $Matches[2]
+                if ($from -gt $to) { [int] $tmp = $from; $from = $to; $to = $tmp }
+                for ([int] $j = $from; $j -le $to; $j++) { $selRaw += $j }
+            } elseif ($p -match '^\d+$') {
+                $selRaw += [int] $p
+            }
+        }
+        [object[]] $selIdx = @($selRaw | Sort-Object -Unique | Where-Object { $_ -ge 0 -and $_ -lt $entries.Count })
+        if ($selIdx.Count -eq 0) {
+            Write-Host ('  [!] Sin indices validos entre 0 y {0}.' -f ($entries.Count - 1)) -ForegroundColor Red
             continue
         }
 
-        [PSCustomObject] $entry = $entries[$idx]
+        # Separar toggleables de no-toggleables
+        [object[]] $toToggle = @($selIdx | ForEach-Object { $entries[$_] } | Where-Object { $_.CanToggle })
+        [object[]] $skipped  = @($selIdx | ForEach-Object { $entries[$_] } | Where-Object { -not $_.CanToggle })
+        foreach ($sk in $skipped) {
+            Write-Host ('  [skip] {0} ({1}): no se puede modificar.' -f $sk.Name, $sk.Location) -ForegroundColor DarkGray
+        }
+        if ($toToggle.Count -eq 0) { continue }
 
-        if (-not $entry.CanToggle) {
-            Write-Host '  Las entradas RunOnce no se pueden modificar.' -ForegroundColor DarkGray
-            continue
+        # Confirmar si alguna entrada va a deshabilitarse
+        [object[]] $willDisable = @($toToggle | Where-Object { $_.Enabled })
+        if ($willDisable.Count -gt 0) {
+            [string[]] $confirmLines = @($toToggle | ForEach-Object {
+                [string] $dir = if ($_.Enabled) { 'ON -> OFF' } else { 'OFF -> ON' }
+                ('{0}  [{1}]  {2}' -f $dir, $_.Location, $_.Name)
+            })
+            if (-not (Confirm-Action -Title ('Alternar {0} entrada(s) de inicio?' -f $toToggle.Count) `
+                                     -Lines $confirmLines -DefaultYes $false)) {
+                Write-Host '  Cancelado.' -ForegroundColor DarkGray
+                continue
+            }
         }
 
-        [bool] $target = -not $entry.Enabled
-        [PSCustomObject] $r = Set-StartupEntry -Entry $entry -Enabled $target
+        foreach ($entry in $toToggle) {
+            [bool]           $target = -not $entry.Enabled
+            [PSCustomObject] $r      = Set-StartupEntry -Entry $entry -Enabled $target
 
-        if ($r.Success) {
-            [string] $newState = if ($target) { 'ON' } else { 'OFF' }
-            Write-Host ('  [OK] {0} {1} -> {2}' -f $entry.Location, $entry.Name, $newState) -ForegroundColor Green
-            $toggleCount++
-            Write-ActionAudit -Action 'Startup.Toggle' -Status 'Success' `
-                -Summary ('{0} {1} -> {2}' -f $entry.Location, $entry.Name, $(if ($target) { 'ON' } else { 'OFF' })) `
-                -Details $r
-        }
-        else {
-            Write-Host ('  [!] {0}' -f $r.Error) -ForegroundColor Red
-            Write-ActionAudit -Action 'Startup.Toggle' -Status 'Failed' `
-                -Summary ('{0} {1}' -f $entry.Location, $entry.Name) -Details $r
+            if ($r.Success) {
+                [string] $newState = if ($target) { 'ON' } else { 'OFF' }
+                Write-Host ('  [OK] {0} {1} -> {2}' -f $entry.Location, $entry.Name, $newState) -ForegroundColor Green
+                $toggleCount++
+                Write-ActionAudit -Action 'Startup.Toggle' -Status 'Success' `
+                    -Summary ('{0} {1} -> {2}' -f $entry.Location, $entry.Name, $(if ($target) { 'ON' } else { 'OFF' })) `
+                    -Details $r
+            }
+            else {
+                Write-Host ('  [!] {0}: {1}' -f $entry.Name, $r.Error) -ForegroundColor Red
+                Write-ActionAudit -Action 'Startup.Toggle' -Status 'Failed' `
+                    -Summary ('{0} {1}' -f $entry.Location, $entry.Name) -Details $r
+            }
         }
 
     } while ($true)

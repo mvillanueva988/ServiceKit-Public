@@ -116,6 +116,45 @@ function Get-StartupEntries {
         }
     }
 
+    # Tareas programadas con trigger de arranque o logon
+    try {
+        [object[]] $allTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue)
+        foreach ($task in $allTasks) {
+            [bool] $hasTrigger = $false
+            if ($null -ne $task.Triggers) {
+                foreach ($trig in $task.Triggers) {
+                    if ($null -ne $trig -and
+                        $trig.CimClass.CimClassName -in @('MSFT_TaskLogonTrigger', 'MSFT_TaskBootTrigger')) {
+                        $hasTrigger = $true
+                        break
+                    }
+                }
+            }
+            if (-not $hasTrigger) { continue }
+
+            [bool]   $taskEnabled = ($task.State -ne 'Disabled')
+            [string] $taskCmd     = ''
+            try {
+                [object[]] $acts = @($task.Actions)
+                if ($acts.Count -gt 0) { $taskCmd = [string] $acts[0].Execute }
+            } catch { }
+
+            $entries.Add([PSCustomObject]@{
+                Name         = [string] $task.TaskName
+                Command      = $taskCmd
+                Location     = 'Task'
+                Enabled      = $taskEnabled
+                CanToggle    = $true
+                Type         = 'Task'
+                RunPath      = $null
+                ApprovedPath = $null
+                FilePath     = $null
+                TaskPath     = [string] $task.TaskPath
+                TaskName     = [string] $task.TaskName
+            })
+        }
+    } catch { }
+
     return [PSCustomObject[]] $entries.ToArray()
 }
 
@@ -167,6 +206,15 @@ function Set-StartupEntry {
                 Rename-Item -Path $currentPath -NewName $newName -Force
             }
 
+            return [PSCustomObject]@{ Success = $true }
+        }
+        elseif ($Entry.Type -eq 'Task') {
+            if ($Enabled) {
+                $null = Enable-ScheduledTask  -TaskPath $Entry.TaskPath -TaskName $Entry.TaskName -ErrorAction Stop
+            }
+            else {
+                $null = Disable-ScheduledTask -TaskPath $Entry.TaskPath -TaskName $Entry.TaskName -ErrorAction Stop
+            }
             return [PSCustomObject]@{ Success = $true }
         }
         else {
