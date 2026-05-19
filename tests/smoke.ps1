@@ -501,6 +501,19 @@ Test-SmokeFunction 'ResearchPrompt' 'New-ResearchPrompt colecciones de 1 element
     if (-not $r.Success) { throw 'Success=$false con colecciones de 1 elemento' }
 }
 
+# ─── ConsoleIcon: utils read-only (no llama Set-PctkConsoleIcon en smoke) ─────
+Test-SmokeFunction 'ConsoleIcon' 'Set-PctkConsoleIcon presente + asset valido' {
+    $cmd = Get-Command 'Set-PctkConsoleIcon' -ErrorAction SilentlyContinue
+    if ($null -eq $cmd) { throw 'Set-PctkConsoleIcon no encontrado' }
+    [string] $rRoot   = Split-Path -Parent $PSScriptRoot
+    [string] $icoPath = Join-Path $rRoot 'assets\pctk.ico'
+    if (-not (Test-Path -LiteralPath $icoPath)) { throw "assets\pctk.ico no encontrado en $icoPath" }
+    [byte[]] $b = [System.IO.File]::ReadAllBytes($icoPath)
+    if ($b[0] -ne 0x00 -or $b[1] -ne 0x00 -or $b[2] -ne 0x01 -or $b[3] -ne 0x00) {
+        throw ('Header ICO invalido: {0:X2} {1:X2} {2:X2} {3:X2}' -f $b[0],$b[1],$b[2],$b[3])
+    }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

@@ -60,6 +60,7 @@ try {
     }
 
     $machineProfile = Get-MachineProfile
+    try { Set-PctkConsoleIcon } catch { }
     Show-MainMenu -MachineProfile $machineProfile
 }
 finally {
