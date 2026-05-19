@@ -187,11 +187,17 @@ function New-ResearchPrompt {
     [string] $ramTotal = if ($Snapshot.PSObject.Properties['RamTotalGb'] -and $null -ne $Snapshot.RamTotalGb) {
         ('{0:N1}' -f [double] $Snapshot.RamTotalGb)
     } else { 'N/A' }
+    # OJO: NO usar `$x = if(c){ @(...) }else{...}`: la expresion-if ENUMERA la
+    # salida del bloque, y con 1 solo elemento @() se desenrolla a escalar ->
+    # un PSCustomObject suelto no tiene .Count -> StrictMode PropertyNotFoundStrict
+    # (crash en maquinas con 1 modulo de RAM: VM/Sandbox/laptops). Variable
+    # tipada [object[]] + asignacion por STATEMENT garantiza array siempre.
     $slotsProp = $Snapshot.PSObject.Properties['RamSlots']
-    $slotsArr  = if ($null -ne $slotsProp -and $null -ne $slotsProp.Value) { @($slotsProp.Value) } else { $null }
-    [string] $slotsCount = if ($null -ne $slotsArr) { [string] $slotsArr.Count } else { '?' }
+    [object[]] $slotsArr = @()
+    if ($null -ne $slotsProp -and $null -ne $slotsProp.Value) { $slotsArr = @($slotsProp.Value) }
+    [string] $slotsCount = if ($slotsArr.Count -gt 0) { [string] $slotsArr.Count } else { '?' }
     [string] $speedMhz   = '?'
-    if ($null -ne $slotsArr -and $slotsArr.Count -gt 0) {
+    if ($slotsArr.Count -gt 0) {
         $sp = $slotsArr[0].PSObject.Properties['SpeedMhz']
         if ($null -ne $sp) { $speedMhz = [string] $sp.Value }
     }

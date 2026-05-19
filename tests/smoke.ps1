@@ -484,6 +484,22 @@ Test-SmokeFunction 'ResearchPrompt' 'New-ResearchPrompt sobrevive snapshot spars
     if ($null -eq $r)    { throw 'New-ResearchPrompt retorno $null' }
     if (-not $r.Success) { throw ('Success=$false; esperado $true') }
 }
+# Regresion v2.0.2: colecciones de 1 elemento (1 modulo RAM = VM/Sandbox/laptop).
+# El hardening v2.0.1 usaba `$x = if(c){@(...)}else{}` -> con 1 elem la
+# expresion-if desenrolla el @() a escalar -> .Count PropertyNotFoundStrict.
+# La fixture sparse de arriba NO tenia RamSlots, por eso no lo cazaba.
+Test-SmokeFunction 'ResearchPrompt' 'New-ResearchPrompt colecciones de 1 elemento' {
+    $snap = [PSCustomObject]@{
+        CPU      = [PSCustomObject]@{ Name = 'x'; Cores = 4; Threads = 8 }
+        RamSlots = @([PSCustomObject]@{ SpeedMhz = 3200 })
+        GPU      = @([PSCustomObject]@{ Name = 'g'; Type = 'Dedicated'; DriverVersion = '1' })
+        Disks    = @([PSCustomObject]@{ Name = 'd'; SizeGb = 500; MediaType = 'SSD'; HealthStatus = 'OK' })
+    }
+    $mp = [PSCustomObject]@{ }
+    $r = New-ResearchPrompt -Template Optimization -Snapshot $snap -MachineProfile $mp
+    if ($null -eq $r)    { throw 'New-ResearchPrompt retorno $null con colecciones de 1 elemento' }
+    if (-not $r.Success) { throw 'Success=$false con colecciones de 1 elemento' }
+}
 
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
