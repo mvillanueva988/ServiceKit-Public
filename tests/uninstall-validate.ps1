@@ -12,8 +12,9 @@
           deletes nothing (no main.ps1 + core\Router.ps1)
       T2  destructive end-to-end: New-PctkUninstallScript + detached launch
           (same Start-Process as the handler) wipes ONLY the install fixture +
-          $env:TEMP\PCTk-* , self-deletes, and leaves out-of-footprint
-          sentinels intact ("nada fuera del footprint / [X] no borra nada")
+          $env:TEMP\PCTk-* , self-deletes, writes .log, leaves out-of-footprint
+          sentinels intact. Simula race del cmd.exe con un cwdHolder separado
+          (CWD=fixture, 10s) que vive mas que el PID que el deleter espera (3s).
 
     Interactive double-confirm / preserve prompts are NOT driven here (Read-Host;
     covered by code review + T1 abort path). RESULT.txt + DONE.txt to host dir.
@@ -170,12 +171,18 @@ try {
     Set-Content -LiteralPath (Join-Path $keepDir 'sentinel.txt') -Value 'KEEP' -Encoding ASCII
     Set-Content -LiteralPath $keepTemp -Value 'KEEP' -Encoding ASCII
 
-    # dummy "PCTk process" the deleter will wait on
+    # CWD holder: simula el cmd.exe de Run.bat que retiene CWD=fixture
+    # despues de que powershell.exe (dummyPid) ya termino. Dura 10s.
+    $cwdHolder = Start-Process -FilePath 'powershell.exe' `
+        -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 10') `
+        -WorkingDirectory $fixRoot -WindowStyle Hidden -PassThru
+
+    # dummy "PCTk process" the deleter will wait on (exits faster que cwdHolder)
     $dummy = Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 6') `
+        -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 3') `
         -WindowStyle Hidden -PassThru
     [int] $dummyPid = $dummy.Id
-    Log ("    dummy PCTk PID = {0}" -f $dummyPid)
+    Log ("    dummy PCTk PID = {0}  cwdHolder PID = {1}" -f $dummyPid, $cwdHolder.Id)
 
     # REAL committed generator
     [string] $deleterText = New-PctkUninstallScript -InstallRoot $fixRoot -PctkPid $dummyPid
@@ -207,6 +214,18 @@ try {
     if (-not (Test-Path $deleterPath)) { Pass 'deleter script self-deleted' }
     else { Fail 'deleter script NOT self-deleted' }
 
+    [string] $logPath = $deleterPath -replace '\.ps1$', '.log'
+    if (Test-Path $logPath) {
+        [string] $logContent = Get-Content -LiteralPath $logPath -Raw -ErrorAction SilentlyContinue
+        if ($logContent -match 'Deleted\s+:\s+True') {
+            Pass 'log de desinstalacion presente y reporta Deleted: True'
+        } else {
+            Fail ('log presente pero sin Deleted: True; contenido: ' + $logContent)
+        }
+    } else {
+        Fail 'log de desinstalacion NO creado por el deleter'
+    }
+
     # out-of-footprint MUST survive
     if ((Test-Path (Join-Path $keepDir 'sentinel.txt'))) {
         Pass 'C:\KEEPME survived (nothing deleted outside footprint)'
@@ -221,6 +240,7 @@ try {
 } catch {
     Fail ("T2 threw: {0}" -f $_.Exception.Message)
 } finally {
+    if ($cwdHolder -and -not $cwdHolder.HasExited) { $cwdHolder.Kill() }
     foreach ($d in @($fixRoot, $keepDir, $tmpStage)) {
         if (Test-Path $d) { Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -228,6 +248,8 @@ try {
         if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
     }
     Get-ChildItem -Path $env:TEMP -Filter 'pctk-uninstall-*.ps1' -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $env:TEMP -Filter 'pctk-uninstall-*.log' -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 Log ''
@@ -248,6 +270,10 @@ Log '    NOT driven headless. Covered by Opus code review + T1 (guard abort path
 Log '  - T2 exercises the exact destructive path of Invoke-UninstallToolkit:'
 Log '    the committed New-PctkUninstallScript output + the same detached'
 Log '    Start-Process invocation. Host worktree mapped READ-ONLY, never the target.'
+Log '  - T2 simula la race del cmd.exe via cwdHolder separado (CWD=fixture, 10s)'
+Log '    que sigue vivo cuando el PID-espera (3s) ya termino; el retry-loop del'
+Log '    deleter debe aguantar hasta que cwdHolder suelte el handle.'
+Log '  - Re-gate Sandbox OBLIGATORIO para validar el escenario Run.bat real.'
 
 $lines | Out-File -FilePath $reportPath -Encoding UTF8 -Force
 "done $(Get-Date -Format o) failed=$failed" | Out-File -FilePath $doneMarker -Encoding ASCII -Force

@@ -451,6 +451,14 @@ Test-SmokeFunction 'Uninstall' 'New-PctkUninstallScript genera contenido esperad
     if ($s -notmatch [string]$fakePid) { throw "Script no contiene el PID $fakePid" }
     # 4. Auto-borrado del propio script
     if ($s -notmatch 'PSCommandPath') { throw 'Script no contiene auto-borrado del propio script (PSCommandPath)' }
+    # 5. CWD neutral (no bloquear el dir a borrar)
+    if ($s -notmatch 'Set-Location') { throw 'Script no contiene Set-Location (CWD neutral)' }
+    # 6. Retry loop con verificacion (resuelve race cmd.exe)
+    if ($s -notmatch '\$attempt') { throw 'Script no contiene retry loop ($attempt)' }
+    if ($s -notmatch 'Start-Sleep -Milliseconds') { throw 'Script no contiene Start-Sleep -Milliseconds (retry delay)' }
+    # 7. Log persistente
+    if ($s -notmatch '\.log') { throw 'Script no contiene referencia al archivo .log' }
+    if ($s -notmatch 'WriteAllLines|WriteLog') { throw 'Script no contiene escritura de log persistente' }
 }
 
 # ─── Handlers interactivos del Router: abort-seguro (gap que dejo pasar Bug2) ──
