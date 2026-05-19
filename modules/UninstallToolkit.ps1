@@ -128,10 +128,25 @@ function Invoke-UninstallToolkit {
         return $false
     }
 
-    # Audit antes de salir (el log queda en el root que se borra;
-    # solo sobrevive en la copia preservada si el operador la acepto).
+    # Audit escrita ANTES de copiar output\audit\ para que Toolkit.Uninstall
+    # quede incluida en el export (si no se preservo, queda solo en el root borrado).
     [string] $auditSummary = if ([string]::IsNullOrWhiteSpace($preserveDest)) { 'sin preservar' } else { $preserveDest }
     Write-ActionAudit -Action 'Toolkit.Uninstall' -Status 'Started' -Summary $auditSummary
+
+    # Preservar output\audit\ al mismo destino que clients (misma logica condicional).
+    # El deleter ya fue lanzado: si falla el copy, avisar pero no abortar.
+    if (-not [string]::IsNullOrWhiteSpace($preserveDest)) {
+        [string] $auditDir = Join-Path $installRoot 'output\audit'
+        if (Test-Path $auditDir -PathType Container) {
+            try {
+                [string] $auditExportDest = Join-Path $preserveDest 'audit'
+                Copy-Item -Path $auditDir -Destination $auditExportDest -Recurse -Force
+                Write-Host ('  [OK] Audit copiado a: {0}' -f $auditExportDest) -ForegroundColor Green
+            } catch {
+                Write-Host ('  [!] No se pudo copiar el audit: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+            }
+        }
+    }
 
     Write-Host ''
     Write-Host '  PCTk cerrara ahora. El desinstalador borrara la carpeta en segundo plano.' -ForegroundColor Yellow
