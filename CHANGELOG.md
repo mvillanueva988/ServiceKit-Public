@@ -4,13 +4,17 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
 ## [Unreleased]
 
-## [2.0.2] - 2026-05-19
+## [2.1.0] - 2026-05-19
 
-Patch: dos bugs de v2.0.1 hallados probando el release publicado en Windows Sandbox limpia.
+Minor: perfiles O&O ShutUp10++ para la rama de privacidad por receta + dos bugfixes de v2.0.1 hallados probando el release publicado en Windows Sandbox limpia.
+
+### Added
+
+- **Perfiles O&O ShutUp10++ (`data/oosu10-profiles/*.cfg`)**: `basic.cfg`, `medium.cfg`, `multimedia.cfg`, `aggressive.cfg` generados por ID estable desde el catálogo OOSU V2.2.1024, espejando los niveles de `modules/Privacy.ps1`. Las recetas (generic→basic, office/study→medium, multimedia→multimedia, named-aggressive→aggressive) aplican OOSU vía `Invoke-ProfilePrivacyStep` con fallback nativo si falta el `.cfg`/`OOSU10.exe`. Determinístico (272 entradas, `+` solo en el scope del nivel); historial de portapapeles / SmartScreen / Windows Update / permisos por-app quedan intactos.
 
 ### Fixed
 
-- **Instalación rota (Execution Policy)**: el one-liner de v2.0.1 (`… -OutFile $f; & $f`) fallaba en toda máquina nueva con `SecurityError / running scripts is disabled` — la Execution Policy default (`Restricted`) bloquea ejecutar un `.ps1`. El fix de v2.0.1 había resuelto el BOM/`#Requires` (cambiando `| iex` por `& $f`) pero `& archivo` SÍ está sujeto a Execution Policy mientras que `iex` no. README ahora usa `powershell -NoProfile -ExecutionPolicy Bypass -File $f` (maneja BOM + `#Requires` + Policy). Pin a `v2.0.2`.
+- **Instalación rota (Execution Policy)**: el one-liner de v2.0.1 (`… -OutFile $f; & $f`) fallaba en toda máquina nueva con `SecurityError / running scripts is disabled` — la Execution Policy default (`Restricted`) bloquea ejecutar un `.ps1`. El fix de v2.0.1 había resuelto el BOM/`#Requires` (cambiando `| iex` por `& $f`) pero `& archivo` SÍ está sujeto a Execution Policy mientras que `iex` no. README ahora usa `powershell -NoProfile -ExecutionPolicy Bypass -File $f` (maneja BOM + `#Requires` + Policy). Pin a `v2.1.0`.
 - **`New-ResearchPrompt` crash en máquinas con 1 módulo de RAM** (`modules/ResearchPrompt.ps1`): el hardening de v2.0.1 usaba `$slotsArr = if (c) { @($x) } else { $null }`; la expresión-`if` enumera la salida del bloque y con 1 solo elemento el `@()` se desenrolla a escalar → un PSCustomObject suelto no tiene `.Count` → `PropertyNotFoundException` bajo StrictMode. Se disparaba en VM/Sandbox/laptops (1 slot RAM). Corregido a variable tipada `[object[]]` + asignación por statement. + regresión smoke con colecciones de 1 elemento (la fixture sparse anterior no tenía `RamSlots`, por eso no lo cazó).
 
 ## [2.0.1] - 2026-05-18
