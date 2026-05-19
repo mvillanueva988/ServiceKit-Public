@@ -42,6 +42,14 @@ GSD-STYLE.md
 _local-dev/
 # Worktrees auxiliares creadas por tooling local (nunca publicar)
 .clone/
+
+# Handoffs / contratos de implementacion (scratch, no publicar en repo toolkit)
+HANDOFF_*.md
+
+# Catalogo de referencia de OOSU (fuente para regenerar / diff cross-OS;
+# la app NO lo consume: las recetas usan basic/medium/multimedia/aggressive.cfg)
+data/oosu10-profiles/_*.cfg
+
 # ==========================================
 # GSD Framework / Copilot AI
 # ==========================================
