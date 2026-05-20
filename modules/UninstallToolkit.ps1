@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 # --- New-PctkUninstallScript ---------------------------------------------------
 # Devuelve el texto del script de limpieza desprendido como [string].
@@ -16,6 +16,18 @@ function New-PctkUninstallScript {
 Set-StrictMode -Version Latest
 `$ErrorActionPreference = 'SilentlyContinue'
 
+# CWD neutral: no bloquear el directorio a borrar
+Set-Location `$env:TEMP
+
+# Log persistente (queda aunque el .ps1 se autoborre)
+`$logFile  = `$PSCommandPath -replace '\.ps1`$', '.log'
+`$logLines = [System.Collections.Generic.List[string]]::new()
+function WriteLog { param([string]`$m) Write-Host `$m; [void] `$script:logLines.Add(`$m) }
+
+WriteLog ('=== PCTk uninstall {0} ===' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+WriteLog ('InstallRoot : $InstallRoot')
+WriteLog ('PID espera  : $PctkPid')
+
 # Esperar a que PCTk (PID $PctkPid) termine (max 30s)
 `$waited = 0
 while (`$waited -lt 30) {
@@ -23,13 +35,37 @@ while (`$waited -lt 30) {
     Start-Sleep -Seconds 1
     `$waited++
 }
+WriteLog ('PID $PctkPid finalizo tras ' + `$waited + 's')
 
-# Borrar root de instalacion
-Remove-Item -LiteralPath '$InstallRoot' -Recurse -Force -ErrorAction SilentlyContinue
+# Borrar root con retry + verificacion (resuelve race del cmd.exe / handles AV, max ~60s)
+`$attempt = 0
+`$deleted  = `$false
+`$lastErr  = ''
+while (`$attempt -lt 80) {
+    Remove-Item -LiteralPath '$InstallRoot' -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path '$InstallRoot')) { `$deleted = `$true; break }
+    `$attempt++
+    Start-Sleep -Milliseconds 750
+}
+if (-not `$deleted) {
+    try {
+        Remove-Item -LiteralPath '$InstallRoot' -Recurse -Force -ErrorAction Stop
+        `$deleted = `$true
+    } catch { `$lastErr = `$_.Exception.Message }
+}
+WriteLog ('Deleted     : ' + `$deleted + ' (intentos: ' + `$attempt + ')')
+if (`$lastErr) { WriteLog ('UltimoError : ' + `$lastErr) }
 
 # Borrar artefactos temporales PCTk-*
 Get-ChildItem -Path `$env:TEMP -Filter 'PCTk-*' -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+WriteLog 'Temp PCTk-* limpiados'
+WriteLog ('=== fin ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ===')
+
+# Escribir log a disco
+try {
+    [System.IO.File]::WriteAllLines(`$logFile, `$logLines, [System.Text.Encoding]::UTF8)
+} catch { }
 
 # Auto-borrar este script
 Start-Sleep -Seconds 1
@@ -148,7 +184,9 @@ function Invoke-UninstallToolkit {
         }
     }
 
+    [string] $logHint = $deleterPath -replace '\.ps1$', '.log'
     Write-Host ''
-    Write-Host '  PCTk cerrara ahora. El desinstalador borrara la carpeta en segundo plano.' -ForegroundColor Yellow
+    Write-Host '  PCTk cerrara ahora. El borrado se realizara en segundo plano.' -ForegroundColor Yellow
+    Write-Host ('  Resultado en: {0}' -f $logHint) -ForegroundColor DarkGray
     return $true
 }
