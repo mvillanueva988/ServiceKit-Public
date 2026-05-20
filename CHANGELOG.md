@@ -4,6 +4,20 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-05-20
+
+Patch: fix de regresión crítica en self-uninstall + QoL en selectores de apps y startup + preservar audit del operador al desinstalar.
+
+### Added
+
+- **Apps uninstall — selector con rango (`core/Router.ps1` `Invoke-ActionApps`)**: el parser ahora acepta `N-M` además de número suelto y lista coma/espacio (también `N-M` invertido se normaliza). UI base de desinstalación ya existía en v2.1.1 (commit `7ab6b79`); este patch cubre el único gap conocido del selector.
+- **Startup toggle real (`core/Router.ps1` `Invoke-ActionStartup` + `modules/StartupManager.ps1`)**: el handler `[A]→[10]` antes listaba pero el toggle era un stub no-op. Ahora togglea de verdad multi-hive — Registry `Run`/`Run32`/`RunOnce` (vía clave nativa `StartupApproved`, round-trip exacto al estilo del Administrador de tareas), carpeta Startup (rename `.lnk` ↔ `.lnk.disabled`), y **tareas programadas** (`Enable-`/`Disable-ScheduledTask`, soporte nuevo en `Get-StartupEntries`). Selección por número / lista / rango; confirm `[s/N]` si alguna entrada va a OFF. El pipeline auto NO cambia (sigue report-only por decisión de producto: Mateo deshabilita startup a mano con esta opción).
+- **`F1` — preservar `output\audit\` al desinstalar (`modules/UninstallToolkit.ps1` `Invoke-UninstallToolkit`)**: cuando el operador acepta preservar el historial, además de `output\clients\` se copia también `output\audit\` al mismo destino (`Desktop\PCTk-historial-clientes\audit\*.jsonl`). El audit `Toolkit.Uninstall` se escribe ANTES del copy para quedar incluido. Alimenta el tracking persistente de clientes.
+
+### Fixed
+
+- **P1: el self-uninstall `[U]` no borraba `C:\PCTk` (afectaba también v2.1.0 y v2.1.1).** Causa raíz: `Run.bat` hace `pushd "%~dp0"` → el `cmd.exe` que lanzó PCTk retiene `CWD = C:\PCTk` un instante después de que `powershell.exe` muere; el deleter desprendido disparaba un único `Remove-Item -ErrorAction SilentlyContinue` antes de que `cmd.exe` muriera, perdía la race contra el CWD lock, y el fallo quedaba mudo. Fix en `New-PctkUninstallScript`: CWD propio neutral (`Set-Location $env:TEMP`) + loop de retry con verificación (80 × 750 ms ≈ 60 s, `Remove-Item` + `Test-Path`) que gana la race del `cmd.exe` y cubre además latencias de AV/handles + log persistente en `$env:TEMP\pctk-uninstall-<ts>.log` con resultado real (Deleted: True/False + intentos + último error). El mensaje al usuario deja de afirmar "borrará la carpeta" con certeza y muestra la ruta del log. Test headless `tests/uninstall-validate.ps1` T2 extendido con un `cwdHolder` separado para reproducir la race sin necesitar Sandbox. Cazado por el gate Sandbox limpia.
+
 ## [2.1.1] - 2026-05-19
 
 Patch: icono de PCTk en la ventana de consola en runtime (branding cosmético; no toca la cadena de confianza ni el one-liner).
