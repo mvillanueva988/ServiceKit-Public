@@ -138,8 +138,8 @@ Log ''
 # =============================================================================
 Log '[T2] Destructive end-to-end: detached deleter wipes ONLY the footprint'
 
-[string] $fixRoot   = 'C:\PCTk-fixture'
-[string] $keepDir   = 'C:\KEEPME'
+[string] $fixRoot   = Join-Path $env:TEMP 'pctk_validate_fixture'
+[string] $keepDir   = Join-Path $env:TEMP 'pctk_validate_keepme'
 [string] $keepTemp  = Join-Path $env:TEMP 'KEEP-notpctk.txt'
 [string] $tmpZip    = Join-Path $env:TEMP 'PCTk-update.zip'
 [string] $tmpStage  = Join-Path $env:TEMP 'PCTk-staging'

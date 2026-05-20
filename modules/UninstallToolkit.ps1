@@ -22,7 +22,7 @@ Set-Location `$env:TEMP
 # Log persistente (queda aunque el .ps1 se autoborre)
 `$logFile  = `$PSCommandPath -replace '\.ps1`$', '.log'
 `$logLines = [System.Collections.Generic.List[string]]::new()
-function WriteLog { param([string]`$m) { Write-Host `$m; `$script:logLines.Add(`$m) } }
+function WriteLog { param([string]`$m) Write-Host `$m; [void] `$script:logLines.Add(`$m) }
 
 WriteLog ('=== PCTk uninstall {0} ===' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 WriteLog ('InstallRoot : $InstallRoot')
