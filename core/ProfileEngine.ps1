@@ -184,53 +184,54 @@ function Invoke-ProfilePerformanceStep {
 
 # ─── Invoke-ProfilePrivacyStep ────────────────────────────────────────────────
 function Invoke-ProfilePrivacyStep {
-    <#
-    .SYNOPSIS
-        Aplica el paso de privacy segun la receta. Si OOSU10 + .cfg disponibles,
-        usa Invoke-OOSU10Profile (sincronico). Si no, cae a Start-PrivacyJob nativo.
-        Retorna objeto uniforme { Path; Success; Detail }.
-    #>
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] [PSCustomObject] $Profile
-    )
+    param([Parameter(Mandatory)] [PSCustomObject] $Profile)
 
-    [string] $level   = [string]$Profile.privacy.level
     [string] $oosuCfg = ''
     [object] $oosuProp = $Profile.privacy.PSObject.Properties['oosu10_cfg']
     if ($null -ne $oosuProp) { $oosuCfg = [string]$oosuProp.Value }
 
-    # Decidir rama OOSU10 o nativo
-    [bool]   $useOosu = $false
-    [string] $cfgPath = ''
-    if (-not [string]::IsNullOrWhiteSpace($oosuCfg)) {
-        $cfgPath = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'data\oosu10-profiles') $oosuCfg
-        $useOosu = (Test-ShutUp10Available) -and (Test-Path $cfgPath)
+    # 1) Perfil no declara oosu10_cfg -> skip silencioso (sin privacy step)
+    if ([string]::IsNullOrWhiteSpace($oosuCfg)) {
+        Write-Host '  Privacy: perfil sin oosu10_cfg, skip.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'Privacy.OOSU.Apply' -Status 'Skipped' `
+            -Summary 'no oosu10_cfg in profile'
+        return [PSCustomObject]@{ Path = 'skipped'; Success = $true; Detail = $null }
     }
 
-    if ($useOosu) {
-        Write-Host ('  Privacy via OOSU10 ({0})...' -f $oosuCfg) -ForegroundColor Cyan
-        $r = Invoke-OOSU10Profile -Path $cfgPath
-        return [PSCustomObject]@{ Path = 'oosu10'; Success = $r.Success; Detail = $r }
+    [string] $cfgPath = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'data\oosu10-profiles') $oosuCfg
+
+    # 2) cfg declarado pero no existe en disco -> error de packaging
+    if (-not (Test-Path -LiteralPath $cfgPath)) {
+        Write-Host ('  [!] Privacy: cfg no encontrado: {0}' -f $cfgPath) -ForegroundColor Red
+        Write-ActionAudit -Action 'Privacy.OOSU.Apply' -Status 'Failed' `
+            -Summary 'cfg not found' -Details @{ CfgPath = $cfgPath }
+        return [PSCustomObject]@{ Path = 'oosu10'; Success = $false; Detail = @{ Reason = 'cfg_not_found'; CfgPath = $cfgPath } }
     }
 
-    # Nativo: mapear level -> perfil de Invoke-PrivacyTweaks
-    [string] $psLevel = switch ($level.ToLowerInvariant()) {
-        'medium'     { 'Medium'     }
-        'aggressive' { 'Aggressive' }
-        default      { 'Basic'      }
+    # 3) OOSU disponible? Si no, descargar
+    if (-not (Test-ShutUp10Available)) {
+        Write-Host '  Privacy: OOSU10 no disponible, descargando...' -ForegroundColor Cyan
+        Write-ActionAudit -Action 'Privacy.OOSU.Download' -Status 'Started'
+        $dl = Invoke-OOSUDownload
+        if (-not $dl.Success) {
+            Write-Host ('  [!] Privacy: descarga de OOSU fallo: {0}' -f $dl.Error) -ForegroundColor Red
+            Write-ActionAudit -Action 'Privacy.OOSU.Download' -Status 'Failed' `
+                -Summary $dl.Error
+            return [PSCustomObject]@{ Path = 'oosu10'; Success = $false; Detail = @{ Reason = 'download_failed'; Error = $dl.Error } }
+        }
+        Write-ActionAudit -Action 'Privacy.OOSU.Download' -Status 'OK'
     }
-    Write-Host ('  Privacy via nativo: perfil {0}...' -f $psLevel) -ForegroundColor Cyan
-    $privJob     = Start-PrivacyJob -Profile $psLevel
-    $privResults = Wait-ToolkitJobs -Jobs @($privJob) -TimeoutSeconds 120
-    $privRaw     = if ($privResults.Count -gt 0) { $privResults[0] } else { $null }
 
-    [bool] $ok = $false
-    if ($null -ne $privRaw) {
-        [object] $errProp = $privRaw.PSObject.Properties['Errors']
-        $ok = ($null -eq $errProp) -or (@($errProp.Value).Count -eq 0)
-    }
-    return [PSCustomObject]@{ Path = 'native'; Success = $ok; Detail = $privRaw }
+    # 4) Aplicar
+    Write-Host ('  Privacy via OOSU10 ({0})...' -f $oosuCfg) -ForegroundColor Cyan
+    $r = Invoke-OOSU10Profile -Path $cfgPath
+    [string] $status = if ($r.Success -and -not $r.Skipped) { 'OK' }
+                       elseif ($r.Skipped)                  { 'Skipped' }
+                       else                                  { 'Failed' }
+    Write-ActionAudit -Action 'Privacy.OOSU.Apply' -Status $status `
+        -Summary $oosuCfg -Details $r
+    return [PSCustomObject]@{ Path = 'oosu10'; Success = $r.Success; Detail = $r }
 }
 
 # ─── Invoke-AutoProfile ───────────────────────────────────────────────────────
@@ -507,7 +508,16 @@ function Invoke-AutoProfile {
             "$($cleanupR.FreedGB) GB liberados"
         } else { 'no disponible' }
         [string] $perfLine = if ($null -ne $perfR) { 'OK' } else { 'no disponible' }
-        [string] $privLine = "$($privResult.Path) - $(if ($privResult.Success) { 'OK' } else { 'error' })"
+        [string] $privLine = if ($privResult.Success) {
+            "$($privResult.Path) - OK"
+        } else {
+            [string] $privReason = 'error'
+            [object] $privDet = $privResult.Detail
+            if ($null -ne $privDet -and $privDet -is [hashtable] -and $privDet.ContainsKey('Reason')) {
+                $privReason = [string]$privDet['Reason']
+            }
+            "Privacidad NO aplicada ($privReason)"
+        }
         [string] $approxDur = [math]::Round((([datetime]::Now) - $startedAt).TotalSeconds).ToString()
 
         @(

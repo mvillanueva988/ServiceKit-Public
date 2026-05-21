@@ -149,6 +149,54 @@ function Test-ShutUp10Available {
     return (-not [string]::IsNullOrWhiteSpace((Get-ShutUp10Path)))
 }
 
+# --- Invoke-OOSUDownload -----------------------------------------------------
+function Invoke-OOSUDownload {
+    <#
+    .SYNOPSIS
+        Descarga OOSU10.exe invocando Bootstrap-Tools.ps1 -ToolName 'shutup10'.
+        Retorna { Success, Error, ExePath }.
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param()
+
+    [string] $toolkitRoot = Split-Path -Parent $PSScriptRoot
+    [string] $bootstrap   = Join-Path $toolkitRoot 'Bootstrap-Tools.ps1'
+
+    if (-not (Test-Path -LiteralPath $bootstrap)) {
+        return [PSCustomObject]@{
+            Success = $false
+            Error   = ('Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap)
+            ExePath = ''
+        }
+    }
+
+    try {
+        & $bootstrap -ToolName 'shutup10' 2>&1 | Out-Null
+    } catch {
+        return [PSCustomObject]@{
+            Success = $false
+            Error   = $_.Exception.Message
+            ExePath = ''
+        }
+    }
+
+    [string] $exe = Get-ShutUp10Path
+    if ([string]::IsNullOrWhiteSpace($exe) -or -not (Test-Path -LiteralPath $exe)) {
+        return [PSCustomObject]@{
+            Success = $false
+            Error   = 'Bootstrap completo pero OOSU10.exe sigue ausente (descarga silenciosa fallo)'
+            ExePath = ''
+        }
+    }
+
+    return [PSCustomObject]@{
+        Success = $true
+        Error   = ''
+        ExePath = $exe
+    }
+}
+
 # --- Open-ShutUp10 -----------------------------------------------------------
 function Open-ShutUp10 {
     [CmdletBinding()]
