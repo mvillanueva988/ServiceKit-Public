@@ -1,4 +1,4 @@
-﻿{
+{
   "_schema_version": "1.0",
   "_use_case": "study",
   "_tier": "high",
@@ -24,7 +24,7 @@
     "level": "medium",
     "oosu10_cfg": "medium.cfg",
     "fallback": "native",
-    "_note": "Si OOSU10.exe + data/oosu10-profiles/medium.cfg estan disponibles -> Invoke-OOSU10Profile. Si no -> Start-PrivacyJob -Profile Medium (registry nativo). Medium apaga telemetria, Bing, feedback, activity sin tocar OneDrive."
+    "_note": "Aplica data/oosu10-profiles/medium.cfg via Invoke-OOSU10Profile. Si OOSU10.exe falta, el toolkit lo descarga automaticamente (Bootstrap-Tools.ps1 -ToolName shutup10) y luego aplica el cfg. Si la descarga falla, se reporta Privacidad NO aplicada con motivo download_failed y el perfil sigue. Medium apaga telemetria, Bing, feedback, activity sin tocar OneDrive."
   },
 
   "cleanup": { "clear_temp": true },

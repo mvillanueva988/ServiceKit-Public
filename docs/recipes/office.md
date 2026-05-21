@@ -33,9 +33,9 @@ Perfil visual **Balanced** en los tres tiers. Para Office, Balanced es el perfil
 
 ## Privacidad
 
-Nivel **Medium**. Más estricto que Generic. Apaga telemetría, Bing en el menú de inicio, feedback de Microsoft y Activity History. No toca OneDrive (puede ser crítico para Microsoft 365). Si OOSU10.exe + `data/oosu10-profiles/medium.cfg` están disponibles, aplica ese perfil; si no, aplica `Start-PrivacyJob -Profile Medium` (registry nativo).
+Nivel **Medium**. Más estricto que Generic. Apaga telemetría, Bing en el menú de inicio, feedback de Microsoft y Activity History. No toca OneDrive (puede ser crítico para Microsoft 365). Aplica `data/oosu10-profiles/medium.cfg` vía OOSU10. Si `OOSU10.exe` no está en `tools\bin\`, el toolkit lo descarga automáticamente (vía `Bootstrap-Tools.ps1`, tool `shutup10`) y aplica el perfil. Si la descarga falla, la privacy step se reporta como "NO aplicada" y el perfil sigue con el resto.
 
-El `.cfg` Medium es un entregable manual — no está incluido en el ZIP de distribución. El engine detecta su ausencia y cae al nativo sin interrupción.
+El `.cfg` Medium está incluido en `data/oosu10-profiles/medium.cfg` (parte del ZIP del toolkit). El engine lo aplica vía OOSU10 — si OOSU10 falta, lo descarga; si la descarga falla, reporta "NO aplicada" sin abortar el perfil.
 
 ## Cleanup
 

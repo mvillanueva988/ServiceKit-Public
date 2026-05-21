@@ -1,4 +1,4 @@
-﻿{
+{
   "_schema_version": "1.0",
   "_use_case": "generic",
   "_tier": "mid",
@@ -23,7 +23,7 @@
     "level": "basic",
     "oosu10_cfg": "basic.cfg",
     "fallback": "native",
-    "_note": "Si OOSU10.exe + data/oosu10-profiles/basic.cfg estan disponibles -> Invoke-OOSU10Profile. Si no -> Start-PrivacyJob -Profile Basic (registry nativo). Generic = nivel mas suave (NO desactiva OneDrive)."
+    "_note": "Aplica data/oosu10-profiles/basic.cfg via Invoke-OOSU10Profile. Si OOSU10.exe falta, el toolkit lo descarga automaticamente (Bootstrap-Tools.ps1 -ToolName shutup10) y luego aplica el cfg. Si la descarga falla, se reporta Privacidad NO aplicada con motivo download_failed y el perfil sigue con el resto. Generic = nivel mas suave (NO desactiva OneDrive)."
   },
 
   "cleanup": { "clear_temp": true },

@@ -32,7 +32,7 @@ En laptops con TDP limitado por EC, el toolkit **no** aplica Ultimate Performanc
 
 ## Privacidad
 
-Nivel **Basic** (más suave). No toca OneDrive, no deshabilita Bing en el menú de inicio. Si OOSU10.exe + `data/oosu10-profiles/basic.cfg` están disponibles, aplica ese perfil. Si no, aplica `Start-PrivacyJob -Profile Basic` (registry HKCU/HKLM nativo). El resultado es equivalente a deshabilitar las opciones de diagnóstico y retroalimentación en Configuración de Windows, sin tocar funcionalidades que el usuario puede usar activamente.
+Nivel **Basic** (más suave). No toca OneDrive, no deshabilita Bing en el menú de inicio. Aplica `data/oosu10-profiles/basic.cfg` vía OOSU10. Si `OOSU10.exe` no está en `tools\bin\`, el toolkit lo descarga automáticamente (vía `Bootstrap-Tools.ps1`, tool `shutup10`) y aplica el perfil. Si la descarga falla (sin internet, etc.), la privacy step se reporta como "NO aplicada" en el reporte final y el perfil sigue con el resto de los pasos — aplicala a mano después con `[A]→[O]` cuando haya internet. El resultado es equivalente a deshabilitar las opciones de diagnóstico y retroalimentación en Configuración de Windows, sin tocar funcionalidades que el usuario puede usar activamente.
 
 ## Cleanup
 

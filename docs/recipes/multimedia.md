@@ -38,7 +38,7 @@ Full solo en High: es la única receta en la que el perfil visual varía por tie
 
 ## Privacidad
 
-Nivel **Medium** con `multimedia.cfg`. Apaga telemetría, Bing y Activity History; preserva apps y servicios de Xbox. Si OOSU10.exe + `multimedia.cfg` están disponibles, aplica ese perfil; si no, aplica `Start-PrivacyJob -Profile Medium` (fallback nativo — equivalente a Medium estándar, que es razonablemente seguro para preservar Xbox si se aplica a nivel de registry sin el perfil OOSU10 específico).
+Nivel **Medium** con `multimedia.cfg`. Apaga telemetría, Bing y Activity History; preserva apps y servicios de Xbox (esa preservación es específica del perfil OOSU10 curado, no se replica con tweaks nativos). Aplica `data/oosu10-profiles/multimedia.cfg` vía OOSU10. Si `OOSU10.exe` no está en `tools\bin\`, el toolkit lo descarga automáticamente (vía `Bootstrap-Tools.ps1`, tool `shutup10`) y aplica el perfil. Si la descarga falla, la privacy step se reporta como "NO aplicada" y el perfil sigue con el resto — la preservación de Xbox requiere OOSU10 específicamente.
 
 El `.cfg` `multimedia.cfg` es un entregable manual distinto de `medium.cfg`: la diferencia está en las opciones de Xbox apps que `multimedia.cfg` preserva activas.
 

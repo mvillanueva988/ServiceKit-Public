@@ -1,4 +1,4 @@
-﻿{
+{
   "_schema_version": "1.0",
   "_use_case": "multimedia",
   "_tier": "mid",
@@ -23,7 +23,7 @@
     "level": "medium",
     "oosu10_cfg": "multimedia.cfg",
     "fallback": "native",
-    "_note": "Si OOSU10.exe + data/oosu10-profiles/multimedia.cfg estan disponibles -> Invoke-OOSU10Profile. Si no -> Start-PrivacyJob -Profile Medium (registry nativo). multimedia.cfg apaga Bing/telemetria pero preserva Xbox apps (a diferencia de medium.cfg generico)."
+    "_note": "Aplica data/oosu10-profiles/multimedia.cfg via Invoke-OOSU10Profile. Si OOSU10.exe falta, el toolkit lo descarga automaticamente (Bootstrap-Tools.ps1 -ToolName shutup10) y luego aplica el cfg. Si la descarga falla, se reporta Privacidad NO aplicada con motivo download_failed y el perfil sigue. multimedia.cfg apaga Bing/telemetria pero preserva Xbox apps (especifico del perfil OOSU10 curado)."
   },
 
   "cleanup": { "clear_temp": true },
