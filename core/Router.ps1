@@ -1091,6 +1091,20 @@ function Invoke-ActionPrivacy {
             )
         }
     }
+    Write-Host ''
+    Write-Host '  [!] DEPRECATED: esta accion aplica tweaks privacy NATIVOS' -ForegroundColor Yellow
+    Write-Host '       (registry hardcoded por el toolkit, NO mantenido upstream).' -ForegroundColor Yellow
+    Write-Host '       Recomendado: usar [1] perfil automatico, que aplica' -ForegroundColor Yellow
+    Write-Host '       OOSU10 con .cfg curadas (mantenido por el proyecto OOSU).' -ForegroundColor Yellow
+    Write-Host ''
+    [string] $depConfirm = (Read-Host '  Continuar con tweaks nativos igual? [s/N]').Trim().ToUpperInvariant()
+    if ($depConfirm -ne 'S' -and $depConfirm -ne 'SI') {
+        Write-Host '  Cancelado (recomendado).' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'Privacy.Apply' -Status 'Cancelled' `
+            -Summary ('DEPRECATED-skip: {0}' -f $profile)
+        return
+    }
+
     if (-not (Confirm-Action -Title ('Aplicar Privacy: perfil {0}?' -f $profile) -Lines $profileDescription)) {
         Write-Host '  Cancelado.' -ForegroundColor DarkGray
         Write-ActionAudit -Action 'Privacy.Apply' -Status 'Cancelled' -Summary $profile
