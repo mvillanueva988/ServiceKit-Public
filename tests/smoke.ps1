@@ -522,6 +522,121 @@ Test-SmokeFunction 'ConsoleIcon' 'Set-PctkConsoleIcon presente + asset valido' {
     }
 }
 
+# ─── ExportClientLogs (5 casos: empty, only-audit, both, tag-sanitize, collide) ─
+
+Test-SmokeFunction 'ExportClientLogs' 'export-empty: output ausente -> Empty + sin zip' {
+    [string] $tmpOut  = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path $tmpDest -ItemType Directory -Force | Out-Null
+    try {
+        function Read-Host { '' }
+        $r = Invoke-ExportClientLogs -OutputRootOverride $tmpOut -DestDirOverride $tmpDest
+        if ($r.Status -ne 'Empty') { throw ('Status esperado Empty; got {0}' -f $r.Status) }
+        [object[]] $zips = @(Get-ChildItem -LiteralPath $tmpDest -Filter '*.zip' -File -ErrorAction SilentlyContinue)
+        if ($zips.Count -gt 0) { throw 'No debe haber zip cuando output\ esta ausente' }
+    } finally {
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ExportClientLogs' 'export-only-audit: 1 subdir (PS5.1 array) -> zip con solo audit' {
+    [string] $tmpOut      = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest     = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir    = Join-Path $tmpOut 'audit'
+    [string] $auditFile   = Join-Path $auditDir '2026-05-20.jsonl'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath $auditFile -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Read-Host { '' }
+        $r = Invoke-ExportClientLogs -OutputRootOverride $tmpOut -DestDirOverride $tmpDest
+        if ($r.Status -ne 'OK') { throw ('Status esperado OK; got {0}' -f $r.Status) }
+        if (-not (Test-Path -LiteralPath $r.ZipPath)) { throw 'Zip no fue creado' }
+        if ((Get-Item -LiteralPath $r.ZipPath).Length -eq 0) { throw 'Zip tiene tamanio cero' }
+        # Verificar que el zip contiene audit\ pero NO snapshots\
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [object[]] $entries = @()
+        $za = [System.IO.Compression.ZipFile]::OpenRead($r.ZipPath)
+        try { $entries = @($za.Entries | ForEach-Object { $_.FullName }) }
+        finally { $za.Dispose() }
+        [bool] $hasAudit = $false
+        [bool] $hasSnaps = $false
+        foreach ($e in $entries) {
+            if ($e -match '^audit')     { $hasAudit = $true }
+            if ($e -match '^snapshots') { $hasSnaps = $true }
+        }
+        if (-not $hasAudit) { throw 'Zip no contiene audit\' }
+        if ($hasSnaps)      { throw 'Zip contiene snapshots\ inesperado (trampa PS5.1 arrays)' }
+    } finally {
+        Remove-Item -LiteralPath $tmpOut  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ExportClientLogs' 'export-both: audit + snapshots -> zip con ambos' {
+    [string] $tmpOut    = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest   = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir  = Join-Path $tmpOut 'audit'
+    [string] $snapsDir  = Join-Path $tmpOut 'snapshots'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $snapsDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-05-20.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $snapsDir 'pre.json')         -Value '{"Phase":"pre"}'  -Encoding UTF8
+    try {
+        function Read-Host { '' }
+        $r = Invoke-ExportClientLogs -OutputRootOverride $tmpOut -DestDirOverride $tmpDest
+        if ($r.Status -ne 'OK') { throw ('Status esperado OK; got {0}' -f $r.Status) }
+        if (-not (Test-Path -LiteralPath $r.ZipPath)) { throw 'Zip no fue creado' }
+        if ((Get-Item -LiteralPath $r.ZipPath).Length -eq 0) { throw 'Zip tiene tamanio cero' }
+    } finally {
+        Remove-Item -LiteralPath $tmpOut  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ExportClientLogs' 'export-tag-sanitize: chars invalidos -> solo validos en nombre' {
+    [string] $tmpOut    = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest   = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir  = Join-Path $tmpOut 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-05-20.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Read-Host { 'cliente/01 *<>' }
+        $r = Invoke-ExportClientLogs -OutputRootOverride $tmpOut -DestDirOverride $tmpDest
+        if ($r.Status -ne 'OK') { throw ('Status esperado OK; got {0}' -f $r.Status) }
+        [string] $zipName = [System.IO.Path]::GetFileNameWithoutExtension($r.ZipPath)
+        if ($zipName -notmatch 'cliente01') { throw ('ZipName debe contener cliente01 (tag sanitizado); got {0}' -f $zipName) }
+        if ($zipName -match '[/\\* <>]')    { throw ('ZipName contiene chars invalidos: {0}' -f $zipName) }
+    } finally {
+        Remove-Item -LiteralPath $tmpOut  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ExportClientLogs' 'export-existing-collide: base.zip existe -> base_2.zip' {
+    [string] $tmpOut    = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest   = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir  = Join-Path $tmpOut 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-05-20.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Read-Host { '' }
+        [string] $fixedTs  = '20260520-223015'
+        [string] $baseZip  = Join-Path $tmpDest ('{0}_{1}.zip' -f $env:COMPUTERNAME, $fixedTs)
+        New-Item -Path $baseZip -ItemType File -Force | Out-Null
+        $r = Invoke-ExportClientLogs -OutputRootOverride $tmpOut -DestDirOverride $tmpDest -TimestampOverride $fixedTs
+        if ($r.Status -ne 'OK') { throw ('Status esperado OK; got {0}' -f $r.Status) }
+        [string] $expected = Join-Path $tmpDest ('{0}_{1}_2.zip' -f $env:COMPUTERNAME, $fixedTs)
+        if ($r.ZipPath -ne $expected) { throw ('ZipPath esperado {0}; got {1}' -f $expected, $r.ZipPath) }
+    } finally {
+        Remove-Item -LiteralPath $tmpOut  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'
