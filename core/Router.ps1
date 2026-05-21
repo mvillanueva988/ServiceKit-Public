@@ -172,6 +172,7 @@ function Show-MainMenu {
         Write-Host ''
         Write-Host '  HERRAMIENTAS' -ForegroundColor DarkCyan
         Write-Host '  [T]  Herramientas externas'
+        Write-Host '  [L]  Empaquetar logs de esta PC  (para llevarse)'
         Write-Host '  [X]  Salir'
         Write-Host '  [U]  Desinstalar PCTk de esta PC (borra todo)' -ForegroundColor DarkRed
         Write-Host ''
@@ -233,6 +234,7 @@ function Invoke-MainMenuDispatch {
             Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
             return
         }
+        'L' { Invoke-ExportClientLogs; return }
         'T' { Show-ToolsMenu -MachineProfile $MachineProfile; return }
         'U' {
             $null = Invoke-UninstallToolkit
