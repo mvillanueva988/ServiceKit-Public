@@ -637,6 +637,149 @@ Test-SmokeFunction 'ExportClientLogs' 'export-existing-collide: base.zip existe 
     }
 }
 
+# ─── OOSU rework: Invoke-ProfilePrivacyStep (6 casos) ───────────────────────
+# Tests read-only: usan fixtures en memoria + shadowing de funciones.
+# Ningun test ejecuta OOSU10.exe real ni muta el sistema.
+
+Test-SmokeFunction 'OosuRework' 'oosu-rework-no-cfg: skip silencioso' {
+    [object[]] $script:_oosuAudit = @()
+    function Write-ActionAudit {
+        param($Action, $Status = 'Started', $Summary = '', $Details = $null)
+        $script:_oosuAudit += [PSCustomObject]@{ Action = $Action; Status = $Status }
+    }
+    $privacy = [PSCustomObject]@{}
+    $prof    = [PSCustomObject]@{ privacy = $privacy }
+    $r = Invoke-ProfilePrivacyStep -Profile $prof
+    if ($r.Path    -ne 'skipped') { throw ('Path esperado skipped; got {0}' -f $r.Path) }
+    if ($r.Success -ne $true)     { throw ('Success esperado $true; got {0}' -f $r.Success) }
+    [bool] $auditOk = $false
+    foreach ($a in $script:_oosuAudit) {
+        if ($a.Action -eq 'Privacy.OOSU.Apply' -and $a.Status -eq 'Skipped') { $auditOk = $true }
+    }
+    if (-not $auditOk) { throw 'Audit Privacy.OOSU.Apply Skipped no registrado' }
+}
+
+Test-SmokeFunction 'OosuRework' 'oosu-rework-cfg-missing: cfg no encontrado' {
+    [object[]] $script:_oosuAudit = @()
+    function Write-ActionAudit {
+        param($Action, $Status = 'Started', $Summary = '', $Details = $null)
+        $script:_oosuAudit += [PSCustomObject]@{ Action = $Action; Status = $Status }
+    }
+    $privacy = [PSCustomObject]@{ oosu10_cfg = 'nonexistent_smoke_test.cfg' }
+    $prof    = [PSCustomObject]@{ privacy = $privacy }
+    $r = Invoke-ProfilePrivacyStep -Profile $prof
+    if ($r.Success -ne $false) { throw ('Success esperado $false; got {0}' -f $r.Success) }
+    if ($r.Detail['Reason'] -ne 'cfg_not_found') {
+        throw ('Reason esperado cfg_not_found; got {0}' -f $r.Detail['Reason'])
+    }
+    [bool] $auditOk = $false
+    foreach ($a in $script:_oosuAudit) {
+        if ($a.Action -eq 'Privacy.OOSU.Apply' -and $a.Status -eq 'Failed') { $auditOk = $true }
+    }
+    if (-not $auditOk) { throw 'Audit Privacy.OOSU.Apply Failed no registrado' }
+}
+
+Test-SmokeFunction 'OosuRework' 'oosu-rework-oosu-available: aplica cfg, audit OK' {
+    [object[]] $script:_oosuAudit = @()
+    function Write-ActionAudit {
+        param($Action, $Status = 'Started', $Summary = '', $Details = $null)
+        $script:_oosuAudit += [PSCustomObject]@{ Action = $Action; Status = $Status }
+    }
+    function Test-ShutUp10Available { $true }
+    function Invoke-OOSU10Profile {
+        param([string]$Path, [int]$TimeoutSeconds = 120)
+        return [PSCustomObject]@{ Success = $true; Skipped = $false; Reason = '' }
+    }
+    $privacy = [PSCustomObject]@{ oosu10_cfg = 'basic.cfg' }
+    $prof    = [PSCustomObject]@{ privacy = $privacy }
+    $r = Invoke-ProfilePrivacyStep -Profile $prof
+    if ($r.Path    -ne 'oosu10') { throw ('Path esperado oosu10; got {0}' -f $r.Path) }
+    if ($r.Success -ne $true)    { throw ('Success esperado $true; got {0}' -f $r.Success) }
+    [bool] $auditOk = $false
+    foreach ($a in $script:_oosuAudit) {
+        if ($a.Action -eq 'Privacy.OOSU.Apply' -and $a.Status -eq 'OK') { $auditOk = $true }
+    }
+    if (-not $auditOk) { throw 'Audit Privacy.OOSU.Apply OK no registrado' }
+}
+
+Test-SmokeFunction 'OosuRework' 'oosu-rework-download-needed: descarga OK, luego aplica' {
+    [object[]] $script:_oosuAudit = @()
+    function Write-ActionAudit {
+        param($Action, $Status = 'Started', $Summary = '', $Details = $null)
+        $script:_oosuAudit += [PSCustomObject]@{ Action = $Action; Status = $Status }
+    }
+    function Test-ShutUp10Available { $false }
+    function Invoke-OOSUDownload {
+        return [PSCustomObject]@{ Success = $true; Error = ''; ExePath = 'C:\fake\OOSU10.exe' }
+    }
+    function Invoke-OOSU10Profile {
+        param([string]$Path, [int]$TimeoutSeconds = 120)
+        return [PSCustomObject]@{ Success = $true; Skipped = $false; Reason = '' }
+    }
+    $privacy = [PSCustomObject]@{ oosu10_cfg = 'basic.cfg' }
+    $prof    = [PSCustomObject]@{ privacy = $privacy }
+    $r = Invoke-ProfilePrivacyStep -Profile $prof
+    if ($r.Success -ne $true) { throw ('Success esperado $true; got {0}' -f $r.Success) }
+    [bool] $dlOk = $false; [bool] $applyOk = $false
+    foreach ($a in $script:_oosuAudit) {
+        if ($a.Action -eq 'Privacy.OOSU.Download' -and $a.Status -eq 'OK')    { $dlOk    = $true }
+        if ($a.Action -eq 'Privacy.OOSU.Apply'    -and $a.Status -eq 'OK')    { $applyOk = $true }
+    }
+    if (-not $dlOk)    { throw 'Audit Privacy.OOSU.Download OK no registrado' }
+    if (-not $applyOk) { throw 'Audit Privacy.OOSU.Apply OK no registrado' }
+}
+
+Test-SmokeFunction 'OosuRework' 'oosu-rework-download-fails: falla de descarga, sin fallback nativo' {
+    [object[]] $script:_oosuAudit = @()
+    function Write-ActionAudit {
+        param($Action, $Status = 'Started', $Summary = '', $Details = $null)
+        $script:_oosuAudit += [PSCustomObject]@{ Action = $Action; Status = $Status }
+    }
+    function Test-ShutUp10Available { $false }
+    function Invoke-OOSUDownload {
+        return [PSCustomObject]@{ Success = $false; Error = 'no internet'; ExePath = '' }
+    }
+    [bool] $script:_nativeInvoked = $false
+    function Start-PrivacyJob {
+        param([string]$Profile)
+        $script:_nativeInvoked = $true
+        throw 'Start-PrivacyJob NO debe invocarse tras falla de descarga'
+    }
+    $privacy = [PSCustomObject]@{ oosu10_cfg = 'basic.cfg' }
+    $prof    = [PSCustomObject]@{ privacy = $privacy }
+    $r = Invoke-ProfilePrivacyStep -Profile $prof
+    if ($r.Success -ne $false) { throw ('Success esperado $false; got {0}' -f $r.Success) }
+    if ($r.Detail['Reason'] -ne 'download_failed') {
+        throw ('Reason esperado download_failed; got {0}' -f $r.Detail['Reason'])
+    }
+    if ($script:_nativeInvoked) { throw 'Start-PrivacyJob fue invocado (fallback nativo NO debe ocurrir)' }
+    [bool] $auditOk = $false
+    foreach ($a in $script:_oosuAudit) {
+        if ($a.Action -eq 'Privacy.OOSU.Download' -and $a.Status -eq 'Failed') { $auditOk = $true }
+    }
+    if (-not $auditOk) { throw 'Audit Privacy.OOSU.Download Failed no registrado' }
+}
+
+Test-SmokeFunction 'OosuRework' 'oosu-rework-no-native-fallback: grep estructural' {
+    [string] $rRoot  = Split-Path -Parent $PSScriptRoot
+    [string] $peFile = Join-Path $rRoot 'core\ProfileEngine.ps1'
+    if (-not (Test-Path -LiteralPath $peFile)) { throw 'ProfileEngine.ps1 no encontrado' }
+    [string] $content = [System.IO.File]::ReadAllText($peFile)
+    $fnStart = $content.IndexOf('function Invoke-ProfilePrivacyStep')
+    if ($fnStart -lt 0) { throw 'Invoke-ProfilePrivacyStep no encontrada en ProfileEngine.ps1' }
+    # Buscar el cuerpo de la funcion: desde el { hasta el } de cierre al mismo nivel
+    $braceOpen  = $content.IndexOf('{', $fnStart)
+    [int] $depth = 0; [int] $fnEnd = $braceOpen
+    for ([int] $i = $braceOpen; $i -lt $content.Length; $i++) {
+        if ($content[$i] -eq '{') { $depth++ }
+        elseif ($content[$i] -eq '}') { $depth--; if ($depth -eq 0) { $fnEnd = $i; break } }
+    }
+    [string] $fnBody = $content.Substring($fnStart, $fnEnd - $fnStart + 1)
+    if ($fnBody -match 'Start-PrivacyJob') {
+        throw 'Start-PrivacyJob encontrado en Invoke-ProfilePrivacyStep (regresion: fallback nativo presente)'
+    }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'
