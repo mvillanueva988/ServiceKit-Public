@@ -637,6 +637,48 @@ Test-SmokeFunction 'ExportClientLogs' 'export-existing-collide: base.zip existe 
     }
 }
 
+# ─── ExportClientLogs: -TagOverride (2 casos) ────────────────────────────────
+
+Test-SmokeFunction 'ExportClientLogs' 'export-tag-override-skip-prompt: con -TagOverride, NO llama Read-Host' {
+    [string] $tmpOut  = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpOut 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-05-23.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        # Si Read-Host se invoca, el test explota: eso es lo que queremos verificar.
+        function Read-Host { throw 'Read-Host NO debe invocarse cuando se pasa -TagOverride' }
+        $r = Invoke-ExportClientLogs -TagOverride 'preuninstall' -OutputRootOverride $tmpOut -DestDirOverride $tmpDest
+        if ($r.Status -ne 'OK') { throw ('Status esperado OK; got {0}' -f $r.Status) }
+        [string] $zipName = [System.IO.Path]::GetFileNameWithoutExtension($r.ZipPath)
+        if ($zipName -notmatch '-preuninstall_') { throw ('ZipName debe contener -preuninstall_; got {0}' -f $zipName) }
+    } finally {
+        Remove-Item -LiteralPath $tmpOut  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ExportClientLogs' 'export-tag-override-sanitized: -TagOverride sanitiza igual que Read-Host' {
+    [string] $tmpOut  = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpOut 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-05-23.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Read-Host { throw 'Read-Host NO debe invocarse cuando se pasa -TagOverride' }
+        $r = Invoke-ExportClientLogs -TagOverride 'cliente/01 *<>' -OutputRootOverride $tmpOut -DestDirOverride $tmpDest
+        if ($r.Status -ne 'OK') { throw ('Status esperado OK; got {0}' -f $r.Status) }
+        [string] $zipName = [System.IO.Path]::GetFileNameWithoutExtension($r.ZipPath)
+        if ($zipName -notmatch 'cliente01') { throw ('ZipName debe contener cliente01 (tag sanitizado); got {0}' -f $zipName) }
+        if ($zipName -match '[/\\* <>]')    { throw ('ZipName contiene chars invalidos: {0}' -f $zipName) }
+    } finally {
+        Remove-Item -LiteralPath $tmpOut  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ─── OOSU rework: Invoke-ProfilePrivacyStep (6 casos) ───────────────────────
 # Tests read-only: usan fixtures en memoria + shadowing de funciones.
 # Ningun test ejecuta OOSU10.exe real ni muta el sistema.
@@ -777,6 +819,185 @@ Test-SmokeFunction 'OosuRework' 'oosu-rework-no-native-fallback: grep estructura
     [string] $fnBody = $content.Substring($fnStart, $fnEnd - $fnStart + 1)
     if ($fnBody -match 'Start-PrivacyJob') {
         throw 'Start-PrivacyJob encontrado en Invoke-ProfilePrivacyStep (regresion: fallback nativo presente)'
+    }
+}
+
+# ─── UninstallPreserve: Save-PreUninstallArtifacts (6 casos) ─────────────────
+# Testea la funcion extraida directamente, sin lanzar el deleter real.
+# Shadowing: Read-Host (dest de clients), Write-ActionAudit (no-op en smoke).
+
+Test-SmokeFunction 'UninstallPreserve' 'preserve-clients-and-snapshots: ambos presentes -> folder + zip' {
+    [string] $tmpRoot     = Join-Path $env:TEMP ('pctk-smoke-root-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpZipDest  = Join-Path $env:TEMP ('pctk-smoke-zip-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpCliDest  = Join-Path $env:TEMP ('pctk-smoke-cli-'  + [System.Guid]::NewGuid().ToString('N'))
+    # Fixtures
+    [string] $clientsDir  = Join-Path $tmpRoot 'output\clients\ClientA'
+    [string] $auditDir    = Join-Path $tmpRoot 'output\audit'
+    [string] $snapsDir    = Join-Path $tmpRoot 'output\snapshots'
+    New-Item -Path $clientsDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $auditDir   -ItemType Directory -Force | Out-Null
+    New-Item -Path $snapsDir   -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpZipDest -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $clientsDir 'run.log')           -Value 'log' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-05-23.jsonl')    -Value '{"Action":"test"}' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $snapsDir  '20260523-pre.json')  -Value '{"Phase":"pre"}' -Encoding UTF8
+    try {
+        function Read-Host { $script:_rhCalled = $true; $tmpCliDest }
+        function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+        $script:_rhCalled = $false
+        $r = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpZipDest
+        if ($null -eq $r)                    { throw 'Save-PreUninstallArtifacts devolvio $null' }
+        if (-not $script:_rhCalled)          { throw 'Read-Host no fue llamado (esperado para clients prompt)' }
+        # clients copiados al dest que Read-Host retorno
+        if (-not (Test-Path (Join-Path $tmpCliDest 'ClientA'))) {
+            throw ('clients\ClientA no encontrado en {0}' -f $tmpCliDest)
+        }
+        # audit copiado dentro del folder
+        if (-not (Test-Path (Join-Path $tmpCliDest 'audit'))) {
+            throw ('audit\ no encontrado en {0}' -f $tmpCliDest)
+        }
+        # zip generado con audit + snapshots
+        if ([string]::IsNullOrWhiteSpace($r.ZipPath) -or -not (Test-Path -LiteralPath $r.ZipPath)) {
+            throw ('ZipPath esperado existente; got "{0}"' -f $r.ZipPath)
+        }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [object[]] $entries = @()
+        $za = [System.IO.Compression.ZipFile]::OpenRead($r.ZipPath)
+        try { $entries = @($za.Entries | ForEach-Object { $_.FullName }) }
+        finally { $za.Dispose() }
+        [bool] $hasAudit = $false; [bool] $hasSnaps = $false
+        foreach ($e in $entries) {
+            if ($e -match '^audit')     { $hasAudit = $true }
+            if ($e -match '^snapshots') { $hasSnaps = $true }
+        }
+        if (-not $hasAudit) { throw 'Zip no contiene audit\' }
+        if (-not $hasSnaps) { throw 'Zip no contiene snapshots\' }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot    -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpZipDest -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpCliDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'UninstallPreserve' 'preserve-snapshots-only: sin clients -> SOLO zip, sin folder' {
+    [string] $tmpRoot    = Join-Path $env:TEMP ('pctk-smoke-root-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpZipDest = Join-Path $env:TEMP ('pctk-smoke-zip-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir   = Join-Path $tmpRoot 'output\audit'
+    [string] $snapsDir   = Join-Path $tmpRoot 'output\snapshots'
+    New-Item -Path $auditDir   -ItemType Directory -Force | Out-Null
+    New-Item -Path $snapsDir   -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpZipDest -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-05-23.jsonl')   -Value '{"Action":"test"}' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $snapsDir '20260523-pre.json')  -Value '{"Phase":"pre"}' -Encoding UTF8
+    try {
+        # Read-Host NO debe invocarse (no hay clients\)
+        function Read-Host { throw 'Read-Host NO debe invocarse sin clients\' }
+        function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+        $r = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpZipDest
+        if ($null -eq $r)          { throw 'Save-PreUninstallArtifacts devolvio $null' }
+        # NO debe haber carpeta de historial en Desktop
+        [string] $historial = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PCTk-historial-clientes'
+        if (Test-Path $historial)  { throw 'PCTk-historial-clientes fue creado en Desktop inesperadamente' }
+        # Zip SI debe existir
+        if ([string]::IsNullOrWhiteSpace($r.ZipPath) -or -not (Test-Path -LiteralPath $r.ZipPath)) {
+            throw ('ZipPath esperado existente; got "{0}"' -f $r.ZipPath)
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot    -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpZipDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'UninstallPreserve' 'preserve-empty-output: sin audit ni snapshots -> nada' {
+    [string] $tmpRoot    = Join-Path $env:TEMP ('pctk-smoke-root-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpZipDest = Join-Path $env:TEMP ('pctk-smoke-zip-'  + [System.Guid]::NewGuid().ToString('N'))
+    # Dirs vacios (sin archivos adentro)
+    New-Item -Path (Join-Path $tmpRoot 'output\audit')     -ItemType Directory -Force | Out-Null
+    New-Item -Path (Join-Path $tmpRoot 'output\snapshots') -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpZipDest -ItemType Directory -Force | Out-Null
+    try {
+        function Read-Host { throw 'Read-Host NO debe invocarse' }
+        function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+        $r = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpZipDest
+        if ($null -eq $r) { throw 'Save-PreUninstallArtifacts devolvio $null (no debia abortar)' }
+        [object[]] $zips = @(Get-ChildItem -LiteralPath $tmpZipDest -Filter '*.zip' -File -ErrorAction SilentlyContinue)
+        if ($zips.Count -gt 0) { throw ('No debia crearse zip con output vacio; encontrados {0}' -f $zips.Count) }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot    -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpZipDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'UninstallPreserve' 'preserve-no-output: sin output\ -> nada' {
+    [string] $tmpRoot    = Join-Path $env:TEMP ('pctk-smoke-root-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpZipDest = Join-Path $env:TEMP ('pctk-smoke-zip-'  + [System.Guid]::NewGuid().ToString('N'))
+    # NO crear nada en tmpRoot (ni siquiera output\)
+    New-Item -Path $tmpRoot    -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpZipDest -ItemType Directory -Force | Out-Null
+    try {
+        function Read-Host { throw 'Read-Host NO debe invocarse' }
+        function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+        $r = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpZipDest
+        if ($null -eq $r) { throw 'Save-PreUninstallArtifacts devolvio $null (no debia abortar sin output\)' }
+        [object[]] $zips = @(Get-ChildItem -LiteralPath $tmpZipDest -Filter '*.zip' -File -ErrorAction SilentlyContinue)
+        if ($zips.Count -gt 0) { throw ('No debia crearse zip sin output\; encontrados {0}' -f $zips.Count) }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot    -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpZipDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'UninstallPreserve' 'preserve-zip-fails-doesnt-abort-uninstall' {
+    [string] $tmpRoot    = Join-Path $env:TEMP ('pctk-smoke-root-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpZipDest = Join-Path $env:TEMP ('pctk-smoke-zip-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $snapsDir   = Join-Path $tmpRoot 'output\snapshots'
+    New-Item -Path $snapsDir   -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpZipDest -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $snapsDir '20260523-pre.json') -Value '{"Phase":"pre"}' -Encoding UTF8
+    try {
+        function Read-Host { throw 'Read-Host NO debe invocarse' }
+        function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+        function Compress-Archive { throw 'Error simulado de compresion' }
+        # No debe lanzar al caller aunque Compress-Archive falle
+        $r = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpZipDest
+        if ($null -eq $r)                      { throw 'Save-PreUninstallArtifacts devolvio $null (no debia abortar por zip fallido)' }
+        if (-not [string]::IsNullOrWhiteSpace($r.ZipPath) -and (Test-Path -LiteralPath $r.ZipPath)) {
+            throw 'No debia generarse zip cuando Compress-Archive falla'
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot    -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpZipDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'UninstallPreserve' 'preserve-clients-survives-zip-fail: si zip falla, folder igual queda' {
+    [string] $tmpRoot    = Join-Path $env:TEMP ('pctk-smoke-root-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpZipDest = Join-Path $env:TEMP ('pctk-smoke-zip-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpCliDest = Join-Path $env:TEMP ('pctk-smoke-cli-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $clientsDir = Join-Path $tmpRoot 'output\clients\ClientA'
+    [string] $snapsDir   = Join-Path $tmpRoot 'output\snapshots'
+    New-Item -Path $clientsDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $snapsDir   -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpZipDest -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $clientsDir 'run.log')          -Value 'log' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $snapsDir '20260523-pre.json')  -Value '{"Phase":"pre"}' -Encoding UTF8
+    try {
+        function Read-Host { $tmpCliDest }
+        function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+        function Compress-Archive { throw 'Error simulado de compresion' }
+        $r = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpZipDest
+        if ($null -eq $r) { throw 'Save-PreUninstallArtifacts devolvio $null' }
+        # clients debe haber quedado copiado (el copy ocurre ANTES del zip)
+        if (-not (Test-Path (Join-Path $tmpCliDest 'ClientA'))) {
+            throw ('clients\ClientA no encontrado en {0} (el copy de clients debe sobrevivir al zip fallido)' -f $tmpCliDest)
+        }
+        # zip NO debe existir
+        [object[]] $zips = @(Get-ChildItem -LiteralPath $tmpZipDest -Filter '*.zip' -File -ErrorAction SilentlyContinue)
+        if ($zips.Count -gt 0) { throw ('Zip no debia generarse cuando Compress-Archive falla; encontrados {0}' -f $zips.Count) }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot    -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpZipDest -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpCliDest -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
