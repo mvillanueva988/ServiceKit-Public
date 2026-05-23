@@ -73,6 +73,93 @@ Remove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue
 "@
 }
 
+# --- Save-PreUninstallArtifacts -----------------------------------------------
+# Preserva artifacts antes de borrar: clients\ + audit\ en carpeta plana del
+# Desktop (si habia clients\), y zip de audit\ + snapshots\ via [L] siempre.
+# Devuelve $null si el copy de clients\ fallo (senial de abort para el caller).
+# $ZipDestOverride permite redirigir el zip a un dir arbitrario (usado en tests).
+function Save-PreUninstallArtifacts {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $InstallRoot,
+        [string] $ZipDestOverride = ''
+    )
+
+    [string] $clientsDir = Join-Path $InstallRoot 'output\clients'
+    [string] $auditDir   = Join-Path $InstallRoot 'output\audit'
+    [string] $preserveDest  = ''
+    [string] $auditCopiedTo = ''
+
+    # Bloque A: preservar clients\ + audit\ en carpeta plana del Desktop.
+    if (Test-Path $clientsDir -PathType Container) {
+        [string] $defaultDest = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PCTk-historial-clientes'
+        Write-Host ''
+        Write-Host ('  Historial de clientes: {0}' -f $clientsDir) -ForegroundColor Cyan
+        [string] $rawDest = (Read-Host ("  Ruta de copia (Enter = {0})" -f $defaultDest)).Trim()
+        $preserveDest = if ([string]::IsNullOrWhiteSpace($rawDest)) { $defaultDest } else { $rawDest }
+
+        try {
+            if (Test-Path $preserveDest) { Remove-Item $preserveDest -Recurse -Force }
+            Copy-Item -Path $clientsDir -Destination $preserveDest -Recurse -Force
+            Write-Host ('  [OK] Historial copiado a: {0}' -f $preserveDest) -ForegroundColor Green
+        } catch {
+            Write-Host ('  [!] No se pudo copiar el historial: {0}' -f $_.Exception.Message) -ForegroundColor Red
+            Write-Host '  Abortando sin borrar nada.' -ForegroundColor DarkGray
+            return $null
+        }
+    }
+
+    # Audit escrita ANTES del zip para que Toolkit.Uninstall quede incluida.
+    [string] $auditSummary = if ([string]::IsNullOrWhiteSpace($preserveDest)) { 'sin preservar' } else { $preserveDest }
+    Write-ActionAudit -Action 'Toolkit.Uninstall' -Status 'Started' -Summary $auditSummary
+
+    # Preservar audit\ dentro del folder plano (solo si entro al bloque A).
+    if (-not [string]::IsNullOrWhiteSpace($preserveDest)) {
+        if (Test-Path $auditDir -PathType Container) {
+            try {
+                [string] $auditExportDest = Join-Path $preserveDest 'audit'
+                Copy-Item -Path $auditDir -Destination $auditExportDest -Recurse -Force
+                Write-Host ('  [OK] Audit copiado a: {0}' -f $auditExportDest) -ForegroundColor Green
+                $auditCopiedTo = $auditExportDest
+            } catch {
+                Write-Host ('  [!] No se pudo copiar el audit: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+            }
+        }
+    }
+
+    # Bloque B: zip audit + snapshots via [L] (sin gate por clients\).
+    [string] $zipPath = ''
+    try {
+        Write-Host ''
+        Write-Host '  Empaquetando audit + snapshots...' -ForegroundColor Cyan
+        [string] $outputRoot = Join-Path $InstallRoot 'output'
+        [hashtable] $exportParams = @{
+            TagOverride        = 'preuninstall'
+            OutputRootOverride = $outputRoot
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ZipDestOverride)) {
+            $exportParams['DestDirOverride'] = $ZipDestOverride
+        }
+        [PSCustomObject] $zipResult = Invoke-ExportClientLogs @exportParams
+        if ($zipResult.Status -eq 'OK') {
+            Write-Host ('  [OK] Zip generado: {0}' -f $zipResult.ZipPath) -ForegroundColor Green
+            $zipPath = $zipResult.ZipPath
+        } elseif ($zipResult.Status -eq 'Empty') {
+            Write-Host '  [i] Sin audit ni snapshots para empaquetar.' -ForegroundColor DarkGray
+        } else {
+            Write-Host ('  [!] No se pudo empaquetar (Status={0}). Borrado continua.' -f $zipResult.Status) -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host ('  [!] Falla al empaquetar logs: {0}. Borrado continua.' -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+
+    return [PSCustomObject]@{
+        ClientsCopiedTo = $preserveDest
+        AuditCopiedTo   = $auditCopiedTo
+        ZipPath         = $zipPath
+    }
+}
+
 # --- Invoke-UninstallToolkit --------------------------------------------------
 # Handler del menu [U]. Devuelve $true si el deleter fue spawneado (el caller
 # debe salir inmediatamente). Devuelve $false si fue cancelado o fallo (continuar
@@ -117,27 +204,6 @@ function Invoke-UninstallToolkit {
         return $false
     }
 
-    # Preservar output\clients\ fuera del root ANTES de borrar.
-    [string] $clientsDir  = Join-Path $installRoot 'output\clients'
-    [string] $preserveDest = ''
-    if (Test-Path $clientsDir -PathType Container) {
-        [string] $defaultDest = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PCTk-historial-clientes'
-        Write-Host ''
-        Write-Host ('  Historial de clientes: {0}' -f $clientsDir) -ForegroundColor Cyan
-        [string] $rawDest = (Read-Host ("  Ruta de copia (Enter = {0})" -f $defaultDest)).Trim()
-        $preserveDest = if ([string]::IsNullOrWhiteSpace($rawDest)) { $defaultDest } else { $rawDest }
-
-        try {
-            if (Test-Path $preserveDest) { Remove-Item $preserveDest -Recurse -Force }
-            Copy-Item -Path $clientsDir -Destination $preserveDest -Recurse -Force
-            Write-Host ('  [OK] Historial copiado a: {0}' -f $preserveDest) -ForegroundColor Green
-        } catch {
-            Write-Host ('  [!] No se pudo copiar el historial: {0}' -f $_.Exception.Message) -ForegroundColor Red
-            Write-Host '  Abortando sin borrar nada.' -ForegroundColor DarkGray
-            return $false
-        }
-    }
-
     # Generar el script desprendido (funcion pura, sin side-effects).
     [string] $ts          = (Get-Date -Format 'yyyyMMdd-HHmmss')
     [string] $deleterPath = Join-Path $env:TEMP ('pctk-uninstall-' + $ts + '.ps1')
@@ -152,6 +218,14 @@ function Invoke-UninstallToolkit {
         return $false
     }
 
+    # Preservar artifacts (clients + audit en carpeta + zip snapshots).
+    # Devuelve $null si el copy de clients\ fallo (abort).
+    [PSCustomObject] $saveResult = Save-PreUninstallArtifacts -InstallRoot $installRoot
+    if ($null -eq $saveResult) {
+        if (Test-Path $deleterPath) { Remove-Item $deleterPath -Force -ErrorAction SilentlyContinue }
+        return $false
+    }
+
     # Lanzar detached: Hidden, fuera del proceso PCTk, sin bloquear.
     try {
         Start-Process -FilePath 'powershell.exe' -ArgumentList @(
@@ -162,26 +236,6 @@ function Invoke-UninstallToolkit {
         Write-Host ('  [!] No se pudo lanzar el desinstalador: {0}' -f $_.Exception.Message) -ForegroundColor Red
         if (Test-Path $deleterPath) { Remove-Item $deleterPath -Force -ErrorAction SilentlyContinue }
         return $false
-    }
-
-    # Audit escrita ANTES de copiar output\audit\ para que Toolkit.Uninstall
-    # quede incluida en el export (si no se preservo, queda solo en el root borrado).
-    [string] $auditSummary = if ([string]::IsNullOrWhiteSpace($preserveDest)) { 'sin preservar' } else { $preserveDest }
-    Write-ActionAudit -Action 'Toolkit.Uninstall' -Status 'Started' -Summary $auditSummary
-
-    # Preservar output\audit\ al mismo destino que clients (misma logica condicional).
-    # El deleter ya fue lanzado: si falla el copy, avisar pero no abortar.
-    if (-not [string]::IsNullOrWhiteSpace($preserveDest)) {
-        [string] $auditDir = Join-Path $installRoot 'output\audit'
-        if (Test-Path $auditDir -PathType Container) {
-            try {
-                [string] $auditExportDest = Join-Path $preserveDest 'audit'
-                Copy-Item -Path $auditDir -Destination $auditExportDest -Recurse -Force
-                Write-Host ('  [OK] Audit copiado a: {0}' -f $auditExportDest) -ForegroundColor Green
-            } catch {
-                Write-Host ('  [!] No se pudo copiar el audit: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
-            }
-        }
     }
 
     [string] $logHint = $deleterPath -replace '\.ps1$', '.log'
