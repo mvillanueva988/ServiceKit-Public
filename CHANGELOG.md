@@ -4,6 +4,10 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-05-23
+
+Patch: fix de bug confirmado en cliente real — `[U]` perdía snapshots del workflow diagnóstico-only.
+
 ### Fixed
 
 - **P1: `[U]` perdía `output\snapshots\` silenciosamente (bug confirmado en cliente real, 2026-05-21).** El bloque "preservar historial" de `Invoke-UninstallToolkit` estaba gateado por la existencia de `output\clients\`; en el workflow diagnóstico-only (solo `[3]` Pre, sin perfil), ese directorio no existe, el bloque se saltaba íntegramente y los snapshots se borraban junto con la instalación sin ningún aviso. Fix en dos capas: (1) `modules/ExportClientLogs.ps1` — nuevo parámetro `-TagOverride [string]` que omite el `Read-Host` interactivo cuando se pasa explícitamente (comportamiento del `[L]` standalone sin cambio). (2) `modules/UninstallToolkit.ps1` — nueva función `Save-PreUninstallArtifacts` extrae toda la lógica de preservación; el bloque (A) mantiene la UX de `output\clients\` + `output\audit\` en carpeta plana en Desktop (sin regresión); el bloque (B) NUEVO invoca `Invoke-ExportClientLogs -TagOverride 'preuninstall'` incondicionalmente, generando `<HOST>-preuninstall_<ts>.zip` en Desktop con `audit\` + `snapshots\`. Si no había ningún artifact (PCTk recién instalado), `[L]` retorna `Status='Empty'` silenciosamente y el `[U]` prosigue. Fallo del zip no aborta la desinstalación (se avisa y continúa). Gate: Sandbox limpia pendiente.
