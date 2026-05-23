@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 function Invoke-ExportClientLogs {
     [CmdletBinding()]
@@ -6,7 +6,8 @@ function Invoke-ExportClientLogs {
         # Sobreescrito en tests para no tocar la instalacion real
         [Parameter()] [string] $OutputRootOverride = '',
         [Parameter()] [string] $DestDirOverride    = '',
-        [Parameter()] [string] $TimestampOverride  = ''
+        [Parameter()] [string] $TimestampOverride  = '',
+        [Parameter()] [string] $TagOverride        = ''
     )
 
     [string] $outputRoot = if ([string]::IsNullOrEmpty($OutputRootOverride)) {
@@ -41,7 +42,11 @@ function Invoke-ExportClientLogs {
     }
 
     # Paso 4: tag opcional
-    [string] $rawTag = (Read-Host '  Tag para el zip (Enter para omitir)').Trim()
+    [string] $rawTag = if ($PSBoundParameters.ContainsKey('TagOverride')) {
+        $TagOverride
+    } else {
+        (Read-Host '  Tag para el zip (Enter para omitir)').Trim()
+    }
     [string] $tag    = $rawTag -replace '[^A-Za-z0-9_-]', ''
     if ($tag.Length -gt 32) { $tag = $tag.Substring(0, 32) }
 
