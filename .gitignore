@@ -57,7 +57,6 @@ data/oosu10-profiles/_*.cfg
 node_modules/
 .DS_Store
 TO-DOS.md
-CLAUDE.md
 /research.claude/
 commands.html
 .claude/
