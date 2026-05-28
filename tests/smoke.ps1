@@ -196,22 +196,14 @@ Test-SmokeFunction 'ToolkitSupport' 'Convert-ToolkitDateDisplay' {
     Convert-ToolkitDateDisplay -Value (Get-Date)
 }
 
-# ─── Stage 2: ProfileEngine (read-only: path + import/validate) ──────────────
-Test-SmokeFunction 'ProfileEngine' 'Get-AutoProfilePath'  { Get-AutoProfilePath -UseCase generic -Tier Mid }
-Test-SmokeFunction 'ProfileEngine' 'Import generic_low'   { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic -Tier Low) }
-Test-SmokeFunction 'ProfileEngine' 'Import generic_mid'   { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic -Tier Mid) }
-Test-SmokeFunction 'ProfileEngine' 'Import generic_high'  { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic -Tier High) }
-
-# ─── Stage 3: Office / Study / Multimedia recipes (read-only: import/validate) ─
-Test-SmokeFunction 'ProfileEngine' 'Import office_low'      { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase office -Tier Low) }
-Test-SmokeFunction 'ProfileEngine' 'Import office_mid'      { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase office -Tier Mid) }
-Test-SmokeFunction 'ProfileEngine' 'Import office_high'     { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase office -Tier High) }
-Test-SmokeFunction 'ProfileEngine' 'Import study_low'       { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase study -Tier Low) }
-Test-SmokeFunction 'ProfileEngine' 'Import study_mid'       { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase study -Tier Mid) }
-Test-SmokeFunction 'ProfileEngine' 'Import study_high'      { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase study -Tier High) }
-Test-SmokeFunction 'ProfileEngine' 'Import multimedia_low'  { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase multimedia -Tier Low) }
-Test-SmokeFunction 'ProfileEngine' 'Import multimedia_mid'  { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase multimedia -Tier Mid) }
-Test-SmokeFunction 'ProfileEngine' 'Import multimedia_high' { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase multimedia -Tier High) }
+# ─── ProfileEngine v2.0: 3 recetas auto (read-only: path + import/validate) ──
+# v2.0 consolido los 12 archivos (4 use-cases x 3 tiers) en 3 archivos
+# (generic/work/multimedia), eliminando _tier del JSON. Office+study fusionados
+# a 'work'. Multimedia_high (Full visuals = bug) fixeado a Balanced.
+Test-SmokeFunction 'ProfileEngine' 'Get-AutoProfilePath'  { Get-AutoProfilePath -UseCase generic }
+Test-SmokeFunction 'ProfileEngine' 'Import generic'       { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase generic) }
+Test-SmokeFunction 'ProfileEngine' 'Import work'          { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase work) }
+Test-SmokeFunction 'ProfileEngine' 'Import multimedia'    { Import-AutoProfile -Path (Get-AutoProfilePath -UseCase multimedia) }
 
 # ─── Stage 0 new modules (read-only paths only) ───────────────────────────────
 Test-SmokeFunction 'CoreIsolation' 'Get-CoreIsolationStatus' { Get-CoreIsolationStatus }

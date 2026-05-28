@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Stage 4 MVP functional validation. Corre Invoke-NamedProfile end-to-end
@@ -54,13 +54,13 @@ Log ''
 # Release.ps1 lo excluye del ZIP; el script borra el archivo al final.
 [string] $recipePath = Join-Path (Get-NamedProfileDir) '_validate-run.json'
 $recipe = [PSCustomObject]@{
-    _schema_version = '1.0'; _kind = 'named'; _name = 'VALIDATE Stage4 (sandbox)'
+    _schema_version = '2.0'; _kind = 'named'; _name = 'VALIDATE Stage4 (sandbox)'
     _created = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'); _last_applied = $null
     _hardware_snapshot = [PSCustomObject]@{ Tier='High'; CpuName='x'; RamMB=1; Manufacturer='x'; IsLaptop=$false }
-    _use_case = 'named'; _tier = 'high'; _description = 'fixture validacion Stage 4'
+    _use_case = 'named'; _description = 'fixture validacion Stage 4'
     _rationale = 'toggles representativos seguros en Sandbox efimero'
     services = [PSCustomObject]@{ disable = @('Fax','RemoteRegistry','DiagTrack') }
-    performance = [PSCustomObject]@{ visual_profile='Balanced'; power_plan=[PSCustomObject]@{_future=$true}; system_tweaks=[PSCustomObject]@{_future=$true} }
+    performance = [PSCustomObject]@{ visual_profile='Balanced' }
     privacy = [PSCustomObject]@{ level='medium'; oosu10_cfg='medium.cfg'; fallback='native' }
     cleanup = [PSCustomObject]@{ clear_temp=$true }
     startup = [PSCustomObject]@{ report_only=$true }

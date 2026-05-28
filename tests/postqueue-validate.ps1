@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     PCTk post-queue batch regression rig. Runs INSIDE Windows Sandbox (ephemeral VM).
@@ -60,15 +60,15 @@ Log ''
 # T1: Invoke-AutoProfile -ShowProgress
 # Progress UX (R11): pipeline completes, Status correct, DurationSec reported,
 # PRE/POST snapshots, Compare != N/A (shape intact), ClientRun folder created.
-# Uses existing data/profiles/auto/generic_mid.json (no extra fixture needed).
+# Uses existing data/profiles/auto/generic.json (v2.0 schema, no extra fixture needed).
 # =============================================================================
 Log '[T1] Invoke-AutoProfile -ShowProgress (progress UX + pipeline end-to-end)'
 
 [PSCustomObject] $autoProf = $null
 try {
-    [string] $apPath = Get-AutoProfilePath -UseCase 'generic' -Tier 'Mid'
+    [string] $apPath = Get-AutoProfilePath -UseCase 'generic'
     $autoProf = Import-AutoProfile -Path $apPath
-    Pass ("Import-AutoProfile OK: generic_mid.json")
+    Pass ("Import-AutoProfile OK: generic.json")
 } catch { Fail ("Import-AutoProfile: {0}" -f $_.Exception.Message) }
 
 [PSCustomObject] $autoResult = $null
@@ -151,22 +151,17 @@ Log '[T2] Invoke-NamedProfile -Unattended (named profile + gaming tweaks headles
 [string] $namedFixPath = Join-Path $namedDir '_postqueue-named.json'
 
 $namedFixObj = [PSCustomObject]@{
-    _schema_version    = '1.0'
+    _schema_version    = '2.0'
     _kind              = 'named'
     _name              = 'PCTk PostQueue Test (sandbox)'
     _created           = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
     _last_applied      = $null
     _hardware_snapshot = [PSCustomObject]@{ Tier='High'; CpuName='x'; RamMB=1; Manufacturer='x'; IsLaptop=$false }
     _use_case          = 'named'
-    _tier              = 'high'
     _description       = 'Post-queue regression fixture (named profile)'
     _rationale         = 'Validates named-profile pipeline and gaming_tweaks skip in sandbox'
     services           = [PSCustomObject]@{ disable = @('Fax','RemoteRegistry','DiagTrack') }
-    performance        = [PSCustomObject]@{
-        visual_profile = 'Balanced'
-        power_plan     = [PSCustomObject]@{ _future = $true }
-        system_tweaks  = [PSCustomObject]@{ _future = $true }
-    }
+    performance        = [PSCustomObject]@{ visual_profile = 'Balanced' }
     privacy            = [PSCustomObject]@{ level = 'medium'; oosu10_cfg = 'medium.cfg'; fallback = 'native' }
     cleanup            = [PSCustomObject]@{ clear_temp = $true }
     startup            = [PSCustomObject]@{ report_only = $true }

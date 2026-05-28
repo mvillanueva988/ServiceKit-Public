@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Stage 3 functional validation. Runs Invoke-AutoProfile end-to-end for
@@ -45,22 +45,23 @@ try {
 
 try {
     $mp = Get-MachineProfile
-    $tier = switch ($mp.Tier) { 'Low'{'Low'} 'High'{'High'} default {'Mid'} }
     Log ("  MachineProfile: Tier={0}  IsVM={1}  Vendor={2}" -f $mp.Tier, $mp.IsVirtualMachine, $mp.VmVendor)
-} catch { Fail ("Get-MachineProfile: {0}" -f $_.Exception.Message); $tier = 'Mid' }
+} catch { Fail ("Get-MachineProfile: {0}" -f $_.Exception.Message) }
 Log ''
 
-[string[]] $useCases = @('office','study','multimedia')
+# v2.0: use-cases son work + multimedia (office y study fusionados a work).
+# Generic se valida en smoke; aqui se ejercitan los que mutan via Invoke-AutoProfile.
+[string[]] $useCases = @('work','multimedia')
 $statusByUc = @{}
 
 foreach ($uc in $useCases) {
     Log ("[{0}] use-case '{1}'" -f ($useCases.IndexOf($uc)+1), $uc)
     try {
-        $path = Get-AutoProfilePath -UseCase $uc -Tier $tier
+        $path = Get-AutoProfilePath -UseCase $uc
         if (-not (Test-Path $path)) { Fail ("receta no existe: {0}" -f $path); continue }
         $prof = Import-AutoProfile -Path $path
         if ([string]$prof._use_case -ne $uc) { Fail ("_use_case='{0}' != '{1}'" -f $prof._use_case, $uc); continue }
-        Pass ("Import-AutoProfile OK ({0}_{1}.json, schema {2})" -f $uc, $tier.ToLower(), $prof._schema_version)
+        Pass ("Import-AutoProfile OK ({0}.json, schema {1})" -f $uc, $prof._schema_version)
 
         $r = Invoke-AutoProfile -Profile $prof -MachineProfile $mp -ClientSlug ("test-$uc") -SkipRestorePoint
         $statusByUc[$uc] = $r.Status

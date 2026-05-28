@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Non-interactive harness for Stage 2 re-test (post-fix P0).
@@ -53,15 +53,15 @@ Write-Host "    Tier resolved: $tierLabel"
 Write-Host ""
 
 # Step 3: Resolve profile path
-Write-Host "[2] Get-AutoProfilePath -UseCase generic -Tier $tierLabel ..."
-$profilePath = Get-AutoProfilePath -UseCase generic -Tier $tierLabel
+Write-Host "[2] Get-AutoProfilePath -UseCase generic (v2.0: sin tier en el path; tier HW=$tierLabel) ..."
+$profilePath = Get-AutoProfilePath -UseCase generic
 Write-Host "    Path: $profilePath"
 Write-Host ""
 
 # Step 4: Import profile
 Write-Host "[3] Import-AutoProfile -Path $profilePath ..."
 $profile = Import-AutoProfile -Path $profilePath
-Write-Host "    Schema: $($profile._schema_version)  UseCase: $($profile._use_case)  Tier: $($profile._tier)"
+Write-Host "    Schema: $($profile._schema_version)  UseCase: $($profile._use_case)  (tier HW autodetectado: $tierLabel)"
 Write-Host ""
 
 # Step 5: Invoke full pipeline (-SkipRestorePoint: Sandbox has System Restore off;
