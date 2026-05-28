@@ -17,6 +17,11 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
   - `tests/stage3-validate.ps1`, `tests/stage2-harness.ps1`, `tests/stage4-validate.ps1`, `tests/postqueue-validate.ps1`: actualizados al shape v2.0.
 - **Fix (bug latente desde v2.0)**: `multimedia_high.json` tenía `visual_profile: "Full"` que invocaba `Set-FullOptimizedVisuals` (Windows "Adjust for best performance" = apaga ClearType + thumbnails + drag-full-windows). Contraintuitivo para el use-case streaming. La nueva `multimedia.json` aplica `Balanced` para todos los casos (preserva ClearType y thumbnails — preview de archivos de video importa).
 
+### Notes
+
+- **`meta.json` del cliente — `schema_version` cambia, shape no**. El campo `schema_version` del `output/clients/<slug>_<ts>/meta.json` se hereda del `_schema_version` del recipe aplicado. Post v2.0, los `meta.json` nuevos tendrán `schema_version: "2.0"`. Las 11 keys del meta.json (`client`, `date`, `computer_name`, `anydesk_id`, `tier`, `use_case`, `schema_version`, `compare_score`, `status`, `amount_charged_ars`, `notes`) **NO cambian** — solo el label. Si un agregador externo lee meta.json y depende del valor literal `"1.0"` para algo, va a tener que aceptar `"2.0"` como sinónimo (mismo shape).
+- **`use_case` en meta.json**: post v2.0 los valores válidos son `generic` / `work` / `multimedia` / `named`. Los `meta.json` históricos pueden tener `office` / `study` — son inmutables (audit del pasado) y siguen siendo legibles.
+
 ## [2.1.3] - 2026-05-23
 
 Patch: fix de bug confirmado en cliente real — `[U]` perdía snapshots del workflow diagnóstico-only.

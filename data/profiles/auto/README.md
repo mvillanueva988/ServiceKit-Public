@@ -27,3 +27,7 @@ Resultado: 12 → 3 archivos. Schema bumpeado a `_schema_version: "2.0"`. `_tier
 ## Recetas nombradas
 
 Las recetas "nombradas" (rama Stage 4 / gaming personalizado) viven en `data/profiles/named/` y usan `_use_case: "named"`. Comparten el mismo schema v2.0.
+
+## Efecto sobre `output/clients/*/meta.json`
+
+El `meta.json` que escribe `Invoke-AutoProfile` hereda `schema_version` del recipe aplicado. Post v2.0, los `meta.json` nuevos llevan `schema_version: "2.0"`. Las 11 keys del meta.json (`client`, `date`, `computer_name`, `anydesk_id`, `tier`, `use_case`, `schema_version`, `compare_score`, `status`, `amount_charged_ars`, `notes`) **NO cambian** — solo el label. Los `meta.json` históricos con `schema_version: "1.0"` y `use_case: office`/`study` siguen siendo legibles (son audit del pasado, inmutables).

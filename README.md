@@ -34,13 +34,12 @@ Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mvillanueva988/Service
 
 ## Qué hace
 
-Optimizador por perfiles: el técnico elige el use-case del cliente desde el menú, el toolkit detecta el tier de hardware (Low/Mid/High) y aplica una receta pre-fabricada con snapshot PRE/POST automatizado.
+Optimizador por perfiles: el técnico elige el use-case del cliente desde el menú y el toolkit aplica una receta pre-fabricada con snapshot PRE/POST automatizado. La diferenciación por hardware (laptop vs desktop, RAM ≤ 8 GB, etc.) la aplica el módulo `Performance` al ejecutarse — no hay que elegir tier.
 
 **Use-cases disponibles:**
 - **Generic** — PC sin contexto claro de uso (receta neutra y segura)
-- **Office** — trabajo administrativo con Office, Outlook, Teams
-- **Study** — estudiante con browser pesado y videollamadas
-- **Multimedia** — streaming de series, deportes y películas
+- **Work** — trabajo administrativo o estudio: Office, Outlook, Teams, browser pesado, videollamadas, impresión
+- **Multimedia** — streaming de series, deportes y películas (preserva Xbox/Game Pass casual)
 
 **Cada ejecución incluye:**
 - **Debloat**: servicios innecesarios deshabilitados según use-case (no toca impresión, VPN ni Xbox si el use-case los necesita)
