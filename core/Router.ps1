@@ -1259,10 +1259,9 @@ function Invoke-ApplyAutoProfile {
     Write-Host '  ================================================' -ForegroundColor DarkCyan
     Write-Host ("  Tier detectado: {0}" -f $detectedTier) -ForegroundColor Yellow
     Write-Host ''
-    Write-Host '  [1]  Generic         (disponible)'
-    Write-Host '  [2]  Office          (trabajo administrativo: Office/Outlook/Teams)'
-    Write-Host '  [3]  Study           (estudiante: browser pesado, videollamadas)'
-    Write-Host '  [4]  Multimedia      (streaming: series/deportes/peliculas)'
+    Write-Host '  [1]  Generic         (PC de servicio sin contexto claro)'
+    Write-Host '  [2]  Work            (oficina/estudio: Office/Outlook/Teams, browser, impresion)'
+    Write-Host '  [3]  Multimedia      (streaming: series/deportes/peliculas, Game Pass casual)'
     Write-Host '  [B]  Volver'
     Write-Host ''
     [string] $ucChoice = (Read-Host '  Selecciona').Trim().ToUpperInvariant()
@@ -1271,15 +1270,13 @@ function Invoke-ApplyAutoProfile {
     switch ($ucChoice) {
         'B'     { return }
         '1'     { $useCase = 'generic' }
-        '2'     { $useCase = 'office' }
-        '3'     { $useCase = 'study' }
-        '4'     { $useCase = 'multimedia' }
+        '2'     { $useCase = 'work' }
+        '3'     { $useCase = 'multimedia' }
         default { Write-Host '  Opcion invalida.' -ForegroundColor Red; return }
     }
 
-    # ── Cargar receta para el use-case y tier detectado ───────────────────────
-    [string] $tierArg = switch ($detectedTier.ToLowerInvariant()) { 'low' { 'Low' } 'high' { 'High' } default { 'Mid' } }
-    [string] $profPath = Get-AutoProfilePath -UseCase $useCase -Tier $tierArg
+    # ── Cargar receta para el use-case (v2.0: sin tier en el path) ────────────
+    [string] $profPath = Get-AutoProfilePath -UseCase $useCase
 
     [string] $auditAction = ('Profile.Apply.' + (([string]$useCase).Substring(0,1).ToUpperInvariant() + ([string]$useCase).Substring(1)))
 

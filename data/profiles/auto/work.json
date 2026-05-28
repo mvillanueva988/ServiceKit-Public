@@ -1,0 +1,32 @@
+{
+  "_schema_version": "2.0",
+  "_use_case": "work",
+  "_description": "PC de trabajo (oficina, estudio, administrativo: Office/Outlook/Teams + browser pesado + impresion de documentos)",
+  "_rationale": "Prioriza respuesta y limpieza para uso productivo (Office/Outlook/Teams, browser con muchas pestanas, videollamadas, impresion). Deshabilita Xbox (no es PC de juego) y telemetria. Preserva Spooler/PrintNotify (la oficina/estudiante imprime) y RemoteAccess (VPN corporativa). Privacy medium: baja telemetria mas que Generic sin tocar funcionalidad critica de trabajo. La divergencia por hardware (laptop vs desktop, RAM <=8GB) la hace el modulo Performance al detectarlo. Consolida los antiguos use-cases office y study (eran identicos en runtime; v2.0 2026-05-27).",
+
+  "services": {
+    "disable": [
+      "Fax", "WMPNetworkSvc", "RemoteRegistry", "DiagTrack", "dmwappushservice",
+      "XblAuthManager", "XblGameSave", "XboxNetApiSvc", "XboxGipSvc"
+    ]
+  },
+
+  "performance": {
+    "visual_profile": "Balanced"
+  },
+
+  "privacy": {
+    "level": "medium",
+    "oosu10_cfg": "medium.cfg",
+    "fallback": "native",
+    "_note": "Aplica data/oosu10-profiles/medium.cfg via Invoke-OOSU10Profile. Si OOSU10.exe falta, el toolkit lo descarga automaticamente y luego aplica el cfg. Si la descarga falla, se reporta Privacidad NO aplicada con motivo download_failed y el perfil sigue. Medium apaga telemetria, Bing, feedback, activity sin tocar OneDrive."
+  },
+
+  "cleanup": { "clear_temp": true },
+
+  "startup": {
+    "auto_disable_known_bloat": false,
+    "report_only": true,
+    "_note": "Solo lista startup en el preview/snapshot. Auto-disable diferido (backlog #11)."
+  }
+}

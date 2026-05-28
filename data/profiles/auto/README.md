@@ -1,14 +1,29 @@
 # `data/profiles/auto/`
 
-Recetas pre-fabricadas que vienen en el ZIP del toolkit. Se popula en Stage 2/3.
+Recetas pre-fabricadas que vienen en el ZIP del toolkit. Las consume el engine en `core/ProfileEngine.ps1` (use-case elegido por Mateo desde el menú [1]).
 
-Esquema: `<use-case>_<tier>.json`
+## Esquema (v2.0, 2026-05-27)
+
+`<use-case>.json` (sin tier en el nombre):
 
 ```
-generic_low.json    generic_mid.json    generic_high.json
-office_low.json     office_mid.json     office_high.json
-study_low.json      study_mid.json      study_high.json
-multimedia_low.json multimedia_mid.json multimedia_high.json
+generic.json
+work.json
+multimedia.json
 ```
 
-Stage 1 deja la carpeta vacía intencionalmente — el `ProfileEngine` se construye en Stage 2.
+3 archivos = 3 use-cases distinguibles. El tier de hardware (Low/Mid/High) detectado por `Get-MachineProfile` NO afecta qué archivo se carga; la diferenciación por hardware la aplica el módulo `Performance` al ejecutarse (laptop vs desktop por chassis, `SvcHostSplitThreshold` si RAM ≤ 8 GB, hibernación off, GameDVR off, shutdown timeout, etc.).
+
+## Cambio desde v1.0 (mayo 2026)
+
+En v1.0 había 12 archivos (`<use_case>_<tier>.json` con 4 use-cases × 3 tiers). El audit 2026-05-27 (`_local-dev/recipes-audit.md`) demostró que:
+
+- 11 de 12 tenían contenido funcional idéntico (todos `visual_profile=Balanced`, mismos services por use-case, misma cfg). El único distinto era `multimedia_high` con `visual_profile=Full`, contraintuitivo al use-case (apagaba ClearType + thumbnails en una PC de streaming) — fixeado a Balanced.
+- `office_*` y `study_*` (6 archivos) eran runtime-idénticos. Fusionados a `work.json`.
+- El tier sólo se usaba para validación de schema y display en preview, no condicionaba ningún tweak en el JSON (los bloques `power_plan` y `system_tweaks` estaban como `_future: true` y nunca se implementaron).
+
+Resultado: 12 → 3 archivos. Schema bumpeado a `_schema_version: "2.0"`. `_tier` removido. Whitelist `_use_case`: `generic|work|multimedia|named`.
+
+## Recetas nombradas
+
+Las recetas "nombradas" (rama Stage 4 / gaming personalizado) viven en `data/profiles/named/` y usan `_use_case: "named"`. Comparten el mismo schema v2.0.

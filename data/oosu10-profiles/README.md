@@ -4,9 +4,9 @@ Perfiles XML de O&O ShutUp10++ que el operador arma una vez y commitea acá. La 
 
 Archivos que consumen las recetas (nombre EXACTO, minúscula, en esta carpeta):
 
-- `basic.cfg`      — telemetría, advertising ID, Bing, feedback, activity feed. Usado por: `generic_low/mid/high`.
-- `medium.cfg`     — basic + ubicación global, experiencias personalizadas, sugerencias de inicio. Usado por: `office_*`, `study_*` (6 recetas).
-- `multimedia.cfg` — perfil orientado a streaming/multimedia. Usado por: `multimedia_low/mid/high`. **Requerido** para que las recetas multimedia no caigan al fallback nativo.
+- `basic.cfg`      — telemetría, advertising ID, Bing, feedback, activity feed. Usado por: `generic.json`.
+- `medium.cfg`     — basic + ubicación global, experiencias personalizadas, sugerencias de inicio. Usado por: `work.json` (fusión v2.0 de los antiguos `office_*` + `study_*`).
+- `multimedia.cfg` — perfil orientado a streaming/multimedia, preserva Xbox apps. Usado por: `multimedia.json`. **Requerido** para que la receta multimedia preserve Xbox correctamente.
 - `aggressive.cfg` — medium + OneDrive policy, Edge startup/background, consumer features, WER. Usado solo por la rama nombrada nivel `aggressive` (`data/profiles/named/_sample.json`); opcional si no se usa ese nivel.
 
 Se generan abriendo OOSU10 en una VM limpia, marcando los toggles deseados, y exportando con `File → Export configuration`.

@@ -4,18 +4,19 @@
 function Get-AutoProfilePath {
     <#
     .SYNOPSIS
-        Retorna la ruta absoluta al JSON de receta para un use-case y tier dados.
+        Retorna la ruta absoluta al JSON de receta para un use-case dado.
+        v2.0: sin _tier en el path (la diferenciacion por hardware vive en
+        modulos Performance, no en el JSON).
         No valida existencia — el caller decide si el archivo existe.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)] [string] $UseCase,
-        [Parameter(Mandatory)] [ValidateSet('Low','Mid','High')] [string] $Tier
+        [Parameter(Mandatory)] [string] $UseCase
     )
 
     [string] $dataDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'data\profiles\auto'
-    return Join-Path $dataDir ('{0}_{1}.json' -f $UseCase.ToLowerInvariant(), $Tier.ToLowerInvariant())
+    return Join-Path $dataDir ('{0}.json' -f $UseCase.ToLowerInvariant())
 }
 
 # ─── Test-AutoProfileSchema ───────────────────────────────────────────────────
@@ -32,21 +33,16 @@ function Test-AutoProfileSchema {
 
     # _schema_version
     [object] $sv = $Profile.PSObject.Properties['_schema_version']
-    if ($null -eq $sv -or ([string]$sv.Value) -ne '1.0') {
-        throw "_schema_version debe ser '1.0'. Valor encontrado: '$($sv.Value)'."
+    if ($null -eq $sv -or ([string]$sv.Value) -ne '2.0') {
+        throw "_schema_version debe ser '2.0'. Valor encontrado: '$($sv.Value)'."
     }
 
-    # _use_case
+    # _use_case (whitelist v2.0: generic/work/multimedia/named)
     [object] $uc = $Profile.PSObject.Properties['_use_case']
-    if ($null -eq $uc -or [string]::IsNullOrWhiteSpace([string]$uc.Value)) {
-        throw '_use_case no puede estar vacio.'
-    }
-
-    # _tier
-    [object] $tierProp = $Profile.PSObject.Properties['_tier']
-    if ($null -eq $tierProp -or ([string]$tierProp.Value).ToLowerInvariant() -notin @('low','mid','high')) {
-        [string] $got = if ($null -ne $tierProp) { [string]$tierProp.Value } else { '(ausente)' }
-        throw "_tier debe ser low, mid o high. Valor: '$got'."
+    [string[]] $validUseCases = @('generic','work','multimedia','named')
+    if ($null -eq $uc -or ([string]$uc.Value).ToLowerInvariant() -notin $validUseCases) {
+        [string] $got = if ($null -ne $uc) { [string]$uc.Value } else { '(ausente)' }
+        throw "_use_case invalido. Valores permitidos: $($validUseCases -join ', '). Encontrado: '$got'."
     }
 
     # services.disable
@@ -123,16 +119,10 @@ function Get-AutoProfilePreviewLines {
 
     [System.Collections.Generic.List[string]] $lines = [System.Collections.Generic.List[string]]::new()
 
-    [string] $recipeTier   = ([string]$Profile._tier).ToUpperInvariant()
     [string] $detectedTier = 'N/A'
     [object] $tierProp = $MachineProfile.PSObject.Properties['Tier']
     if ($null -ne $tierProp) { $detectedTier = [string]$tierProp.Value }
-
-    if ($recipeTier -ne $detectedTier.ToUpperInvariant()) {
-        $lines.Add("[AVISO] Tier detectado: $detectedTier | Tier de receta: $recipeTier")
-    } else {
-        $lines.Add("Tier: $detectedTier")
-    }
+    $lines.Add("Tier detectado (HW): $detectedTier - info; la receta no se diferencia por tier (v2.0)")
 
     [string[]] $svcs = @($Profile.services.disable)
     $lines.Add("Servicios a deshabilitar: $($svcs.Count) ($($svcs -join ', '))")
@@ -271,7 +261,11 @@ function Invoke-AutoProfile {
 
     [datetime] $startedAt = Get-Date
     [string]   $useCase   = [string]$Profile._use_case
-    [string]   $tier      = [string]$Profile._tier
+    # v2.0: el tier ya no vive en el JSON. Lo tomamos del MachineProfile (HW
+    # real detectado) para audit/meta.json. Si no esta disponible -> 'N/A'.
+    [string]   $tier      = 'N/A'
+    [object]   $tierProp  = $MachineProfile.PSObject.Properties['Tier']
+    if ($null -ne $tierProp) { $tier = [string]$tierProp.Value }
 
     # R4: habilitar o suprimir la barra segun los params recibidos.
     # $script:PctkProgressEnabled vive en JobManager.ps1 (dot-sourced antes).
@@ -302,12 +296,7 @@ function Invoke-AutoProfile {
             try { Write-Progress @s } catch { $script:PctkProgressOk = $false }
         }
     }
-    [string] $tierNorm = switch ($tier.ToLowerInvariant()) {
-        'low'  { 'Low'  }
-        'high' { 'High' }
-        default { 'Mid' }
-    }
-    [string]   $profPath  = Get-AutoProfilePath -UseCase $useCase -Tier $tierNorm
+    [string]   $profPath  = Get-AutoProfilePath -UseCase $useCase
     [string]   $schemaVer = [string]$Profile._schema_version
 
     # Valores iniciales del result (se sobreescriben a medida que el pipeline avanza)

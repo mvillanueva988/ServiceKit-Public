@@ -410,7 +410,7 @@ function New-NamedProfileInteractive {
     if ($nsf -in @('prefer_no', 'default')) { Add-Tweak 'nvidia_sysmem_fallback' $nsf }
 
     # Core auto-shaped (gaming-ready, neutro y seguro; el operador lo edita a mano si quiere)
-    [string] $tier = if ($MachineProfile.PSObject.Properties['Tier']) { ([string]$MachineProfile.Tier).ToLowerInvariant() } else { 'high' }
+    # v2.0: _tier ya no esta en el JSON (se queda solo en _hardware_snapshot para info).
     [string] $oosuLevel = if ($gt.PSObject.Properties['oosu_profile']) { [string]$gt.oosu_profile } else { 'medium' }
 
     [PSCustomObject] $hwSnap = [PSCustomObject]@{
@@ -422,7 +422,7 @@ function New-NamedProfileInteractive {
     }
 
     return [PSCustomObject]@{
-        _schema_version   = '1.0'
+        _schema_version   = '2.0'
         _kind             = 'named'
         _name             = $name
         _created          = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
@@ -430,11 +430,10 @@ function New-NamedProfileInteractive {
         _hardware_snapshot = $hwSnap
 
         _use_case   = 'named'
-        _tier       = $tier
         _description = "Receta nombrada: $name"
         _rationale  = 'Gaming personalizado. Core neutro+seguro (editable a mano); el valor esta en gaming_tweaks.'
         services    = [PSCustomObject]@{ disable = @('Fax','WMPNetworkSvc','RemoteRegistry','DiagTrack','dmwappushservice') }
-        performance = [PSCustomObject]@{ visual_profile = 'Balanced'; power_plan = [PSCustomObject]@{ _future = $true }; system_tweaks = [PSCustomObject]@{ _future = $true } }
+        performance = [PSCustomObject]@{ visual_profile = 'Balanced' }
         privacy     = [PSCustomObject]@{ level = $oosuLevel; oosu10_cfg = ($oosuLevel + '.cfg'); fallback = 'native' }
         cleanup     = [PSCustomObject]@{ clear_temp = $true }
         startup     = [PSCustomObject]@{ report_only = $true }
