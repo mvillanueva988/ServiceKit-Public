@@ -4,6 +4,19 @@ Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
 ## [Unreleased]
 
+### Changed
+
+- **Consolidación de recetas auto (data schema v1.0 → v2.0)**. Las 12 recetas auto (`<use_case>_<tier>.json` con 4 use-cases × 3 tiers) se redujeron a 3 (`<use_case>.json`, uno por use-case): `generic.json`, `work.json` (fusión de `office_*` + `study_*` que eran funcionalmente idénticos en runtime), `multimedia.json`. El audit `_local-dev/recipes-audit.md` mostró que 11 de 12 archivos tenían contenido funcional idéntico (todos `visual_profile=Balanced`, mismos services por use-case), y que el `_tier` del JSON sólo se usaba para validación de schema y display — no condicionaba ningún tweak. La diferenciación por hardware (laptop vs desktop, RAM ≤ 8 GB) sigue viviendo en los módulos `Performance` (`Set-UltimatePowerPlan`, `Set-SystemTweaks`) y `Debloat` al ejecutarse, como antes. Cambios:
+  - `core/ProfileEngine.ps1`: `Get-AutoProfilePath` sin parámetro `-Tier`; `Test-AutoProfileSchema` exige `_schema_version: "2.0"`, `_tier` removido, `_use_case` con whitelist (`generic|work|multimedia|named`); `Get-AutoProfilePreviewLines` reformulada; `Invoke-AutoProfile` lee tier del `MachineProfile` (HW real) en vez del JSON.
+  - `core/Router.ps1`: menú principal `[1] Generic / [2] Work / [3] Multimedia` (era 4 entradas con office + study separados). Audit-action `Profile.Apply.Work` reemplaza `Profile.Apply.Office`/`Profile.Apply.Study`.
+  - `core/NamedProfileEditor.ps1` + `data/profiles/named/_sample.json`: builder y fixture en schema v2.0 (sin `_tier`, sin `_future` blocks).
+  - `data/profiles/auto/`: 12 archivos viejos eliminados; 3 nuevos creados; README actualizado.
+  - `docs/recipes/`: `office.md` + `study.md` reemplazados por `work.md`; `generic.md` + `multimedia.md` reescritos sin tier; índice README actualizado.
+  - `data/oosu10-profiles/README.md`: referencias a `office_*`/`study_*` actualizadas a `work.json`.
+  - `tests/smoke.ps1`: 13 tests de Import (1 Get-AutoProfilePath + 12 por receta) → 4 tests (1 Get-AutoProfilePath + 3 por receta). Smoke baseline 103 → 94.
+  - `tests/stage3-validate.ps1`, `tests/stage2-harness.ps1`, `tests/stage4-validate.ps1`, `tests/postqueue-validate.ps1`: actualizados al shape v2.0.
+- **Fix (bug latente desde v2.0)**: `multimedia_high.json` tenía `visual_profile: "Full"` que invocaba `Set-FullOptimizedVisuals` (Windows "Adjust for best performance" = apaga ClearType + thumbnails + drag-full-windows). Contraintuitivo para el use-case streaming. La nueva `multimedia.json` aplica `Balanced` para todos los casos (preserva ClearType y thumbnails — preview de archivos de video importa).
+
 ## [2.1.3] - 2026-05-23
 
 Patch: fix de bug confirmado en cliente real — `[U]` perdía snapshots del workflow diagnóstico-only.
