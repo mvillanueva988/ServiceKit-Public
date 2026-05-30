@@ -314,6 +314,13 @@ Test-SmokeFunction 'TimerResolution' 'Get-TimerResolutionStatus shape' {
     }
 }
 Test-SmokeFunction 'ProcessPriority' 'Get-ProcessPriorityIFEO no throw' { Get-ProcessPriorityIFEO }
+Test-SmokeFunction 'ProcessPriority' 'clase Normal aceptada (Router [N] <-> modulo)' {
+    # [15] ofrece [N]ormal en el menu; el modulo DEBE tener 'Normal' en el map o
+    # la accion falla. Guarda contra el medio-cableado (Router si, modulo no).
+    if (-not $script:PriorityClassMap.ContainsKey('Normal')) { throw "modulo: PriorityClassMap sin 'Normal'" }
+    $rh = (Get-Command Invoke-ActionProcessPriority -CommandType Function).Definition
+    if ($rh -notmatch "'N'\s*\{\s*'Normal'") { throw "Router [N] no mapea a 'Normal'" }
+}
 
 # ─── Stage 5: handlers menu [A] de modulos huerfanos (backlog #11) ────────────
 # Cada handler es interactivo (Read-Host). Por handler:

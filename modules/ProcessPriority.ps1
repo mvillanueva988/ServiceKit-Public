@@ -13,6 +13,7 @@
 #   CpuPriorityClass (DWORD):
 #     3 = High (REALTIME = 5 es peligroso; High es el maximo seguro)
 #     6 = AboveNormal
+#     2 = Normal (default de Windows; util para "resetear" un exe sin borrar la key)
 #
 # Referencia: D-S42a, stage4.2-plan.md ss2.3.
 
@@ -21,10 +22,12 @@ $script:IFEOBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image Fil
 [hashtable] $script:PriorityClassMap = @{
     'High'        = 3
     'AboveNormal' = 6
+    'Normal'      = 2
 }
 [hashtable] $script:PriorityClassRevMap = @{
     3 = 'High'
     6 = 'AboveNormal'
+    2 = 'Normal'
 }
 
 # ----- Get-ProcessPriorityIFEO -------------------------------------------------

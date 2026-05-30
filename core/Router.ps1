@@ -1430,9 +1430,9 @@ function Invoke-ActionProcessPriority {
     if ([string]::IsNullOrWhiteSpace($exe)) { Write-Host '  Nombre vacio, cancelado.' -ForegroundColor DarkGray; return }
     if ($exe -notmatch '(?i)\.exe$')        { Write-Host '  Debe terminar en .exe, cancelado.' -ForegroundColor Yellow; return }
 
-    Write-Host '  Clase: [H]igh (maximo seguro)  /  [A]boveNormal'
+    Write-Host '  Clase: [H]igh (maximo seguro)  /  [A]boveNormal  /  [N]ormal (default; resetea)'
     [string] $clsSub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
-    [string] $cls = switch ($clsSub) { 'H' { 'High' } 'A' { 'AboveNormal' } default { '' } }
+    [string] $cls = switch ($clsSub) { 'H' { 'High' } 'A' { 'AboveNormal' } 'N' { 'Normal' } default { '' } }
     if ([string]::IsNullOrWhiteSpace($cls)) { Write-Host '  Clase invalida, cancelado.' -ForegroundColor DarkGray; return }
 
     if (-not (Confirm-Action -Title ('Setear prioridad IFEO {0} -> {1}?' -f $exe, $cls) -Lines @(
