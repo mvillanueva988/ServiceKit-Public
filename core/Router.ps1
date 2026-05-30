@@ -157,7 +157,7 @@ function Show-MainMenu {
         Show-MachineBanner -MachineProfile $MachineProfile
 
         Write-Host '  PERFILES' -ForegroundColor DarkCyan
-        Write-Host '  [1]  Aplicar perfil automatico         (Office/Study/Multimedia/Generic)'
+        Write-Host '  [1]  Aplicar perfil automatico         (Generic/Work/Multimedia)'
         Write-Host '  [2]  Receta nombrada                   (cliente especifico)'
         Write-Host ''
         Write-Host '  DIAGNOSTICO' -ForegroundColor DarkCyan
@@ -168,7 +168,7 @@ function Show-MainMenu {
         Write-Host '  [R]  Generar prompt de research        (para LLM con web search)'
         Write-Host ''
         Write-Host '  ACCIONES MANUALES' -ForegroundColor DarkCyan
-        Write-Host '  [A]  Submenu: acciones individuales    (las 15 originales)'
+        Write-Host '  [A]  Submenu: acciones individuales    (debloat, limpieza, rendimiento, privacidad, etc.)'
         Write-Host ''
         Write-Host '  HERRAMIENTAS' -ForegroundColor DarkCyan
         Write-Host '  [T]  Herramientas externas'
