@@ -113,6 +113,35 @@ tocados después del batch. Una comilla doble sin escapar dentro de un
 valor string rompe el JSON silenciosamente (el archivo se escribe OK,
 pero el toolkit muere al parsearlo).
 
+### `powercfg` / exe nativo + `$ErrorActionPreference='Stop'` = crash
+
+`main.ps1` corre con `$ErrorActionPreference = 'Stop'`. En PS5.1 el
+**stderr de un ejecutable nativo** (`powercfg`, `netsh`, etc.) bajo
+EAP=Stop se convierte en `NativeCommandError` **terminante** — y el
+redirect NO salva: `2>&1` **y** `2>$null` tiran igual. Si el comando
+escribe algo a stderr (ej. `powercfg` en una Sandbox con scheme de
+energía mínimo, o un setting ausente), la llamada **crashea el toolkit
+entero**.
+
+**Regla**: toda función que invoque un exe nativo y dependa de
+`$LASTEXITCODE` (no de excepciones) neutraliza EAP localmente:
+
+```powershell
+function Set-Algo {
+    $ErrorActionPreference = 'Continue'   # local: auto-revierte al return
+    & powercfg ... 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { ... }
+    # los cmdlets PowerShell de abajo igual usan -ErrorAction Stop explicito,
+    # que prevalece sobre esta preferencia local.
+}
+```
+
+**El smoke NO lo caza** porque corre con `$ErrorActionPreference =
+'Continue'` (mismatch con `main.ps1`). Lección del gate Sandbox #11
+(2026-05-30): `[A][16]` USB crasheaba al deshabilitar; el smoke estaba
+verde igual. Los tests que ejercitan handlers deben fijar `EAP='Stop'`
+para espejar `main.ps1`.
+
 ## Scope del producto
 
 **PCTk = orquestación + extractor + guía**. NO autor de tweaks hardcoded.
