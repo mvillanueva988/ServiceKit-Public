@@ -315,6 +315,44 @@ Test-SmokeFunction 'TimerResolution' 'Get-TimerResolutionStatus shape' {
 }
 Test-SmokeFunction 'ProcessPriority' 'Get-ProcessPriorityIFEO no throw' { Get-ProcessPriorityIFEO }
 
+# ─── Stage 5: handlers menu [A] de modulos huerfanos (backlog #11) ────────────
+# Cada handler es interactivo (Read-Host). Dos aserciones por handler:
+#  (1) ROUTING: el dispatch rutea su numero [12]-[16] al handler correcto.
+#  (2) ABORT-SEGURO: shadowea Read-Host con '' (aborta en el 1er prompt SIN
+#      mutar) y corre el handler -> ejercita el display (Get-*Status) + cancela.
+#      No-throw caza crashes StrictMode en el path de lectura (familia Bug2/3).
+# La mutacion real (registry/powercfg) la valida el gate Sandbox, no el smoke.
+Test-SmokeFunction 'Router' 'handler [12] CoreIsolation routing + abort-seguro' {
+    $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'12'\s*\{\s*Invoke-ActionCoreIsolation") { throw 'dispatch no rutea [12] -> Invoke-ActionCoreIsolation' }
+    function Read-Host { '' }
+    Invoke-ActionCoreIsolation -MachineProfile (Get-MachineProfile) | Out-Null
+}
+Test-SmokeFunction 'Router' 'handler [13] HAGS routing + abort-seguro' {
+    $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'13'\s*\{\s*Invoke-ActionHags") { throw 'dispatch no rutea [13] -> Invoke-ActionHags' }
+    function Read-Host { '' }
+    Invoke-ActionHags -MachineProfile (Get-MachineProfile) | Out-Null
+}
+Test-SmokeFunction 'Router' 'handler [14] TimerResolution routing + abort-seguro' {
+    $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'14'\s*\{\s*Invoke-ActionTimerResolution") { throw 'dispatch no rutea [14] -> Invoke-ActionTimerResolution' }
+    function Read-Host { '' }
+    Invoke-ActionTimerResolution -MachineProfile (Get-MachineProfile) | Out-Null
+}
+Test-SmokeFunction 'Router' 'handler [15] ProcessPriority routing + abort-seguro' {
+    $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'15'\s*\{\s*Invoke-ActionProcessPriority") { throw 'dispatch no rutea [15] -> Invoke-ActionProcessPriority' }
+    function Read-Host { '' }
+    Invoke-ActionProcessPriority -MachineProfile (Get-MachineProfile) | Out-Null
+}
+Test-SmokeFunction 'Router' 'handler [16] UsbPower routing + abort-seguro' {
+    $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'16'\s*\{\s*Invoke-ActionUsbPower") { throw 'dispatch no rutea [16] -> Invoke-ActionUsbPower' }
+    function Read-Host { '' }
+    Invoke-ActionUsbPower -MachineProfile (Get-MachineProfile) | Out-Null
+}
+
 Test-SmokeFunction 'NamedProfileEditor' 'Schema acepta timer_resolution=on' {
     $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
     $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
