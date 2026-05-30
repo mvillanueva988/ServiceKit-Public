@@ -22,6 +22,12 @@ function Get-UsbSelectiveSuspendStatus {
     [CmdletBinding()]
     param()
 
+    # powercfg es nativo: bajo $ErrorActionPreference='Stop' (main.ps1) su stderr
+    # se vuelve error terminante (NativeCommandError) y crashea aunque se redirija
+    # (2>&1 y 2>$null por igual). EAP local Continue lo neutraliza; los registry
+    # cmdlets de mas abajo usan -ErrorAction Stop explicito, que igual prevalece.
+    $ErrorActionPreference = 'Continue'
+
     [Nullable[int]] $acIdx = $null
     [Nullable[int]] $dcIdx = $null
     [bool] $hidden = $true
@@ -85,6 +91,11 @@ function Disable-UsbSelectiveSuspend {
     [CmdletBinding()]
     param()
 
+    # powercfg nativo + $ErrorActionPreference='Stop' (main.ps1) = NativeCommandError
+    # terminante al menor stderr. EAP local Continue lo evita; el registry cmdlet de
+    # abajo usa -ErrorAction Stop explicito (prevalece sobre esta preferencia).
+    $ErrorActionPreference = 'Continue'
+
     [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
     [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
 
@@ -140,6 +151,11 @@ function Enable-UsbSelectiveSuspend {
     #>
     [CmdletBinding()]
     param()
+
+    # powercfg nativo + $ErrorActionPreference='Stop' (main.ps1) = NativeCommandError
+    # terminante al menor stderr. EAP local Continue lo evita; el registry cmdlet de
+    # abajo usa -ErrorAction Stop explicito (prevalece sobre esta preferencia).
+    $ErrorActionPreference = 'Continue'
 
     [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
     [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
