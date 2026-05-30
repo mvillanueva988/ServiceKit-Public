@@ -524,6 +524,13 @@ function Show-IndividualActionsSubmenu {
         Write-Host '  [10] Inicio del Sistema'
         Write-Host '  [11] Actualizaciones de Windows'
         Write-Host ''
+        Write-Host '  GAMING / LATENCIA  (avanzado - reinicio salvo USB)' -ForegroundColor DarkCyan
+        Write-Host '  [12] Core Isolation / Memory Integrity (HVCI)'
+        Write-Host '  [13] HAGS (GPU Scheduling por hardware)'
+        Write-Host '  [14] Timer Resolution global (solo Win11)'
+        Write-Host '  [15] Prioridad de proceso por .exe (IFEO)'
+        Write-Host '  [16] USB Selective Suspend'
+        Write-Host ''
         Write-Host '  [B]  Volver al menu principal' -ForegroundColor DarkYellow
         Write-Host ''
 
@@ -570,6 +577,11 @@ function Invoke-IndividualActionDispatch {
         '9'  { Invoke-ActionPrivacy        -MachineProfile $MachineProfile; return }
         '10' { Invoke-ActionStartup        -MachineProfile $MachineProfile; return }
         '11' { Invoke-ActionWindowsUpdate  -MachineProfile $MachineProfile; return }
+        '12' { Invoke-ActionCoreIsolation   -MachineProfile $MachineProfile; return }
+        '13' { Invoke-ActionHags            -MachineProfile $MachineProfile; return }
+        '14' { Invoke-ActionTimerResolution -MachineProfile $MachineProfile; return }
+        '15' { Invoke-ActionProcessPriority -MachineProfile $MachineProfile; return }
+        '16' { Invoke-ActionUsbPower        -MachineProfile $MachineProfile; return }
         default {
             Write-Host '  Opcion invalida.' -ForegroundColor Red
         }
@@ -1233,6 +1245,247 @@ function Invoke-ActionWindowsUpdate {
     Write-Host ('  Ultima busqueda  : {0}' -f $status.LastCheck)
     Write-Host ('  Fuente           : {0}' -f $status.Source)
     Write-ActionAudit -Action 'WindowsUpdate.Status' -Status 'Success' -Summary ('LastInstall={0}' -f $status.LastInstall) -Details $status
+}
+
+# ─── Show-OrphanModuleResult (reporte uniforme de los handlers #11) ──────────
+# Los 5 modulos huerfanos devuelven la misma forma: Success / Applied[] /
+# Errors[] / RestartRequired / Reason (+ Skipped opcional). Reporter comun.
+function Show-OrphanModuleResult {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Action,
+        [Parameter()]          [object] $Result
+    )
+    if ($null -eq $Result) {
+        Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow
+        Write-ActionAudit -Action $Action -Status 'Failed' -Summary 'No result'
+        return
+    }
+    if ($Result.PSObject.Properties['Skipped'] -and $Result.Skipped) {
+        Write-Host ('  [SKIP] {0}' -f $Result.Reason) -ForegroundColor DarkYellow
+        Write-ActionAudit -Action $Action -Status 'Skipped' -Summary $Result.Reason -Details $Result
+        return
+    }
+    foreach ($a in $Result.Applied) { Write-Host ('  [OK]   {0}' -f $a) -ForegroundColor Green }
+    foreach ($e in $Result.Errors)  { Write-Host ('  [FAIL] {0}' -f $e) -ForegroundColor Yellow }
+    if ($Result.RestartRequired) {
+        Write-Host '  [i] Reinicio requerido para que el cambio tome efecto.' -ForegroundColor Cyan
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Result.Reason)) {
+        Write-Host ('  {0}' -f $Result.Reason) -ForegroundColor DarkGray
+    }
+    [string] $st = if ($Result.Success) { 'Success' } else { 'Failed' }
+    Write-ActionAudit -Action $Action -Status $st -Summary ('Applied={0} Errors={1}' -f $Result.Applied.Count, $Result.Errors.Count) -Details $Result
+}
+
+# ─── Action handlers: modulos huerfanos expuestos en [A] (backlog #11) ───────
+# CoreIsolation / HAGS / TimerResolution / ProcessPriority / UsbPower. Reusan
+# las funciones Set de cada modulo DIRECTAMENTE (registry/powercfg sincrono,
+# sub-segundo). NO usan JobManager: esos modulos no exponen wrappers
+# Start-*Process; envolverlos en jobs seria logica nueva, fuera de scope #11.
+function Invoke-ActionCoreIsolation {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    $st = Get-CoreIsolationStatus
+    Write-Host '  CORE ISOLATION / MEMORY INTEGRITY (HVCI)' -ForegroundColor DarkCyan
+    Write-Host ('  VBS  : configurado={0}  corriendo={1}' -f $st.VbsConfigured, $st.VbsRunning)
+    Write-Host ('  HVCI : configurado={0}  corriendo={1}  (Memory Integrity)' -f $st.HvciConfigured, $st.HvciRunning)
+    Write-Host ('  Hypervisor presente: {0}  (WSL2/Hyper-V dependen de esto, NO de HVCI)' -f $st.HypervisorPresent) -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  [D]eshabilitar HVCI (preserva VBS -> WSL2/Hyper-V intactos)  /  [E]nable HVCI+VBS  /  [B]volver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+
+    if ($sub -eq 'D') {
+        [string] $vbsAns = (Read-Host '  Tambien deshabilitar VBS? (rompe WSL2 si lo usas) [s/N]').Trim().ToUpperInvariant()
+        [bool] $vbsToo = ($vbsAns -eq 'S' -or $vbsAns -eq 'SI' -or $vbsAns -eq 'Y' -or $vbsAns -eq 'YES')
+        [string[]] $lines = @(
+            'Registry: DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity Enabled=0',
+            'Reinicio requerido para tomar efecto.'
+        )
+        if ($vbsToo) { $lines += 'TAMBIEN VBS=0: WSL2/Hyper-V se rompen si dependian de VBS.' }
+        else         { $lines += 'VBS preservado: WSL2/Hyper-V siguen funcionando.' }
+        if (-not (Confirm-Action -Title 'Deshabilitar HVCI (Memory Integrity)?' -Lines $lines -DefaultYes $false)) {
+            Write-Host '  Cancelado.' -ForegroundColor DarkGray
+            Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled'
+            return
+        }
+        Write-ActionAudit -Action 'CoreIsolation' -Status 'Started' -Summary ('Disable HVCI VbsToo={0}' -f $vbsToo)
+        Write-Host '  Deshabilitando HVCI...' -ForegroundColor Cyan
+        if ($vbsToo) { $r = Disable-Hvci -DisableVbsToo } else { $r = Disable-Hvci }
+        Show-OrphanModuleResult -Action 'CoreIsolation' -Result $r
+        return
+    }
+    if ($sub -eq 'E') {
+        if (-not (Confirm-Action -Title 'Re-habilitar HVCI + VBS (Memory Integrity)?' -Lines @(
+            'Registry: HypervisorEnforcedCodeIntegrity Enabled=1 + EnableVirtualizationBasedSecurity=1',
+            'Reinicio requerido. Memory Integrity activo tras el reboot.'
+        ))) {
+            Write-Host '  Cancelado.' -ForegroundColor DarkGray
+            Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled'
+            return
+        }
+        Write-ActionAudit -Action 'CoreIsolation' -Status 'Started' -Summary 'Enable HVCI+VBS'
+        Write-Host '  Habilitando HVCI + VBS...' -ForegroundColor Cyan
+        $r = Enable-Hvci
+        Show-OrphanModuleResult -Action 'CoreIsolation' -Result $r
+        return
+    }
+    Write-Host '  Cancelado.' -ForegroundColor DarkGray
+}
+
+function Invoke-ActionHags {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    $st = Get-HagsStatus
+    [string] $rawTxt = if ($null -ne $st.RawValue) { [string]$st.RawValue } else { '(sin valor)' }
+    Write-Host '  HAGS - HARDWARE-ACCELERATED GPU SCHEDULING' -ForegroundColor DarkCyan
+    Write-Host ('  Estado actual: {0}  (HwSchMode={1})' -f $st.Mode, $rawTxt)
+    Write-Host '  Trade-off: HAGS reserva ~1GB VRAM. Off recomendado en GPUs <8GB sin DLSS Frame Gen;' -ForegroundColor DarkGray
+    Write-Host '             On requerido para DLSS Frame Generation (RTX 40+).' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  [E]nable (HwSchMode=2)  /  [D]eshabilitar (=1)  /  [B]volver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+    if ($sub -ne 'E' -and $sub -ne 'D') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+
+    [bool] $enable = ($sub -eq 'E')
+    [string] $title = if ($enable) { 'Habilitar HAGS (HwSchMode=2)?' } else { 'Deshabilitar HAGS (HwSchMode=1)?' }
+    if (-not (Confirm-Action -Title $title -Lines @(
+        'Registry: GraphicsDrivers\HwSchMode (1=Off, 2=On)',
+        'Reinicio requerido para tomar efecto.'
+    ))) {
+        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'Hags' -Status 'Cancelled'
+        return
+    }
+    [string] $verb = if ($enable) { 'Enable' } else { 'Disable' }
+    Write-ActionAudit -Action 'Hags' -Status 'Started' -Summary $verb
+    Write-Host '  Aplicando HAGS...' -ForegroundColor Cyan
+    if ($enable) { $r = Enable-Hags } else { $r = Disable-Hags }
+    Show-OrphanModuleResult -Action 'Hags' -Result $r
+}
+
+function Invoke-ActionTimerResolution {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    $st = Get-TimerResolutionStatus
+    Write-Host '  TIMER RESOLUTION GLOBAL (solo Win11)' -ForegroundColor DarkCyan
+    Write-Host ('  Estado actual: Enabled={0}  (build Windows={1})' -f $st.Enabled, $st.WinBuild)
+    if (-not $st.GateWin11) {
+        Write-Host ('  [SKIP] Solo Win11 (build >= 22000). En esta PC (build {0}) GlobalTimerResolutionRequests' -f $st.WinBuild) -ForegroundColor DarkYellow
+        Write-Host '         no tiene efecto documentado. No se aplica nada.' -ForegroundColor DarkYellow
+        Write-ActionAudit -Action 'TimerResolution' -Status 'Skipped' -Summary ('build {0} sin gate Win11' -f $st.WinBuild)
+        return
+    }
+    Write-Host '  Cost-zero: solo registry, sin proceso residente. Reinicio para efecto pleno.' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  [O]n  /  [F] off  /  [B]volver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+    if ($sub -ne 'O' -and $sub -ne 'F') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+
+    [string] $state = if ($sub -eq 'O') { 'on' } else { 'off' }
+    if (-not (Confirm-Action -Title ('Timer Resolution global = {0}?' -f $state) -Lines @(
+        'Registry: Session Manager\kernel\GlobalTimerResolutionRequests',
+        'Reinicio requerido para efecto pleno. Cost-zero (sin proceso residente).'
+    ))) {
+        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'TimerResolution' -Status 'Cancelled'
+        return
+    }
+    Write-ActionAudit -Action 'TimerResolution' -Status 'Started' -Summary $state
+    Write-Host '  Aplicando Timer Resolution...' -ForegroundColor Cyan
+    $r = Set-TimerResolutionRegistry -State $state
+    Show-OrphanModuleResult -Action 'TimerResolution' -Result $r
+}
+
+function Invoke-ActionProcessPriority {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    $current = Get-ProcessPriorityIFEO
+    Write-Host '  PRIORIDAD DE PROCESO POR .EXE (IFEO)' -ForegroundColor DarkCyan
+    Write-Host '  AVISO: prioridad estatica via registry IFEO. NO es Process Lasso,' -ForegroundColor DarkGray
+    Write-Host '         sin ProBalance dinamico, sin proceso residente (cost-zero).' -ForegroundColor DarkGray
+    Write-Host ''
+    if ($current.Count -gt 0) {
+        Write-Host '  Entradas actuales:'
+        foreach ($k in ($current.Keys | Sort-Object)) {
+            Write-Host ('    {0,-28} {1}' -f $k, $current[$k])
+        }
+    } else {
+        Write-Host '  (sin entradas IFEO de prioridad configuradas)' -ForegroundColor DarkGray
+    }
+    Write-Host ''
+    Write-Host '  [A]gregar/cambiar prioridad de un .exe  /  [B]volver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+    if ($sub -ne 'A') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+
+    [string] $exe = (Read-Host '  Nombre del ejecutable (ej. valorant.exe)').Trim()
+    if ([string]::IsNullOrWhiteSpace($exe)) { Write-Host '  Nombre vacio, cancelado.' -ForegroundColor DarkGray; return }
+    if ($exe -notmatch '(?i)\.exe$')        { Write-Host '  Debe terminar en .exe, cancelado.' -ForegroundColor Yellow; return }
+
+    Write-Host '  Clase: [H]igh (maximo seguro)  /  [A]boveNormal'
+    [string] $clsSub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+    [string] $cls = switch ($clsSub) { 'H' { 'High' } 'A' { 'AboveNormal' } default { '' } }
+    if ([string]::IsNullOrWhiteSpace($cls)) { Write-Host '  Clase invalida, cancelado.' -ForegroundColor DarkGray; return }
+
+    if (-not (Confirm-Action -Title ('Setear prioridad IFEO {0} -> {1}?' -f $exe, $cls) -Lines @(
+        'Registry: Image File Execution Options\<exe>\PerfOptions\CpuPriorityClass',
+        'Prioridad estatica: Windows la aplica al arrancar el proceso. Sin reinicio.',
+        'NO es Process Lasso / sin ProBalance dinamico.'
+    ))) {
+        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'ProcessPriority' -Status 'Cancelled'
+        return
+    }
+    Write-ActionAudit -Action 'ProcessPriority' -Status 'Started' -Summary ('{0}={1}' -f $exe, $cls)
+    Write-Host '  Aplicando prioridad IFEO...' -ForegroundColor Cyan
+    [hashtable] $map = @{}
+    $map[$exe] = $cls
+    $r = Set-ProcessPriorityIFEO -PriorityMap $map
+    Show-OrphanModuleResult -Action 'ProcessPriority' -Result $r
+}
+
+function Invoke-ActionUsbPower {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    $st = Get-UsbSelectiveSuspendStatus
+    [string] $acTxt  = if ($null -ne $st.AcValueIndex)           { [string]$st.AcValueIndex }           else { '-' }
+    [string] $dcTxt  = if ($null -ne $st.DcValueIndex)           { [string]$st.DcValueIndex }           else { '-' }
+    [string] $regTxt = if ($null -ne $st.RegistryGlobalDisabled) { [string]$st.RegistryGlobalDisabled } else { '(sin valor)' }
+    Write-Host '  USB SELECTIVE SUSPEND' -ForegroundColor DarkCyan
+    Write-Host ('  Plan activo: AC={0}  DC={1}   (0=disabled, 1=enabled, - =oculto)' -f $acTxt, $dcTxt)
+    Write-Host ('  Registry global DisableSelectiveSuspend: {0}' -f $regTxt) -ForegroundColor DarkGray
+    if ($st.IsHiddenInGui) { Write-Host '  (El setting esta oculto en Power Options; Win11 24H2 lo oculta por default)' -ForegroundColor DarkGray }
+    Write-Host ''
+    Write-Host '  [D]eshabilitar (off - dongles 2.4GHz/HID/latencia)  /  [E]nable (default Windows)  /  [B]volver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+    if ($sub -ne 'D' -and $sub -ne 'E') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+
+    [bool] $disable = ($sub -eq 'D')
+    [string] $title = if ($disable) { 'Deshabilitar USB Selective Suspend?' } else { 'Re-habilitar USB Selective Suspend (default Windows)?' }
+    if (-not (Confirm-Action -Title $title -Lines @(
+        'powercfg: AC + DC value index del setting USB Selective Suspend',
+        'Registry: Services\USB\DisableSelectiveSuspend',
+        'Sin reinicio. Win11 24H2 oculta el setting; el modulo lo des-oculta para tocarlo.'
+    ))) {
+        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-ActionAudit -Action 'UsbPower' -Status 'Cancelled'
+        return
+    }
+    [string] $verb = if ($disable) { 'Disable' } else { 'Enable' }
+    Write-ActionAudit -Action 'UsbPower' -Status 'Started' -Summary $verb
+    Write-Host '  Aplicando USB Selective Suspend...' -ForegroundColor Cyan
+    if ($disable) { $r = Disable-UsbSelectiveSuspend } else { $r = Enable-UsbSelectiveSuspend }
+    Show-OrphanModuleResult -Action 'UsbPower' -Result $r
 }
 
 # ─── Invoke-ApplyAutoProfile (handler [1] del menu principal) ────────────────
