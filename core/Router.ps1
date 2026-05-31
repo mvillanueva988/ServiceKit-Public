@@ -165,6 +165,7 @@ function Show-MainMenu {
         Write-Host '  [4]  Snapshot POST-service'
         Write-Host '  [5]  Comparar PRE vs POST'
         Write-Host '  [6]  Historial de BSOD / Crashes'
+        Write-Host '  [7]  Salud de discos (SMART / wear)'
         Write-Host '  [R]  Generar prompt de research        (para LLM con web search)'
         Write-Host ''
         Write-Host '  ACCIONES MANUALES' -ForegroundColor DarkCyan
@@ -229,6 +230,7 @@ function Invoke-MainMenuDispatch {
         '4' { Invoke-DiagnosticSnapshot -Phase Post -MachineProfile $MachineProfile; return }
         '5' { Invoke-DiagnosticCompare  -MachineProfile $MachineProfile; return }
         '6' { Invoke-DiagnosticBsod     -MachineProfile $MachineProfile; return }
+        '7' { Invoke-DiagnosticDiskHealth -MachineProfile $MachineProfile; return }
         'R' { Invoke-ResearchPrompt -MachineProfile $MachineProfile; return }
         'A' {
             Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
@@ -306,6 +308,23 @@ function Invoke-DiagnosticBsod {
     } else {
         Write-Host '  [!] No se pudo leer el Event Log.' -ForegroundColor Yellow
         Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Failed' -Summary 'No result'
+    }
+}
+
+function Invoke-DiagnosticDiskHealth {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+    Write-ActionAudit -Action 'Diagnostics.DiskHealth' -Status 'Started'
+    Write-Host '  Leyendo salud de discos (SMART / wear)...' -ForegroundColor Cyan
+    try {
+        $data = Get-DiskHealth
+        Show-DiskHealth -Data $data
+        Write-ActionAudit -Action 'Diagnostics.DiskHealth' -Status 'Success' -Summary ('{0} discos, {1} alertas' -f @($data.Disks).Count, $data.AlertCount) -Details $data
+    }
+    catch {
+        Write-Host ('  [!] {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-ActionAudit -Action 'Diagnostics.DiskHealth' -Status 'Failed' -Summary $_.Exception.Message
     }
 }
 
