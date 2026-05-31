@@ -494,6 +494,64 @@ Test-SmokeFunction 'NamedProfileEditor' 'Schema rechaza nvidia_sysmem_fallback i
     if (-not $threw) { throw 'Test-NamedProfileSchema debio rechazar nvidia_sysmem_fallback=maybe' }
 }
 
+# ─── DiskHealth (backlog #17): recoleccion read-only + logica de umbral ───────
+# Get-DiskHealth lee el sistema real (smoke-safe, timeouts). Get-DiskAlertLevel
+# es funcion PURA → se testea la logica de alerta con fixtures, sin depender
+# del HW. Incluye la TRAMPA del research (vacio != sano) y el BUG de enum
+# cazado en HW (HealthStatus/MediaType vienen como numero, no label).
+Test-SmokeFunction 'DiskHealth' 'Get-DiskHealth no throw + shape' {
+    $d = Get-DiskHealth
+    foreach ($f in @('IsVM','Disks','AlertCount','PredictFailAny')) {
+        if ($null -eq $d.PSObject.Properties[$f]) { throw "Campo $f ausente en Get-DiskHealth" }
+    }
+}
+Test-SmokeFunction 'DiskHealth' 'umbral: disco sano -> OK' {
+    $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -WearPct 10 -TempC 35
+    if ($r.Alert -ne 'OK') { throw "esperado OK; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'BUG enum: HealthStatus 0 (numero) -> OK no CRIT' {
+    $r = Get-DiskAlertLevel -HealthStatus '0' -WearPct 10
+    if ($r.Alert -ne 'OK') { throw "enum 0 debe ser Healthy/OK; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'BUG enum: HealthStatus 2 (numero) -> CRIT' {
+    $r = Get-DiskAlertLevel -HealthStatus '2'
+    if ($r.Alert -ne 'CRIT') { throw "enum 2 debe ser Unhealthy/CRIT; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'enum: HealthStatus 1 (Warning) -> WARN' {
+    $r = Get-DiskAlertLevel -HealthStatus '1'
+    if ($r.Alert -ne 'WARN') { throw "enum 1 debe ser Warning/WARN; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'MediaType enum: 4->SSD, 3->HDD, 0->Desconocido' {
+    if ((ConvertTo-DiskMediaTypeLabel -Raw '4') -ne 'SSD') { throw '4 debe ser SSD' }
+    if ((ConvertTo-DiskMediaTypeLabel -Raw '3') -ne 'HDD') { throw '3 debe ser HDD' }
+    if ((ConvertTo-DiskMediaTypeLabel -Raw '0') -ne 'Desconocido') { throw '0 debe ser Desconocido' }
+}
+Test-SmokeFunction 'DiskHealth' 'umbral: wear critico -> CRIT' {
+    $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -WearPct 95
+    if ($r.Alert -ne 'CRIT') { throw "esperado CRIT; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'umbral: wear warn -> WARN' {
+    $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -WearPct 85
+    if ($r.Alert -ne 'WARN') { throw "esperado WARN; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'umbral: prediccion de falla -> CRIT' {
+    $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -PredictFail $true
+    if ($r.Alert -ne 'CRIT') { throw "esperado CRIT; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'TRAMPA: vacio + sin SMART -> UNKNOWN (no OK)' {
+    $r = Get-DiskAlertLevel -HealthStatus '' -SmartMissing $true
+    if ($r.Alert -ne 'UNKNOWN') { throw "campo vacio NO debe ser OK; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'Healthy + SMART faltante -> OK (Windows dice sano)' {
+    $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -SmartMissing $true
+    if ($r.Alert -ne 'OK') { throw "esperado OK; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'cableado: menu principal [7] -> Invoke-DiagnosticDiskHealth' {
+    if (-not (Get-Command Invoke-DiagnosticDiskHealth -CommandType Function -ErrorAction SilentlyContinue)) { throw 'handler Invoke-DiagnosticDiskHealth ausente' }
+    $disp = (Get-Command Invoke-MainMenuDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'7'\s*\{\s*Invoke-DiagnosticDiskHealth") { throw 'dispatch principal no rutea [7]' }
+}
+
 # ─── Uninstall: New-PctkUninstallScript (read-only, no ejecuta nada) ─────────
 Test-SmokeFunction 'Uninstall' 'New-PctkUninstallScript genera contenido esperado' {
     [string] $fakeRoot = 'C:\FakePCTk'
