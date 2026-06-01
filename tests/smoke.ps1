@@ -108,6 +108,19 @@ Test-SmokeFunction 'MachineProfile' 'Get-MachineProfile' { Get-MachineProfile }
 Test-SmokeFunction 'MachineProfile' 'IsVirtualMachine field' {
     (Get-MachineProfile).PSObject.Properties['IsVirtualMachine']
 }
+# Canary gate Sandbox: marca off-brand de 1 sola palabra (EXO, BANGHO, etc.).
+# $value.Split(' ') | Where-Object {...} con 1 elemento se desenrolla a escalar
+# y $parts.Count tiraba PropertyNotFoundStrict → crasheaba Get-MachineProfile en
+# el arranque (main.ps1). El path default sólo se ejercita con marca NO conocida
+# de 1 palabra — Get-MachineProfile sobre la PC de dev (marca multi-palabra) no
+# lo toca. Test directo del helper con fixture de 1 palabra.
+Test-SmokeFunction 'MachineProfile' 'Get-NormalizedManufacturer 1-word off-brand' {
+    [string] $r = Get-NormalizedManufacturer -RawManufacturer 'EXO'
+    if ($r -ne 'Exo') { throw ("EXO -> 'Exo' esperado; got '{0}'" -f $r) }
+    # Sanity de marcas conocidas + vacío (no deben regresionar)
+    if ((Get-NormalizedManufacturer -RawManufacturer 'ASUSTeK COMPUTER INC.') -ne 'Asus') { throw 'ASUSTeK -> Asus rompió' }
+    if ((Get-NormalizedManufacturer -RawManufacturer '') -ne 'Unknown')                   { throw 'vacío -> Unknown rompió' }
+}
 
 # ─── modules: solo funciones read-only / preview ──────────────────────────────
 Test-SmokeFunction 'Apps' 'Get-InstalledWin32Apps' { Get-InstalledWin32Apps }

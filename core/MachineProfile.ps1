@@ -26,7 +26,7 @@ function Get-NormalizedManufacturer {
         'DELL' { return 'Dell' }
         'ASUS|ASUSTEK' { return 'Asus' }
         default {
-            $parts = $value.Split(' ') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            [object[]] $parts = @($value.Split(' ') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
             if ($parts.Count -gt 0) {
                 [string] $first = $parts[0].ToLowerInvariant()
                 return [char]::ToUpperInvariant($first[0]) + $first.Substring(1)
