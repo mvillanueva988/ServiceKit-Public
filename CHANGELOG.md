@@ -2,6 +2,15 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.1.5] - 2026-06-02
+
+Release: fix de robustez en la lectura de disco (timeout honesto en HDD lento) + neutralizacion de EAP=Stop en el backup de drivers (`pnputil`).
+
+### Fixed
+
+- **Lectura de disco en HDD lento devolvia el disco vacio (`modules/DiskHealth.ps1` + `modules/Telemetry.ps1`)**: en PCs con disco lento la lectura SMART/reliability cruzaba el timeout (10/8s) e `Invoke-WithTimeout` devolvia el `-Default` vacio; como el flag `TimedOut` se descartaba, el disco quedaba nulo e indistinguible de "no hay disco" -- tanto en el diagnostico `[7]` como en el snapshot PRE/POST (el "antes/despues" del cliente). Ahora el timeout se propaga: `[7]` muestra "se agoto el tiempo (PC o disco lento), no es que no haya disco", y el snapshot marca `SmartTimedOut` por disco en vez de un vacio silencioso. Timeouts subidos 10/8s -> 20/12s (constantes tuneables; el valor exacto queda por calibrar en HW con HDD lento). Bug de campo (sesion de taller).
+- **`pnputil` crasheaba el backup de drivers bajo EAP=Stop (`modules/Diagnostics.ps1`)**: la llamada nativa a `pnputil` corria bajo `$ErrorActionPreference='Stop'` de `main.ps1`; en PS5.1 su stderr se vuelve `NativeCommandError` terminante y abortaba el backup. Fix: neutralizar EAP localmente (misma clase que el fix de USB `[16]` de v2.1.4).
+
 ## [2.1.4] - 2026-06-01
 
 Release: recetas auto consolidadas a schema v2.0 + nuevo diagnostico de salud de discos `[7]` + 5 modulos expuestos en `[A][12]-[16]` + 2 fixes de crash por trap StrictMode (USB `[16]`, marca de 1 palabra).

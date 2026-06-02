@@ -7,10 +7,10 @@ Toolkit de optimización y diagnóstico para Windows 10/11. Diseñado para uso t
 Abrir PowerShell como administrador y ejecutar:
 
 ```powershell
-$f = "$env:TEMP\PCTk-Launch.ps1"; irm https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.1.4/Launch.ps1 -OutFile $f; powershell -NoProfile -ExecutionPolicy Bypass -File $f
+$f = "$env:TEMP\PCTk-Launch.ps1"; irm https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.1.5/Launch.ps1 -OutFile $f; powershell -NoProfile -ExecutionPolicy Bypass -File $f
 ```
 
-Reemplaza `v2.1.4` por el tag de la última release estable. Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión más reciente y valida su integridad (SHA-256) antes de instalar.
+Reemplaza `v2.1.5` por el tag de la última release estable. Instala en `C:\PCTk\` y lanza el toolkit. Cada ejecución descarga la versión más reciente y valida su integridad (SHA-256) antes de instalar.
 
 > Nota: se descarga a un archivo y se ejecuta con `powershell -NoProfile -ExecutionPolicy Bypass -File`, no `| iex` ni `& archivo` directo. Motivo: `| iex` rompe porque Launch.ps1 usa `#Requires` y tiene BOM UTF-8 (necesario para el parser en locales no-inglés); y `& archivo` directo lo bloquea la Execution Policy `Restricted` de una máquina nueva. `-ExecutionPolicy Bypass -File` maneja ambos correctamente.
 
@@ -20,7 +20,7 @@ Para validar Launch.ps1 antes de ejecutarlo, comparar el SHA-256 contra el valor
 
 ```powershell
 $f = "$env:TEMP\Launch.ps1"
-Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.1.4/Launch.ps1' -OutFile $f
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/v2.1.5/Launch.ps1' -OutFile $f
 (Get-FileHash $f -Algorithm SHA256).Hash
 # Si el hash coincide con el publicado, ejecutar el archivo:
 # powershell -NoProfile -ExecutionPolicy Bypass -File $f
