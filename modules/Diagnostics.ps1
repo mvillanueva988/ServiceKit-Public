@@ -328,6 +328,12 @@ function Backup-Drivers {
 
     # Si la exportación masiva falló, intentar driver a driver via pnputil
     if ($exported -eq 0) {
+        # pnputil es nativo: bajo $ErrorActionPreference='Stop' (main.ps1) su stderr
+        # se vuelve NativeCommandError terminante y el redirect NO salva (2>&1 / 2>$null
+        # tiran igual). EAP local Continue lo neutraliza y deja correr el chequeo de
+        # $LASTEXITCODE; auto-revierte al return. Misma trampa que powercfg en UsbPower.ps1.
+        $ErrorActionPreference = 'Continue'
+
         foreach ($drv in $targets) {
             try {
                 $driverDest = Join-Path $destFolder ($drv.Driver -replace '\.inf$', '')
