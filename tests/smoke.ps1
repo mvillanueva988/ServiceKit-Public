@@ -514,7 +514,7 @@ Test-SmokeFunction 'NamedProfileEditor' 'Schema rechaza nvidia_sysmem_fallback i
 # cazado en HW (HealthStatus/MediaType vienen como numero, no label).
 Test-SmokeFunction 'DiskHealth' 'Get-DiskHealth no throw + shape' {
     $d = Get-DiskHealth
-    foreach ($f in @('IsVM','Disks','AlertCount','PredictFailAny')) {
+    foreach ($f in @('IsVM','Disks','AlertCount','PredictFailAny','EnumTimedOut')) {
         if ($null -eq $d.PSObject.Properties[$f]) { throw "Campo $f ausente en Get-DiskHealth" }
     }
 }
@@ -558,6 +558,27 @@ Test-SmokeFunction 'DiskHealth' 'TRAMPA: vacio + sin SMART -> UNKNOWN (no OK)' {
 Test-SmokeFunction 'DiskHealth' 'Healthy + SMART faltante -> OK (Windows dice sano)' {
     $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -SmartMissing $true
     if ($r.Alert -ne 'OK') { throw "esperado OK; got $($r.Alert)" }
+}
+# Bug de campo (HDD lento): el timeout devolvia disco vacio sin distinguirse de
+# "no hay disco". El flag TimedOut ahora se propaga; la razon UNKNOWN lo dice.
+Test-SmokeFunction 'DiskHealth' 'TIMEOUT: SmartTimedOut + sin base -> UNKNOWN con razon de timeout' {
+    $r = Get-DiskAlertLevel -HealthStatus '' -SmartMissing $true -SmartTimedOut $true
+    if ($r.Alert -ne 'UNKNOWN') { throw "timeout sin base debe ser UNKNOWN; got $($r.Alert)" }
+    if (($r.Reasons -join ' ') -notmatch 'tiempo|timeout|lento') { throw "la razon debe indicar timeout; got: $($r.Reasons -join ' | ')" }
+}
+Test-SmokeFunction 'DiskHealth' 'TIMEOUT: sin timeout, la razon UNKNOWN NO menciona timeout' {
+    $r = Get-DiskAlertLevel -HealthStatus '' -SmartMissing $true
+    if (($r.Reasons -join ' ') -match 'se agoto el tiempo') { throw "sin timeout no debe decir timeout; got: $($r.Reasons -join ' | ')" }
+}
+Test-SmokeFunction 'DiskHealth' 'TIMEOUT: Healthy + SmartTimedOut -> OK (timeout no degrada salud)' {
+    $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -SmartMissing $true -SmartTimedOut $true
+    if ($r.Alert -ne 'OK') { throw "Healthy con SMART en timeout debe seguir OK; got $($r.Alert)" }
+}
+Test-SmokeFunction 'DiskHealth' 'shape disco: SmartTimedOut presente por disco' {
+    $d = Get-DiskHealth
+    foreach ($disk in @($d.Disks)) {
+        if ($null -eq $disk.PSObject.Properties['SmartTimedOut']) { throw 'campo SmartTimedOut ausente en disco' }
+    }
 }
 Test-SmokeFunction 'DiskHealth' 'cableado: menu principal [7] -> Invoke-DiagnosticDiskHealth' {
     if (-not (Get-Command Invoke-DiagnosticDiskHealth -CommandType Function -ErrorAction SilentlyContinue)) { throw 'handler Invoke-DiagnosticDiskHealth ausente' }

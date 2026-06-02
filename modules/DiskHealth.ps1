@@ -22,6 +22,12 @@ $script:DH_WearCritPct = 90
 $script:DH_TempWarnC    = 60   # disco; temp es la señal menos confiable
 $script:DH_TempCritC    = 70
 
+# Timeouts de lectura. Subidos de 10/8s tras bug de campo (HDD lento devolvia
+# disco vacio al cruzar el timeout, indistinguible de "no hay disco"). Calibrar
+# en HW real. Constantes para tunear sin tocar la logica.
+$script:DH_EnumTimeoutSec  = 20   # Get-PhysicalDisk (enumeracion del subsistema)
+$script:DH_SmartTimeoutSec = 12   # Get-StorageReliabilityCounter por disco (SMART/wear)
+
 # ─── Normalizadores de enum (BUG cazado en HW 2026-05-30) ─────────────────────
 # Get-PhysicalDisk devuelve HealthStatus y MediaType como enums UInt16. Al
 # castear [string] dan el NUMERO crudo ('0' en vez de 'Healthy', '4' en vez de
@@ -77,7 +83,8 @@ function Get-DiskAlertLevel {
         [object] $ReadErrors   = $null,
         [object] $WriteErrors  = $null,
         [bool]   $PredictFail  = $false,
-        [bool]   $SmartMissing = $false
+        [bool]   $SmartMissing = $false,
+        [bool]   $SmartTimedOut = $false
     )
 
     [System.Collections.Generic.List[string]] $reasons = [System.Collections.Generic.List[string]]::new()
@@ -107,7 +114,12 @@ function Get-DiskAlertLevel {
     # (NUNCA asumir "sano" cuando no hay datos).
     [bool] $noBaseHealth = ($label -eq '' -or $label -eq 'Unknown')
     if ($alert -eq 'OK' -and $noBaseHealth -and $SmartMissing) {
-        $alert = 'UNKNOWN'; $reasons.Add('Sin datos de salud disponibles (no se puede evaluar)')
+        $alert = 'UNKNOWN'
+        if ($SmartTimedOut) {
+            $reasons.Add('No se pudo leer la salud: se agoto el tiempo (disco/PC lento). Dato no disponible, NO es "sin disco".')
+        } else {
+            $reasons.Add('Sin datos de salud disponibles (no se puede evaluar)')
+        }
     }
 
     return [PSCustomObject]@{ Alert = $alert; Reasons = $reasons.ToArray() }
@@ -157,10 +169,13 @@ function Get-DiskHealth {
 
     # ── Discos físicos ────────────────────────────────────────────────────────
     [object[]] $physDisks = @()
+    [bool] $enumTimedOut = $false
     if ($hasTimeout) {
-        $physDisks = @((Invoke-WithTimeout -TimeoutSeconds 10 -Default @() -ScriptBlock {
+        $enumEnv = Invoke-WithTimeout -TimeoutSeconds $script:DH_EnumTimeoutSec -Default @() -ScriptBlock {
             @(Get-PhysicalDisk -ErrorAction SilentlyContinue)
-        }).Value)
+        }
+        $physDisks = @($enumEnv.Value)
+        $enumTimedOut = [bool] $enumEnv.TimedOut
     } else {
         try { $physDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue) } catch { $physDisks = @() }
     }
@@ -173,13 +188,16 @@ function Get-DiskHealth {
         [object] $wearPct  = $null
         [object] $readErr  = $null
         [object] $writeErr = $null
+        [bool]   $smartTimedOut = $false
 
         if (-not $isVM) {
             [object] $rel = $null
             if ($hasTimeout) {
-                $rel = (Invoke-WithTimeout -TimeoutSeconds 8 -Default $null -ScriptBlock {
+                $relEnv = Invoke-WithTimeout -TimeoutSeconds $script:DH_SmartTimeoutSec -Default $null -ScriptBlock {
                     param($d) $d | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
-                } -ArgumentList @($physDisk)).Value | Select-Object -First 1
+                } -ArgumentList @($physDisk)
+                $rel = $relEnv.Value | Select-Object -First 1
+                $smartTimedOut = [bool] $relEnv.TimedOut
             } else {
                 try { $rel = $physDisk | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue | Select-Object -First 1 } catch { $rel = $null }
             }
@@ -194,7 +212,7 @@ function Get-DiskHealth {
         # ── Evaluación de umbrales (delega en la función pura testeable) ──────
         [bool] $smartMissing = ($isVM -or ($null -eq $wearPct -and $null -eq $tempC -and $null -eq $readErr -and $null -eq $writeErr))
         $eval = Get-DiskAlertLevel -HealthStatus $health -WearPct $wearPct -TempC $tempC `
-            -ReadErrors $readErr -WriteErrors $writeErr -PredictFail $predictFailAny -SmartMissing $smartMissing
+            -ReadErrors $readErr -WriteErrors $writeErr -PredictFail $predictFailAny -SmartMissing $smartMissing -SmartTimedOut $smartTimedOut
 
         $diskList.Add([PSCustomObject]@{
             Name         = [string] $physDisk.FriendlyName
@@ -206,6 +224,7 @@ function Get-DiskHealth {
             ReadErrors   = $readErr
             WriteErrors  = $writeErr
             SmartMissing = $smartMissing
+            SmartTimedOut = $smartTimedOut
             Alert        = $eval.Alert
             AlertReasons = $eval.Reasons
         })
@@ -217,6 +236,7 @@ function Get-DiskHealth {
     return [PSCustomObject]@{
         IsVM                 = $isVM
         Disks                = $disks
+        EnumTimedOut         = $enumTimedOut
         PredictFailAny       = $predictFailAny
         PredictFailInstances = $predictFailInstances.ToArray()
         AlertCount           = $alertCount
@@ -236,7 +256,12 @@ function Show-DiskHealth {
         Write-Host '  [i] Máquina virtual detectada: SMART no disponible en disco virtual.' -ForegroundColor DarkYellow
     }
     if (@($Data.Disks).Count -eq 0) {
-        Write-Host '  [!] No se detectaron discos físicos.' -ForegroundColor Yellow
+        if ($null -ne $Data.PSObject.Properties['EnumTimedOut'] -and $Data.EnumTimedOut) {
+            Write-Host '  [!] Se agoto el tiempo leyendo los discos (PC o disco muy lento).' -ForegroundColor Yellow
+            Write-Host '      No se pudo completar la lectura. Esto NO significa que no haya disco.' -ForegroundColor DarkYellow
+        } else {
+            Write-Host '  [!] No se detectaron discos físicos.' -ForegroundColor Yellow
+        }
         return
     }
 
@@ -251,6 +276,9 @@ function Show-DiskHealth {
         Write-Host ('        Health: {0}   Wear: {1}   Temp: {2}' -f $hlth, $wear, $temp) -ForegroundColor DarkGray
         if (@($d.AlertReasons).Count -gt 0 -and $d.Alert -ne 'OK') {
             foreach ($r in $d.AlertReasons) { Write-Host ('        -> {0}' -f $r) -ForegroundColor $color }
+        }
+        if ($null -ne $d.PSObject.Properties['SmartTimedOut'] -and $d.SmartTimedOut) {
+            Write-Host '        [i] SMART no leido: se agoto el tiempo (disco lento). Wear/Temp no disponibles.' -ForegroundColor DarkYellow
         }
     }
 

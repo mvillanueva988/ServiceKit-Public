@@ -238,23 +238,27 @@ function Get-SystemSnapshot {
     # SMART (Get-StorageReliabilityCounter) skip en VM (§3d): cuelga en disco virtual.
     $diskList = [System.Collections.Generic.List[PSCustomObject]]::new()
     $sw.Restart()
-    $physDisks = (Invoke-WithTimeout -TimeoutSeconds 10 -Default @() -ScriptBlock {
+    $physEnv = Invoke-WithTimeout -TimeoutSeconds 20 -Default @() -ScriptBlock {
         @(Get-PhysicalDisk -ErrorAction SilentlyContinue)
-    }).Value
-    $qt['Get-PhysicalDisk'] = [int] $sw.ElapsedMilliseconds
+    }
+    $physDisks = $physEnv.Value
+    $qt['Get-PhysicalDisk'] = if ($physEnv.TimedOut) { 'timeout' } else { [int] $sw.ElapsedMilliseconds }
     foreach ($physDisk in $physDisks) {
         $tempC    = $null
         $wearPct  = $null
         $readErr  = $null
         $writeErr = $null
+        $smartTimedOut = $false
         if (-not $isVM) {
             # SMART solo en HW físico
             $sw.Restart()
-            $rel = (Invoke-WithTimeout -TimeoutSeconds 8 -Default $null -ScriptBlock {
+            $relEnv = Invoke-WithTimeout -TimeoutSeconds 12 -Default $null -ScriptBlock {
                 param($d)
                 $d | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
-            } -ArgumentList @($physDisk)).Value | Select-Object -First 1
-            $qt['Get-StorageReliabilityCounter'] = [int] $sw.ElapsedMilliseconds
+            } -ArgumentList @($physDisk)
+            $rel = $relEnv.Value | Select-Object -First 1
+            $smartTimedOut = [bool] $relEnv.TimedOut
+            $qt['Get-StorageReliabilityCounter'] = if ($relEnv.TimedOut) { 'timeout' } else { [int] $sw.ElapsedMilliseconds }
             if ($rel) {
                 if ($null -ne $rel.PSObject.Properties['Temperature'] -and [int]$rel.Temperature -gt 0) {
                     $tempC = [int]$rel.Temperature
@@ -277,6 +281,7 @@ function Get-SystemSnapshot {
             WearPct      = $wearPct
             ReadErrors   = $readErr
             WriteErrors  = $writeErr
+            SmartTimedOut = $smartTimedOut
         })
     }
     [PSCustomObject[]] $disks = $diskList.ToArray()
