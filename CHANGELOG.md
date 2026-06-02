@@ -2,7 +2,21 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
-## [Unreleased]
+## [2.1.4] - 2026-06-01
+
+Release: recetas auto consolidadas a schema v2.0 + nuevo diagnostico de salud de discos `[7]` + 5 modulos expuestos en `[A][12]-[16]` + 2 fixes de crash por trap StrictMode (USB `[16]`, marca de 1 palabra).
+
+### Added
+
+- **Salud de discos SMART/wear (`modules/DiskHealth.ps1`, menu `[7]`)**: nuevo diagnostico que lee estado SMART y wear-level (SSD) y avisa en el menu cuando un disco esta WARN/CRIT (prediccion de falla, wear sobre umbral). Read-only.
+- **5 modulos huerfanos expuestos como `[A][12]-[16]` (`core/Router.ps1`)**: modulos que existian pero no tenian entrada de menu ahora son accesibles desde el submenu avanzado `[A]`.
+- **Clase `Normal` en `[15]` Process Priority (`modules/ProcessPriority.ps1`)**: ademas de las clases altas, se puede devolver un proceso a prioridad Normal.
+
+### Fixed
+
+- **Crash de arranque con marca de 1 palabra (`core/MachineProfile.ps1`, confirmado en cliente real)**: `Get-NormalizedManufacturer` con una marca off-brand de una sola palabra (ej. `EXO`) hacia que `$value.Split(' ') | Where-Object {...}` se desenrollara a escalar y `$parts.Count` tirara `PropertyNotFoundStrict` bajo StrictMode, crasheando `Get-MachineProfile` en el arranque y el toolkit no levantaba. Fix con el patron del repo (`[object[]] $parts = @(...)`). Canary en smoke con fixture de 1 palabra.
+- **`[16]` USB crasheaba al deshabilitar (`modules/UsbPower.ps1`)**: las llamadas a `powercfg` corrian bajo `$ErrorActionPreference='Stop'` de `main.ps1`; en PS5.1 el stderr de un exe nativo se vuelve `NativeCommandError` terminante y crasheaba el toolkit entero. Fix: neutralizar EAP localmente (`Continue`) en las funciones que invocan `powercfg` y dependen de `$LASTEXITCODE`.
+- **Labels `[1]` y `[A]` desalineados con el schema v2.0 (`core/Router.ps1`)**: textos de menu actualizados.
 
 ### Changed
 
