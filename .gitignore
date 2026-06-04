@@ -28,6 +28,7 @@ Logs/
 data/profiles/named/*
 !data/profiles/named/README.md
 !data/profiles/named/_sample.json
+!data/profiles/named/gaming-template.json
 
 # Build artifacts de Release.ps1
 dist/

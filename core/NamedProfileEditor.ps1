@@ -74,7 +74,7 @@ function Test-NamedProfileSchema {
         throw 'gaming_tweaks.defender_exclusions debe ser un array.'
     }
     [object] $ooP = $gt.PSObject.Properties['oosu_profile']
-    if ($null -ne $ooP -and ([string]$ooP.Value) -notin @('basic','medium','aggressive')) {
+    if ($null -ne $ooP -and ([string]$ooP.Value) -notin @('basic','medium','aggressive','gaming')) {
         throw "gaming_tweaks.oosu_profile invalido: '$($ooP.Value)'."
     }
     [object] $trP = $gt.PSObject.Properties['timer_resolution']
@@ -293,6 +293,194 @@ function Get-SteamLibraryPaths {
     }
 }
 
+# ─── Get-InstalledGames (privada, read-only, no-throw) ───────────────────────
+function Get-InstalledGames {
+    <#
+    .SYNOPSIS
+        Enumera juegos instalados de multiples tiendas. Read-only, no-throw,
+        StrictMode-safe. Devuelve [PSCustomObject[]] con campos {Name;Path;Source}.
+        Fuentes: Steam (via Get-SteamLibraryPaths), Epic (manifests JSON),
+        GOG/EA/Ubisoft/Battle.net (registry Uninstall), Xbox/MS Store (best-effort),
+        Fallback (dirs comunes). Loggea con Write-Verbose lo que NO se cubre.
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param()
+
+    [System.Collections.Generic.List[PSCustomObject]] $games =
+        [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # --- Steam ------------------------------------------------------------------
+    try {
+        [string[]] $libs = @(Get-SteamLibraryPaths)
+        foreach ($lib in $libs) {
+            [string] $common = Join-Path $lib 'steamapps\common'
+            if (-not (Test-Path -LiteralPath $common -ErrorAction SilentlyContinue)) { continue }
+            foreach ($dir in @(Get-ChildItem -LiteralPath $common -Directory -ErrorAction SilentlyContinue)) {
+                $games.Add([PSCustomObject]@{ Name = $dir.Name; Path = $dir.FullName; Source = 'Steam' })
+            }
+        }
+    } catch {
+        Write-Verbose "Get-InstalledGames Steam: error suprimido: $($_.Exception.Message)"
+    }
+
+    # --- Epic Games -------------------------------------------------------------
+    try {
+        [string] $epicManifests = 'C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests'
+        if (Test-Path -LiteralPath $epicManifests -ErrorAction SilentlyContinue) {
+            foreach ($item in @(Get-ChildItem -LiteralPath $epicManifests -Filter '*.item' -File -ErrorAction SilentlyContinue)) {
+                try {
+                    [PSCustomObject] $manifest = Get-Content -LiteralPath $item.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+                    if ($null -eq $manifest) { continue }
+                    [object] $nameP = $manifest.PSObject.Properties['DisplayName']
+                    [object] $pathP = $manifest.PSObject.Properties['InstallLocation']
+                    if ($null -eq $nameP -or $null -eq $pathP) { continue }
+                    [string] $gName = [string]$nameP.Value
+                    [string] $gPath = [string]$pathP.Value
+                    if (-not [string]::IsNullOrWhiteSpace($gName) -and -not [string]::IsNullOrWhiteSpace($gPath)) {
+                        $games.Add([PSCustomObject]@{ Name = $gName; Path = $gPath; Source = 'Epic' })
+                    }
+                } catch { }
+            }
+        }
+    } catch {
+        Write-Verbose "Get-InstalledGames Epic: error suprimido: $($_.Exception.Message)"
+    }
+
+    # --- GOG / EA app / Ubisoft / Battle.net (registry Uninstall best-effort) --
+    try {
+        [string[]] $uninstallRoots = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+        )
+        [string[]] $sourcePatterns = @('GOG.com','GOG','Electronic Arts','EA App','Ubisoft','Battle.net','Blizzard')
+        foreach ($root in $uninstallRoots) {
+            if (-not (Test-Path -LiteralPath $root -ErrorAction SilentlyContinue)) { continue }
+            foreach ($key in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                try {
+                    [PSCustomObject] $props = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
+                    if ($null -eq $props) { continue }
+                    [object] $pubP = $props.PSObject.Properties['Publisher']
+                    [string] $pub  = if ($null -ne $pubP) { [string]$pubP.Value } else { '' }
+                    [bool] $isKnownLauncher = $false
+                    foreach ($pat in $sourcePatterns) {
+                        if ($pub -match [regex]::Escape($pat)) { $isKnownLauncher = $true; break }
+                    }
+                    if (-not $isKnownLauncher) { continue }
+                    [object] $nameP2 = $props.PSObject.Properties['DisplayName']
+                    [object] $pathP2 = $props.PSObject.Properties['InstallLocation']
+                    if ($null -eq $nameP2) { continue }
+                    [string] $gName2 = [string]$nameP2.Value
+                    [string] $gPath2 = if ($null -ne $pathP2) { [string]$pathP2.Value } else { '' }
+                    if ([string]::IsNullOrWhiteSpace($gName2)) { continue }
+                    # Deduplicar por nombre
+                    [bool] $dup = $false
+                    foreach ($existing in $games) {
+                        if ($existing.Name -eq $gName2) { $dup = $true; break }
+                    }
+                    if (-not $dup) {
+                        # Detectar fuente por publisher
+                        [string] $src = 'Otro'
+                        if ($pub -match 'GOG')                  { $src = 'GOG' }
+                        elseif ($pub -match 'Electronic Arts|EA') { $src = 'EA' }
+                        elseif ($pub -match 'Ubisoft')           { $src = 'Ubisoft' }
+                        elseif ($pub -match 'Blizzard|Battle')   { $src = 'Battle.net' }
+                        $games.Add([PSCustomObject]@{ Name = $gName2; Path = $gPath2; Source = $src })
+                    }
+                } catch { }
+            }
+        }
+    } catch {
+        Write-Verbose "Get-InstalledGames GOG/EA/Ubisoft/BNet: error suprimido: $($_.Exception.Message)"
+    }
+
+    # --- Xbox / MS Store (best-effort; UWP, cobertura parcial) -----------------
+    # Get-AppxPackage puede ser lento o incompleto en PS5.1/Win10; se intenta y si
+    # falla se loggea. NO es silencio: Write-Verbose documenta la limitacion.
+    try {
+        [object[]] $xboxPkgs = @(Get-AppxPackage -ErrorAction SilentlyContinue |
+            Where-Object { $null -ne $_ -and $_.PublisherId -match 'Microsoft' -and
+                           $_.Name -match 'Xbox|GameApp|Gaming' } )
+        foreach ($pkg in $xboxPkgs) {
+            [object] $locP = $pkg.PSObject.Properties['InstallLocation']
+            [string] $xPath = if ($null -ne $locP) { [string]$locP.Value } else { '' }
+            $games.Add([PSCustomObject]@{ Name = $pkg.Name; Path = $xPath; Source = 'Xbox' })
+        }
+    } catch {
+        Write-Verbose "Get-InstalledGames Xbox/MS Store: no cubierto en este sistema (Get-AppxPackage fallo o no retorno juegos). $($_.Exception.Message)"
+    }
+
+    return $games.ToArray()
+}
+
+# ─── New-GamingPreset ─────────────────────────────────────────────────────────
+function New-GamingPreset {
+    <#
+    .SYNOPSIS
+        Pre-llena gaming_tweaks con defaults HW-smart segun MachineProfile.
+        Los defaults son CONJETURAS del research (2026-05-30); validar en HW.
+        SIEMPRE devuelve un objeto editable (no aplica nada). StrictMode-safe.
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
+    )
+
+    [PSCustomObject] $gt = [PSCustomObject]@{}
+
+    # hvci = off (gaming; VBS/WSL2 se preservan)
+    $gt | Add-Member -NotePropertyName 'hvci' -NotePropertyValue 'off' -Force
+
+    # game_mode = on
+    $gt | Add-Member -NotePropertyName 'game_mode' -NotePropertyValue 'on' -Force
+
+    # usb_selective_suspend = off (perifericos 2.4GHz/HID/latencia)
+    $gt | Add-Member -NotePropertyName 'usb_selective_suspend' -NotePropertyValue 'off' -Force
+
+    # timer_resolution = on SOLO si Win11. Get-MachineProfile emite IsWin11 (bool,
+    # = build>=22000); NO existe WinBuild. Defensivo con PSObject.Properties.
+    [object] $win11P = $MachineProfile.PSObject.Properties['IsWin11']
+    [bool] $isWin11 = if ($null -ne $win11P -and $null -ne $win11P.Value) {
+        try { [bool]$win11P.Value } catch { $false }
+    } else { $false }
+    if ($isWin11) {
+        $gt | Add-Member -NotePropertyName 'timer_resolution' -NotePropertyValue 'on' -Force
+    }
+
+    # hags: on si RTX40+ (por nombre de GPU); off si VRAM < 8192 MB; omitir si no se sabe
+    # VRAM via DGpuVramMb (tabla de modelos, NO AdapterRAM); GpuNames para detectar RTX40/50.
+    [object] $vramP = $MachineProfile.PSObject.Properties['DGpuVramMb']
+    [int] $vramMb = if ($null -ne $vramP -and $vramP.Value -ne $null) {
+        try { [int]$vramP.Value } catch { 0 }
+    } else { 0 }
+
+    [object] $gpuNamesP = $MachineProfile.PSObject.Properties['GpuNames']
+    [bool] $isRtx40Plus = $false
+    if ($null -ne $gpuNamesP -and $null -ne $gpuNamesP.Value) {
+        [object[]] $gNames = @($gpuNamesP.Value)
+        foreach ($gn in $gNames) {
+            if ([string]$gn -match 'RTX\s*[45]\d{3}') { $isRtx40Plus = $true; break }
+        }
+    }
+
+    if ($isRtx40Plus) {
+        $gt | Add-Member -NotePropertyName 'hags' -NotePropertyValue 'on' -Force
+    } elseif ($vramMb -gt 0 -and $vramMb -lt 8192) {
+        $gt | Add-Member -NotePropertyName 'hags' -NotePropertyValue 'off' -Force
+    }
+    # Si no se puede determinar (vramMb=0 y no RTX40+): NO incluir hags (no tocar)
+
+    # oosu_profile = gaming
+    $gt | Add-Member -NotePropertyName 'oosu_profile' -NotePropertyValue 'gaming' -Force
+
+    # defender_exclusions = [] (vacio; el operador los agrega via scan/toggle)
+    $gt | Add-Member -NotePropertyName 'defender_exclusions' -NotePropertyValue @() -Force
+
+    return $gt
+}
+
 # ─── New-NamedProfileInteractive ──────────────────────────────────────────────
 function New-NamedProfileInteractive {
     <#
@@ -304,17 +492,30 @@ function New-NamedProfileInteractive {
     [CmdletBinding()]
     [OutputType([PSCustomObject])]
     param(
-        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile,
+        # Si se pasa, pre-llena gaming_tweaks con defaults HW-smart (modo gaming preset).
+        # El operador puede sobreescribir cada valor con Enter=no tocar o eligiendo otro.
+        [Parameter()] [switch] $UseGamingPreset
     )
 
-    function Read-OnOffSkip([string] $Label, [string] $CurrentState) {
+    function Read-OnOffSkip([string] $Label, [string] $CurrentState, [string] $PresetDefault = '') {
         Write-Host ''
-        Write-Host ("  {0}  (estado actual: {1})" -f $Label, $CurrentState) -ForegroundColor Cyan
-        [string] $a = (Read-Host '    [o]n / [f]off / Enter=no tocar').Trim().ToLowerInvariant()
+        [string] $hint = if ([string]::IsNullOrWhiteSpace($PresetDefault)) {
+            "  {0}  (actual: {1})" -f $Label, $CurrentState
+        } else {
+            "  {0}  (actual: {1}  |  preset: {2})" -f $Label, $CurrentState, $PresetDefault
+        }
+        Write-Host $hint -ForegroundColor Cyan
+        [string] $promptTxt = if ([string]::IsNullOrWhiteSpace($PresetDefault)) {
+            '    [o]n / [f]off / Enter=no tocar'
+        } else {
+            "    [o]n / [f]off / Enter=usar preset ($PresetDefault)"
+        }
+        [string] $a = (Read-Host $promptTxt).Trim().ToLowerInvariant()
         switch ($a) {
             'o'   { 'on' }  'on'  { 'on' }
             'f'   { 'off' } 'off' { 'off' }
-            default { $null }
+            default { if (-not [string]::IsNullOrWhiteSpace($PresetDefault)) { $PresetDefault } else { $null } }
         }
     }
 
@@ -326,7 +527,7 @@ function New-NamedProfileInteractive {
     [PSCustomObject] $gt = [PSCustomObject]@{}
     function Add-Tweak([string]$Key, $Value) {
         # $gt es local de New-NamedProfileInteractive; Add-Tweak lo resuelve por
-        # scope dinamico y muta el MISMO objeto que se lee/retorna abajo (410/438).
+        # scope dinamico y muta el MISMO objeto que se lee/retorna abajo.
         # NO usar $script:gt: crashea con StrictMode (nunca seteado) y ademas
         # arrastraria estado entre llamadas.
         if ($null -ne $Value) { $gt | Add-Member -NotePropertyName $Key -NotePropertyValue $Value -Force }
@@ -337,10 +538,23 @@ function New-NamedProfileInteractive {
         try { $r = & $Get; if ($null -ne $r -and $r.PSObject.Properties[$Prop]) { [string]$r.$Prop } else { 'N/A' } } catch { 'N/A' }
     }
 
-    Add-Tweak 'hvci'                  (Read-OnOffSkip 'HVCI / Memory Integrity (off recomendado gaming; VBS se preserva)' (Safe-State { Get-CoreIsolationStatus } 'HvciEnabled'))
-    Add-Tweak 'hags'                  (Read-OnOffSkip 'HAGS (Hardware-Accelerated GPU Scheduling)'                         (Safe-State { Get-HagsStatus } 'Enabled'))
-    Add-Tweak 'usb_selective_suspend' (Read-OnOffSkip 'USB Selective Suspend (off recomendado p/ periféricos gaming)'      (Safe-State { Get-UsbSelectiveSuspendStatus } 'Enabled'))
-    Add-Tweak 'game_mode'             (Read-OnOffSkip 'Game Mode'                                                          (Safe-State { Get-GameModeStatus } 'EffectiveState'))
+    # Defaults HW-smart del preset (si se activo; sino string vacio = sin sugerencia)
+    [PSCustomObject] $presetGt = $null
+    if ($UseGamingPreset) {
+        Write-Host '  [Preset gaming] Calculando defaults HW-smart...' -ForegroundColor DarkGray
+        $presetGt = New-GamingPreset -MachineProfile $MachineProfile
+    }
+    function Get-PresetDefault([string]$Key) {
+        if ($null -eq $presetGt) { return '' }
+        [object] $p = $presetGt.PSObject.Properties[$Key]
+        if ($null -ne $p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return [string]$p.Value }
+        return ''
+    }
+
+    Add-Tweak 'hvci'                  (Read-OnOffSkip 'HVCI / Memory Integrity (off recomendado gaming; VBS se preserva)' (Safe-State { Get-CoreIsolationStatus } 'HvciEnabled') (Get-PresetDefault 'hvci'))
+    Add-Tweak 'hags'                  (Read-OnOffSkip 'HAGS (Hardware-Accelerated GPU Scheduling)'                         (Safe-State { Get-HagsStatus } 'Enabled')              (Get-PresetDefault 'hags'))
+    Add-Tweak 'usb_selective_suspend' (Read-OnOffSkip 'USB Selective Suspend (off recomendado p/ periféricos gaming)'      (Safe-State { Get-UsbSelectiveSuspendStatus } 'Enabled') (Get-PresetDefault 'usb_selective_suspend'))
+    Add-Tweak 'game_mode'             (Read-OnOffSkip 'Game Mode'                                                          (Safe-State { Get-GameModeStatus } 'EffectiveState')     (Get-PresetDefault 'game_mode'))
 
     # .wslconfig
     Write-Host ''
@@ -349,24 +563,76 @@ function New-NamedProfileInteractive {
         Add-Tweak 'wslconfig' ([PSCustomObject]@{ enabled = $true; preset = $w })
     }
 
-    # Defender exclusions -- sugerencias Steam opt-in (D-S42c)
+    # Juegos instalados -- scan multi-tienda + toggle por juego (D: Get-InstalledGames)
+    # Los elegidos van a defender_exclusions (Path) + process_priority (exe -> High).
     Write-Host ''
-    [string[]] $steamSugg = @(Get-SteamLibraryPaths)
+    Write-Host '  Escaneando juegos instalados (Steam/Epic/GOG/EA/Ubisoft/Xbox)...' -ForegroundColor DarkGray
+    [PSCustomObject[]] $allGames = @(Get-InstalledGames)
     [System.Collections.Generic.List[string]] $dePaths = [System.Collections.Generic.List[string]]::new()
-    if ($steamSugg.Count -gt 0) {
-        Write-Host '  Sugerencias Steam detectadas:' -ForegroundColor DarkYellow
-        for ([int] $si = 0; $si -lt $steamSugg.Count; $si++) {
-            Write-Host ("    [{0}] {1}" -f ($si + 1), $steamSugg[$si]) -ForegroundColor DarkYellow
-        }
-        [string] $numIn = (Read-Host '  Numeros a incluir (ej. 1 3) o Enter=ninguno').Trim()
-        foreach ($tok in @($numIn -split '\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-            [int] $idx = 0
-            if ([int]::TryParse($tok, [ref] $idx) -and $idx -ge 1 -and $idx -le $steamSugg.Count) {
-                $dePaths.Add($steamSugg[$idx - 1])
+    [PSCustomObject] $ppObj = [PSCustomObject]@{}
+    [bool] $ppHasEntries = $false
+    if ($allGames.Count -gt 0) {
+        Write-Host ("  {0} juego(s) detectado(s):" -f $allGames.Count) -ForegroundColor DarkYellow
+        # Paginar: mostrar hasta 30 por pantalla para no truncar en silencio
+        [int] $pageSize = 30
+        [int] $totalPages = [int][Math]::Ceiling($allGames.Count / $pageSize)
+        [int] $page = 0
+        while ($page -lt $totalPages) {
+            [int] $start = $page * $pageSize
+            [int] $end   = [Math]::Min($start + $pageSize, $allGames.Count) - 1
+            for ([int] $gi = $start; $gi -le $end; $gi++) {
+                [string] $src = $allGames[$gi].Source
+                [string] $gname = $allGames[$gi].Name
+                Write-Host ("    [{0}] [{1}] {2}" -f ($gi + 1), $src, $gname) -ForegroundColor DarkYellow
             }
+            if ($totalPages -gt 1) {
+                Write-Host ("  (Pagina {0}/{1}; Total: {2})" -f ($page + 1), $totalPages, $allGames.Count) -ForegroundColor DarkGray
+            }
+            [string] $numIn = (Read-Host '  Numeros a optimizar (Defender + IFEO High; ej. 1 3) o Enter=ninguno').Trim()
+            foreach ($tok in @($numIn -split '\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+                [int] $idx = 0
+                if ([int]::TryParse($tok, [ref] $idx) -and $idx -ge 1 -and $idx -le $allGames.Count) {
+                    [PSCustomObject] $chosen = $allGames[$idx - 1]
+                    # defender_exclusions: agregar el Path si no esta vacio
+                    [object] $cpP = $chosen.PSObject.Properties['Path']
+                    if ($null -ne $cpP -and -not [string]::IsNullOrWhiteSpace([string]$cpP.Value)) {
+                        $dePaths.Add([string]$cpP.Value)
+                    }
+                    # process_priority: buscar .exe en el directorio del juego (heuristico)
+                    [object] $gpP = $chosen.PSObject.Properties['Path']
+                    if ($null -ne $gpP -and -not [string]::IsNullOrWhiteSpace([string]$gpP.Value)) {
+                        [string] $gameDir = [string]$gpP.Value
+                        [object[]] $exes = @()
+                        if (Test-Path -LiteralPath $gameDir -ErrorAction SilentlyContinue) {
+                            # Sin -Recurse: solo el nivel raiz del directorio del juego
+                            $exes = @(Get-ChildItem -LiteralPath $gameDir -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+                                      Where-Object { $_.Length -gt 1MB })
+                        }
+                        if ($exes.Count -gt 0) {
+                            Write-Host ("    Ejecutables detectados en {0}:" -f $chosen.Name) -ForegroundColor DarkGray
+                            for ([int] $ei = 0; $ei -lt $exes.Count; $ei++) {
+                                Write-Host ("      [{0}] {1}" -f ($ei + 1), $exes[$ei].Name) -ForegroundColor DarkGray
+                            }
+                            [string] $exeIn = (Read-Host '      Numeros IFEO High (ej. 1 2) o Enter=ninguno').Trim()
+                            foreach ($etok in @($exeIn -split '\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+                                [int] $eidx = 0
+                                if ([int]::TryParse($etok, [ref] $eidx) -and $eidx -ge 1 -and $eidx -le $exes.Count) {
+                                    [string] $exeName = $exes[$eidx - 1].Name
+                                    $ppObj | Add-Member -NotePropertyName $exeName -NotePropertyValue 'High' -Force
+                                    $ppHasEntries = $true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            $page++
         }
+    } else {
+        Write-Host '  No se detectaron juegos instalados (o ninguna tienda compatible presente).' -ForegroundColor DarkGray
+        Write-Verbose 'Get-InstalledGames: sin juegos detectados; Xbox/MS Store puede no estar cubierto en este sistema.'
     }
-    [string] $deExtra = (Read-Host '  Paths adicionales de exclusion (sep. ;) o Enter=ninguno').Trim()
+    [string] $deExtra = (Read-Host '  Paths adicionales de exclusion Defender (sep. ;) o Enter=ninguno').Trim()
     if (-not [string]::IsNullOrWhiteSpace($deExtra)) {
         foreach ($ep in @($deExtra -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
             $dePaths.Add($ep)
@@ -376,20 +642,38 @@ function New-NamedProfileInteractive {
 
     # OOSU profile
     Write-Host ''
-    [string] $oo = (Read-Host '  OOSU profile [basic/medium/aggressive] o Enter=no tocar').Trim().ToLowerInvariant()
-    if ($oo -in @('basic','medium','aggressive')) { Add-Tweak 'oosu_profile' $oo }
+    [string] $ooPreset = Get-PresetDefault 'oosu_profile'
+    [string] $ooPrompt = if (-not [string]::IsNullOrWhiteSpace($ooPreset)) {
+        "  OOSU profile [basic/medium/aggressive/gaming] o Enter=usar preset ($ooPreset)"
+    } else {
+        '  OOSU profile [basic/medium/aggressive/gaming] o Enter=no tocar'
+    }
+    [string] $oo = (Read-Host $ooPrompt).Trim().ToLowerInvariant()
+    if ($oo -in @('basic','medium','aggressive','gaming')) {
+        Add-Tweak 'oosu_profile' $oo
+    } elseif (-not [string]::IsNullOrWhiteSpace($ooPreset)) {
+        Add-Tweak 'oosu_profile' $ooPreset
+    }
 
     # timer_resolution (registry-only Win11, cost-zero, requiere reinicio)
     Write-Host ''
-    [string] $tr = (Read-Host '  Timer Resolution [on/off] o Enter=no tocar').Trim().ToLowerInvariant()
-    if ($tr -in @('on', 'off')) { Add-Tweak 'timer_resolution' $tr }
+    [string] $trPreset = Get-PresetDefault 'timer_resolution'
+    [string] $trPrompt = if (-not [string]::IsNullOrWhiteSpace($trPreset)) {
+        "  Timer Resolution [on/off] o Enter=usar preset ($trPreset)"
+    } else {
+        '  Timer Resolution [on/off] o Enter=no tocar'
+    }
+    [string] $tr = (Read-Host $trPrompt).Trim().ToLowerInvariant()
+    if ($tr -in @('on', 'off')) {
+        Add-Tweak 'timer_resolution' $tr
+    } elseif (-not [string]::IsNullOrWhiteSpace($trPreset)) {
+        Add-Tweak 'timer_resolution' $trPreset
+    }
 
-    # process_priority (IFEO estatico, ej. game.exe=High;otro.exe=AboveNormal)
+    # IFEO adicional manual (agrega entradas al $ppObj ya construido por el scan de juegos)
     Write-Host ''
-    [string] $ppRaw = (Read-Host '  Prioridad IFEO (ej. game.exe=High;otro.exe=AboveNormal) o Enter=no tocar').Trim()
+    [string] $ppRaw = (Read-Host '  IFEO adicional manual (ej. game.exe=High;otro.exe=AboveNormal) o Enter=ninguno').Trim()
     if (-not [string]::IsNullOrWhiteSpace($ppRaw)) {
-        [PSCustomObject] $ppObj = [PSCustomObject]@{}
-        [bool] $ppHasEntries = $false
         foreach ($ppPair in @($ppRaw -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
             [string[]] $ppKv = $ppPair -split '=', 2
             if ($ppKv.Count -eq 2) {
@@ -401,8 +685,9 @@ function New-NamedProfileInteractive {
                 }
             }
         }
-        if ($ppHasEntries) { Add-Tweak 'process_priority' $ppObj }
     }
+    # Guardar process_priority (del scan de juegos + manual combinado)
+    if ($ppHasEntries) { Add-Tweak 'process_priority' $ppObj }
 
     # nvidia_sysmem_fallback (gateado por GPU NVIDIA dedicada + inspector en tools\bin)
     Write-Host ''

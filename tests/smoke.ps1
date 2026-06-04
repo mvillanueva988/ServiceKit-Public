@@ -1150,6 +1150,159 @@ Test-SmokeFunction 'UninstallPreserve' 'preserve-clients-survives-zip-fail: si z
     }
 }
 
+# ─── #10 Gaming Profile: schema, preset, Get-InstalledGames, fold-#19 ────────
+
+# C. gaming-template.json valida con Test-NamedProfileSchema + ConvertFrom-Json
+Test-SmokeFunction 'GamingProfile' 'gaming-template.json parsea sin error' {
+    [string] $tplPath = Join-Path (Get-NamedProfileDir) 'gaming-template.json'
+    if (-not (Test-Path -LiteralPath $tplPath)) { throw "gaming-template.json no encontrado en $(Get-NamedProfileDir)" }
+    [PSCustomObject] $tpl = Get-Content -LiteralPath $tplPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($null -eq $tpl) { throw 'gaming-template.json parseo a null' }
+}
+Test-SmokeFunction 'GamingProfile' 'gaming-template.json valida contra Test-NamedProfileSchema' {
+    [string] $tplPath = Join-Path (Get-NamedProfileDir) 'gaming-template.json'
+    $tpl = Get-Content -LiteralPath $tplPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $null = Test-NamedProfileSchema -Profile $tpl
+}
+
+# B. oosu_profile='gaming' aceptado; 'xxx' rechazado
+Test-SmokeFunction 'GamingProfile' "oosu_profile='gaming' aceptado por schema" {
+    [string] $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $p.gaming_tweaks | Add-Member -NotePropertyName 'oosu_profile' -NotePropertyValue 'gaming' -Force
+    $null = Test-NamedProfileSchema -Profile $p
+}
+Test-SmokeFunction 'GamingProfile' "oosu_profile='xxx' rechazado por schema" {
+    [string] $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    $p.gaming_tweaks | Add-Member -NotePropertyName 'oosu_profile' -NotePropertyValue 'xxx' -Force
+    [bool] $threw = $false
+    try { $null = Test-NamedProfileSchema -Profile $p } catch { $threw = $true }
+    if (-not $threw) { throw "Test-NamedProfileSchema debio rechazar oosu_profile='xxx'" }
+}
+
+# A. New-GamingPreset: fixture 1 GPU con VRAM 8GB -> hags=off
+Test-SmokeFunction 'GamingProfile' 'New-GamingPreset fixture 1-GPU VRAM<8GB -> hags off' {
+    # Fixture con 1 GPU, VRAM 6144 MB (< 8192); coleccion de 1 elemento (trampa StrictMode)
+    [object[]] $gpuNames = @('NVIDIA GeForce RTX 3060')   # RTX30: no RTX40+, VRAM=6144
+    $mp = [PSCustomObject]@{
+        DGpuVramMb = 6144
+        GpuNames   = $gpuNames
+        IsWin11    = $false
+    }
+    $gt = New-GamingPreset -MachineProfile $mp
+    if ($null -eq $gt) { throw 'New-GamingPreset devolvio $null' }
+    [object] $hagsP = $gt.PSObject.Properties['hags']
+    if ($null -eq $hagsP -or [string]$hagsP.Value -ne 'off') {
+        throw ("VRAM<8GB debe dar hags=off; got '{0}'" -f $(if ($hagsP) { $hagsP.Value } else { '(ausente)' }))
+    }
+    [object] $hvciP = $gt.PSObject.Properties['hvci']
+    if ($null -eq $hvciP -or [string]$hvciP.Value -ne 'off') { throw "hvci debe ser off; got '$($hvciP.Value)'" }
+    [object] $gmP = $gt.PSObject.Properties['game_mode']
+    if ($null -eq $gmP -or [string]$gmP.Value -ne 'on') { throw "game_mode debe ser on" }
+    # timer_resolution: Win10 (build=19041) -> NO debe incluirse
+    [object] $trP = $gt.PSObject.Properties['timer_resolution']
+    if ($null -ne $trP) { throw 'Win10 (build<22000): timer_resolution NO debe incluirse en el preset' }
+    # oosu_profile = gaming
+    [object] $ooP = $gt.PSObject.Properties['oosu_profile']
+    if ($null -eq $ooP -or [string]$ooP.Value -ne 'gaming') { throw "oosu_profile debe ser 'gaming'" }
+}
+Test-SmokeFunction 'GamingProfile' 'New-GamingPreset fixture RTX40 -> hags on' {
+    # Fixture con 1 GPU RTX40+ (RTX 4070); coleccion de 1 elemento
+    [object[]] $gpuNames = @('NVIDIA GeForce RTX 4070')
+    $mp = [PSCustomObject]@{
+        DGpuVramMb = 12288
+        GpuNames   = $gpuNames
+        IsWin11    = $true
+    }
+    $gt = New-GamingPreset -MachineProfile $mp
+    if ($null -eq $gt) { throw 'New-GamingPreset devolvio $null con RTX40' }
+    [object] $hagsP = $gt.PSObject.Properties['hags']
+    if ($null -eq $hagsP -or [string]$hagsP.Value -ne 'on') {
+        throw ("RTX40+ debe dar hags=on; got '{0}'" -f $(if ($hagsP) { $hagsP.Value } else { '(ausente)' }))
+    }
+    # timer_resolution: Win11 (build=22621) -> debe estar
+    [object] $trP = $gt.PSObject.Properties['timer_resolution']
+    if ($null -eq $trP -or [string]$trP.Value -ne 'on') {
+        throw ("Win11 build>=22000: timer_resolution debe ser on; got '{0}'" -f $(if ($trP) { $trP.Value } else { '(ausente)' }))
+    }
+}
+# El resultado del preset debe validar con Test-NamedProfileSchema (en una receta named completa)
+Test-SmokeFunction 'GamingProfile' 'New-GamingPreset produce gaming_tweaks que pasa schema' {
+    [object[]] $gpuNames = @('NVIDIA GeForce RTX 3070')
+    $mp = [PSCustomObject]@{ DGpuVramMb = 8192; GpuNames = $gpuNames; IsWin11 = $true }
+    $gt = New-GamingPreset -MachineProfile $mp
+    # Construir receta named minima con el gaming_tweaks del preset
+    [string] $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
+    $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
+    # Reemplazar gaming_tweaks con el preset (campo a campo)
+    foreach ($prop in @($gt.PSObject.Properties)) {
+        $p.gaming_tweaks | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value -Force
+    }
+    $null = Test-NamedProfileSchema -Profile $p
+}
+
+# D. Get-InstalledGames: no-throw con/sin tiendas
+Test-SmokeFunction 'GamingProfile' 'Get-InstalledGames no-throw devuelve array' {
+    # Read-only: no valida deteccion real (eso es HW). Solo verifica que no lanza
+    # y retorna un array (posiblemente vacio).
+    [PSCustomObject[]] $games = @(Get-InstalledGames)
+    if ($null -eq $games) { throw 'Get-InstalledGames retorno $null (esperado array, posiblemente vacio)' }
+    # Shape: cada elemento debe tener Name, Path, Source
+    foreach ($g in $games) {
+        if ($null -eq $g.PSObject.Properties['Name'])   { throw 'campo Name ausente en juego' }
+        if ($null -eq $g.PSObject.Properties['Path'])   { throw 'campo Path ausente en juego' }
+        if ($null -eq $g.PSObject.Properties['Source']) { throw 'campo Source ausente en juego' }
+    }
+}
+
+# E. Fold #19: Disable-Hvci / Enable-Hvci: check estructural (GPO check presente en codigo)
+# El test de mutacion real (GPO impuesto) requiere HW con GPO; el smoke solo verifica
+# que el codigo de la guardia esta presente (evita que el fix se borre en silencio).
+Test-SmokeFunction 'GamingProfile' 'fold-19: Disable-Hvci tiene check GPO antes de Set-ItemProperty' {
+    [string] $rRoot    = Split-Path -Parent $PSScriptRoot
+    [string] $ciFile   = Join-Path $rRoot 'modules\CoreIsolation.ps1'
+    if (-not (Test-Path -LiteralPath $ciFile)) { throw 'CoreIsolation.ps1 no encontrado' }
+    [string] $content  = [System.IO.File]::ReadAllText($ciFile)
+    # El bloque de Disable-Hvci debe contener la clave de la guardia
+    [int] $fnStart = $content.IndexOf('function Disable-Hvci')
+    if ($fnStart -lt 0) { throw 'Disable-Hvci no encontrada en CoreIsolation.ps1' }
+    # Buscar el cuerpo de la funcion
+    [int] $braceOpen = $content.IndexOf('{', $fnStart)
+    [int] $depth = 0; [int] $fnEnd = $braceOpen
+    for ([int] $i = $braceOpen; $i -lt $content.Length; $i++) {
+        if ($content[$i] -eq '{') { $depth++ }
+        elseif ($content[$i] -eq '}') { $depth--; if ($depth -eq 0) { $fnEnd = $i; break } }
+    }
+    [string] $fnBody = $content.Substring($fnStart, $fnEnd - $fnStart + 1)
+    if ($fnBody -notmatch 'Policies.*DeviceGuard') {
+        throw 'Disable-Hvci no contiene check GPO (Policies\Microsoft\Windows\DeviceGuard) -- fold-19 rota'
+    }
+    if ($fnBody -notmatch 'Blocked') {
+        throw 'Disable-Hvci no retorna campo Blocked -- fold-19 rota'
+    }
+}
+Test-SmokeFunction 'GamingProfile' 'fold-19: Enable-Hvci tiene check GPO antes de Set-ItemProperty' {
+    [string] $rRoot    = Split-Path -Parent $PSScriptRoot
+    [string] $ciFile   = Join-Path $rRoot 'modules\CoreIsolation.ps1'
+    [string] $content  = [System.IO.File]::ReadAllText($ciFile)
+    [int] $fnStart = $content.IndexOf('function Enable-Hvci')
+    if ($fnStart -lt 0) { throw 'Enable-Hvci no encontrada en CoreIsolation.ps1' }
+    [int] $braceOpen = $content.IndexOf('{', $fnStart)
+    [int] $depth = 0; [int] $fnEnd = $braceOpen
+    for ([int] $i = $braceOpen; $i -lt $content.Length; $i++) {
+        if ($content[$i] -eq '{') { $depth++ }
+        elseif ($content[$i] -eq '}') { $depth--; if ($depth -eq 0) { $fnEnd = $i; break } }
+    }
+    [string] $fnBody = $content.Substring($fnStart, $fnEnd - $fnStart + 1)
+    if ($fnBody -notmatch 'Policies.*DeviceGuard') {
+        throw 'Enable-Hvci no contiene check GPO (Policies\Microsoft\Windows\DeviceGuard) -- fold-19 rota'
+    }
+    if ($fnBody -notmatch 'Blocked') {
+        throw 'Enable-Hvci no retorna campo Blocked -- fold-19 rota'
+    }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

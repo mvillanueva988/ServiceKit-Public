@@ -118,6 +118,39 @@ function Disable-Hvci {
     [string] $hvciPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
     [string] $dgPath   = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
 
+    # GPO/MDM policy check (#19): read-only, no-throw, ~10 lineas.
+    # Si hay imposicion de politica -> NO escribir; retornar Blocked=$true.
+    try {
+        [string] $gpoPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'
+        [string] $mdmPolicyPath = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\DeviceGuard'
+        [bool] $blockedByPolicy = $false
+        [string] $policySource  = ''
+        if (Test-Path -LiteralPath $gpoPolicyPath -ErrorAction SilentlyContinue) {
+            [PSCustomObject] $gpoReg = Get-ItemProperty -Path $gpoPolicyPath -ErrorAction SilentlyContinue
+            if ($null -ne $gpoReg -and $null -ne $gpoReg.PSObject.Properties['HypervisorEnforcedCodeIntegrity']) {
+                [int] $gpoVal = [int]$gpoReg.HypervisorEnforcedCodeIntegrity
+                if ($gpoVal -ge 1) { $blockedByPolicy = $true; $policySource = 'GPO' }
+            }
+        }
+        if (-not $blockedByPolicy -and (Test-Path -LiteralPath $mdmPolicyPath -ErrorAction SilentlyContinue)) {
+            [PSCustomObject] $mdmReg = Get-ItemProperty -Path $mdmPolicyPath -ErrorAction SilentlyContinue
+            if ($null -ne $mdmReg -and $null -ne $mdmReg.PSObject.Properties['HypervisorEnforcedCodeIntegrity_ProviderSet']) {
+                [int] $mdmVal = try { [int]$mdmReg.HypervisorEnforcedCodeIntegrity_ProviderSet } catch { 0 }
+                if ($mdmVal -ge 1) { $blockedByPolicy = $true; $policySource = 'MDM/Intune' }
+            }
+        }
+        if ($blockedByPolicy) {
+            return [PSCustomObject]@{
+                Success         = $false
+                Blocked         = $true
+                Applied         = @()
+                Errors          = @()
+                RestartRequired = $false
+                Reason          = "HVCI bloqueado por politica ($policySource); no se modifico el registro."
+            }
+        }
+    } catch { } # read-only: si falla el check de politica, continuar (mejor esfuerzo)
+
     [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
     [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
 
@@ -143,6 +176,7 @@ function Disable-Hvci {
 
     return [PSCustomObject]@{
         Success         = ($errors.Count -eq 0)
+        Blocked         = $false
         Applied         = $applied.ToArray()
         Errors          = $errors.ToArray()
         RestartRequired = $true
@@ -166,6 +200,38 @@ function Enable-Hvci {
     [string] $hvciPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
     [string] $dgPath   = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
 
+    # GPO/MDM policy check (#19): misma logica que Disable-Hvci (read-only, no-throw).
+    try {
+        [string] $gpoPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'
+        [string] $mdmPolicyPath = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\DeviceGuard'
+        [bool] $blockedByPolicy = $false
+        [string] $policySource  = ''
+        if (Test-Path -LiteralPath $gpoPolicyPath -ErrorAction SilentlyContinue) {
+            [PSCustomObject] $gpoReg = Get-ItemProperty -Path $gpoPolicyPath -ErrorAction SilentlyContinue
+            if ($null -ne $gpoReg -and $null -ne $gpoReg.PSObject.Properties['HypervisorEnforcedCodeIntegrity']) {
+                [int] $gpoVal = [int]$gpoReg.HypervisorEnforcedCodeIntegrity
+                if ($gpoVal -ge 1) { $blockedByPolicy = $true; $policySource = 'GPO' }
+            }
+        }
+        if (-not $blockedByPolicy -and (Test-Path -LiteralPath $mdmPolicyPath -ErrorAction SilentlyContinue)) {
+            [PSCustomObject] $mdmReg = Get-ItemProperty -Path $mdmPolicyPath -ErrorAction SilentlyContinue
+            if ($null -ne $mdmReg -and $null -ne $mdmReg.PSObject.Properties['HypervisorEnforcedCodeIntegrity_ProviderSet']) {
+                [int] $mdmVal = try { [int]$mdmReg.HypervisorEnforcedCodeIntegrity_ProviderSet } catch { 0 }
+                if ($mdmVal -ge 1) { $blockedByPolicy = $true; $policySource = 'MDM/Intune' }
+            }
+        }
+        if ($blockedByPolicy) {
+            return [PSCustomObject]@{
+                Success         = $false
+                Blocked         = $true
+                Applied         = @()
+                Errors          = @()
+                RestartRequired = $false
+                Reason          = "HVCI bloqueado por politica ($policySource); no se modifico el registro."
+            }
+        }
+    } catch { } # read-only: si falla el check de politica, continuar (mejor esfuerzo)
+
     [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
     [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
 
@@ -183,6 +249,7 @@ function Enable-Hvci {
 
     return [PSCustomObject]@{
         Success         = ($errors.Count -eq 0)
+        Blocked         = $false
         Applied         = $applied.ToArray()
         Errors          = $errors.ToArray()
         RestartRequired = $true
