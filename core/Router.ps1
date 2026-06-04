@@ -1683,7 +1683,8 @@ function Invoke-NamedProfileMenu {
     if ($c -eq 'B') { return }
 
     if ($c -eq '1') {
-        [PSCustomObject] $prof = New-NamedProfileInteractive -MachineProfile $MachineProfile
+        [bool] $useGamingPreset = [bool] (Confirm-Action -Title 'Usar preset gaming HW-smart? (pre-llena los toggles segun tu hardware; podes sobreescribir cada uno)' -DefaultYes:$true)
+        [PSCustomObject] $prof = New-NamedProfileInteractive -MachineProfile $MachineProfile -UseGamingPreset:$useGamingPreset
         [string[]] $lines = Get-NamedProfilePreviewLines -Profile $prof -MachineProfile $MachineProfile
         if (-not (Confirm-Action -Title ("Guardar receta '{0}'?" -f [string]$prof._name) -Lines $lines)) {
             Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Cancelled'
