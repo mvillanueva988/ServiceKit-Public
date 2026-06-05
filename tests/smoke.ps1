@@ -671,6 +671,13 @@ Test-SmokeFunction 'ConsoleIcon' 'Set-PctkConsoleIcon presente + asset valido' {
     }
 }
 
+# ConsoleSetup: QuickEdit off (utils read-only; NO muta la consola en smoke)
+Test-SmokeFunction 'ConsoleSetup' 'Disable-PctkQuickEdit + Restore-PctkConsoleMode presentes' {
+    foreach ($fn in @('Disable-PctkQuickEdit','Restore-PctkConsoleMode')) {
+        if ($null -eq (Get-Command $fn -ErrorAction SilentlyContinue)) { throw "$fn no encontrado" }
+    }
+}
+
 # ─── ExportClientLogs (5 casos: empty, only-audit, both, tag-sanitize, collide) ─
 
 Test-SmokeFunction 'ExportClientLogs' 'export-empty: output ausente -> Empty + sin zip' {

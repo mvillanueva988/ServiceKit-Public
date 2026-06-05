@@ -61,9 +61,14 @@ try {
 
     $machineProfile = Get-MachineProfile
     try { Set-PctkConsoleIcon } catch { }
+    $origConsoleMode = $null
+    try { $origConsoleMode = Disable-PctkQuickEdit } catch { }
     Show-MainMenu -MachineProfile $machineProfile
 }
 finally {
+    if ((Test-Path variable:origConsoleMode) -and $null -ne $origConsoleMode) {
+        try { Restore-PctkConsoleMode -Mode ([int]$origConsoleMode) } catch { }
+    }
     if ($null -ne $script:InstanceMutex) {
         try { $script:InstanceMutex.ReleaseMutex() } catch { }
         $script:InstanceMutex.Dispose()

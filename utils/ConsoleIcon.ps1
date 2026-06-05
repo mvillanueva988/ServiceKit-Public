@@ -38,3 +38,60 @@ public class PctkWin32Icon {
     }
     catch { }
 }
+
+function Disable-PctkQuickEdit {
+    <#
+    .SYNOPSIS
+        Desactiva QuickEdit mode del input de la consola PER-PROCESO (NO toca el
+        registro). Con QuickEdit ON, un clic del operador PAUSA el script (parece
+        colgado hasta apretar Enter/Esc) -> footgun clasico en sesiones AnyDesk.
+        Devuelve el modo ORIGINAL (int) para poder restaurarlo al salir, o $null si
+        no hay consola real (headless/redirigido). No-throw. Se revierte solo al
+        cerrar el proceso -> no deja el sistema del cliente tocado.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+    try {
+        if (-not ([System.Management.Automation.PSTypeName]'PctkWin32Console').Type) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class PctkWin32Console {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll")]
+    public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out int lpMode);
+    [DllImport("kernel32.dll")]
+    public static extern bool SetConsoleMode(IntPtr hConsoleHandle, int dwMode);
+}
+'@
+        }
+        [IntPtr] $h = [PctkWin32Console]::GetStdHandle(-10)   # STD_INPUT_HANDLE
+        if ($h -eq [IntPtr]::Zero) { return $null }
+        [int] $mode = 0
+        if (-not [PctkWin32Console]::GetConsoleMode($h, [ref] $mode)) { return $null }
+        # ENABLE_QUICK_EDIT_MODE=0x40 (quitar); ENABLE_EXTENDED_FLAGS=0x80 (requerido al setear)
+        [int] $newMode = ($mode -band -bnot 0x40) -bor 0x80
+        [void] [PctkWin32Console]::SetConsoleMode($h, $newMode)
+        return $mode
+    }
+    catch { return $null }
+}
+
+function Restore-PctkConsoleMode {
+    <#
+    .SYNOPSIS
+        Restaura el modo de consola guardado por Disable-PctkQuickEdit (al salir de
+        PCTk), para no dejar la consola del operador con QuickEdit apagado. No-throw.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [int] $Mode)
+    try {
+        if (-not ([System.Management.Automation.PSTypeName]'PctkWin32Console').Type) { return }
+        [IntPtr] $h = [PctkWin32Console]::GetStdHandle(-10)
+        if ($h -eq [IntPtr]::Zero) { return }
+        [void] [PctkWin32Console]::SetConsoleMode($h, $Mode)
+    }
+    catch { }
+}
