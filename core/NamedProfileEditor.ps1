@@ -415,6 +415,21 @@ function Get-InstalledGames {
 }
 
 # ─── New-GamingPreset ─────────────────────────────────────────────────────────
+function Test-IsRtx40Plus {
+    <# True si MachineProfile.GpuNames trae una NVIDIA RTX serie 40/50 (Ada/Blackwell).
+       Esas placas tienen DLSS3/4 Frame Generation, que REQUIERE HAGS on -> guardrail.
+       (research 2026-06-05; ver _local-dev/research/2026-06-05-hags/). StrictMode-safe. #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    [object] $p = $MachineProfile.PSObject.Properties['GpuNames']
+    if ($null -eq $p -or $null -eq $p.Value) { return $false }
+    foreach ($gn in @($p.Value)) {
+        if ([string]$gn -match 'RTX\s*[45]\d{3}') { return $true }
+    }
+    return $false
+}
+
 function New-GamingPreset {
     <#
     .SYNOPSIS
@@ -449,28 +464,17 @@ function New-GamingPreset {
         $gt | Add-Member -NotePropertyName 'timer_resolution' -NotePropertyValue 'on' -Force
     }
 
-    # hags: on si RTX40+ (por nombre de GPU); off si VRAM < 8192 MB; omitir si no se sabe
-    # VRAM via DGpuVramMb (tabla de modelos, NO AdapterRAM); GpuNames para detectar RTX40/50.
-    [object] $vramP = $MachineProfile.PSObject.Properties['DGpuVramMb']
-    [int] $vramMb = if ($null -ne $vramP -and $vramP.Value -ne $null) {
-        try { [int]$vramP.Value } catch { 0 }
-    } else { 0 }
-
-    [object] $gpuNamesP = $MachineProfile.PSObject.Properties['GpuNames']
-    [bool] $isRtx40Plus = $false
-    if ($null -ne $gpuNamesP -and $null -ne $gpuNamesP.Value) {
-        [object[]] $gNames = @($gpuNamesP.Value)
-        foreach ($gn in $gNames) {
-            if ([string]$gn -match 'RTX\s*[45]\d{3}') { $isRtx40Plus = $true; break }
-        }
-    }
-
-    if ($isRtx40Plus) {
+    # hags: GUARDRAIL de Frame Generation, NO perf (research 2026-06-05).
+    # RTX 40/50 -> ON SIEMPRE: DLSS3/4 Frame Generation REQUIERE HAGS; apagarlo lo rompe
+    # en silencio. Resto (RTX20/30, GTX, AMD, iGPU) -> OFF como default blando: no hay FG
+    # que perder, libera algo de VRAM, mejor para streaming/NVENC; en FPS es indiferente y
+    # el frame pacing es por-juego (editable -> probar ambos si stuttea). Ya NO se usa
+    # umbral de VRAM (los numeros de overhead fueron refutados en el research).
+    if (Test-IsRtx40Plus -MachineProfile $MachineProfile) {
         $gt | Add-Member -NotePropertyName 'hags' -NotePropertyValue 'on' -Force
-    } elseif ($vramMb -gt 0 -and $vramMb -lt 8192) {
+    } else {
         $gt | Add-Member -NotePropertyName 'hags' -NotePropertyValue 'off' -Force
     }
-    # Si no se puede determinar (vramMb=0 y no RTX40+): NO incluir hags (no tocar)
 
     # oosu_profile = gaming
     $gt | Add-Member -NotePropertyName 'oosu_profile' -NotePropertyValue 'gaming' -Force
@@ -552,7 +556,11 @@ function New-NamedProfileInteractive {
     }
 
     Add-Tweak 'hvci'                  (Read-OnOffSkip 'HVCI / Memory Integrity (off recomendado gaming; VBS se preserva)' (Safe-State { Get-CoreIsolationStatus } 'HvciEnabled') (Get-PresetDefault 'hvci'))
-    Add-Tweak 'hags'                  (Read-OnOffSkip 'HAGS (Hardware-Accelerated GPU Scheduling)'                         (Safe-State { Get-HagsStatus } 'Enabled')              (Get-PresetDefault 'hags'))
+    [string] $hagsChoice = Read-OnOffSkip 'HAGS (Hardware-Accelerated GPU Scheduling)' (Safe-State { Get-HagsStatus } 'Enabled') (Get-PresetDefault 'hags')
+    if ($hagsChoice -eq 'off' -and (Test-IsRtx40Plus -MachineProfile $MachineProfile)) {
+        Write-Host '    [!] OJO: GPU RTX 40/50 -> con HAGS off, DLSS Frame Generation NO funciona (se desactiva solo).' -ForegroundColor Yellow
+    }
+    Add-Tweak 'hags' $hagsChoice
     Add-Tweak 'usb_selective_suspend' (Read-OnOffSkip 'USB Selective Suspend (off recomendado p/ periféricos gaming)'      (Safe-State { Get-UsbSelectiveSuspendStatus } 'Enabled') (Get-PresetDefault 'usb_selective_suspend'))
     Add-Tweak 'game_mode'             (Read-OnOffSkip 'Game Mode'                                                          (Safe-State { Get-GameModeStatus } 'EffectiveState')     (Get-PresetDefault 'game_mode'))
 
