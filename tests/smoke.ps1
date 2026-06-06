@@ -1317,6 +1317,39 @@ Test-SmokeFunction 'GamingProfile' 'fold-19: Enable-Hvci tiene check GPO antes d
     }
 }
 
+# ─── ConsoleMenu: Read-PctkMenuChoice + Get-MainMenuRows (estructural) ───────
+Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice presente' {
+    if ($null -eq (Get-Command 'Read-PctkMenuChoice' -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw 'Read-PctkMenuChoice no encontrado'
+    }
+}
+Test-SmokeFunction 'ConsoleMenu' 'Get-MainMenuRows: 13 items en orden + 4 headers' {
+    [object[]] $rows  = Get-MainMenuRows
+    [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','R','A','T','L','X','U')
+    if ($items.Count -ne $expectedKeys.Count) {
+        throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
+    }
+    for ([int] $i = 0; $i -lt $expectedKeys.Count; $i++) {
+        if ([string]$items[$i].Key -ne $expectedKeys[$i]) {
+            throw ('Item[{0}]: key esperada {1}; got {2}' -f $i, $expectedKeys[$i], [string]$items[$i].Key)
+        }
+    }
+    [object[]] $headers = @($rows | Where-Object { $_.Kind -eq 'Header' })
+    if ($headers.Count -ne 4) {
+        throw ('Se esperaban 4 headers; encontrados {0}' -f $headers.Count)
+    }
+}
+Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice fallback no bloquea (input redirigido)' {
+    [object[]] $rows = Get-MainMenuRows
+    [scriptblock] $rh = { }
+    function Read-Host { '1' }
+    [string] $result = Read-PctkMenuChoice -Rows $rows -RenderHeader $rh -ForceFallbackForTest
+    if ($result -ne '1') {
+        throw ("fallback retorno '$result'; esperado '1'")
+    }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

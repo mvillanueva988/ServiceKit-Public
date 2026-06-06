@@ -152,36 +152,13 @@ function Show-MainMenu {
         [PSCustomObject] $MachineProfile
     )
 
+    [object[]] $rows = Get-MainMenuRows
+    [scriptblock] $renderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $MachineProfile }.GetNewClosure()
+
     do {
-        Clear-Host
-        Show-MachineBanner -MachineProfile $MachineProfile
+        [string] $choice = Read-PctkMenuChoice -Rows $rows -RenderHeader $renderHeader
 
-        Write-Host '  PERFILES' -ForegroundColor DarkCyan
-        Write-Host '  [1]  Aplicar perfil automatico         (Generic/Work/Multimedia)'
-        Write-Host '  [2]  Receta nombrada                   (cliente especifico)'
-        Write-Host ''
-        Write-Host '  DIAGNOSTICO' -ForegroundColor DarkCyan
-        Write-Host '  [3]  Snapshot PRE-service'
-        Write-Host '  [4]  Snapshot POST-service'
-        Write-Host '  [5]  Comparar PRE vs POST'
-        Write-Host '  [6]  Historial de BSOD / Crashes'
-        Write-Host '  [7]  Salud de discos (SMART / wear)'
-        Write-Host '  [R]  Generar prompt de research        (para LLM con web search)'
-        Write-Host ''
-        Write-Host '  ACCIONES MANUALES' -ForegroundColor DarkCyan
-        Write-Host '  [A]  Submenu: acciones individuales    (debloat, limpieza, rendimiento, privacidad, etc.)'
-        Write-Host ''
-        Write-Host '  HERRAMIENTAS' -ForegroundColor DarkCyan
-        Write-Host '  [T]  Herramientas externas'
-        Write-Host '  [L]  Empaquetar logs de esta PC  (para llevarse)'
-        Write-Host '  [X]  Salir'
-        Write-Host '  [U]  Desinstalar PCTk de esta PC (borra todo)' -ForegroundColor DarkRed
-        Write-Host ''
-
-        [string] $choice = (Read-Host '  Selecciona una opcion').Trim().ToUpperInvariant()
-
-        # Enter vacio = re-mostrar el menu sin invocar el dispatcher
-        # ([Parameter(Mandatory)] [string] no acepta cadenas vacias).
+        # Enter vacio = re-mostrar el menu
         if ([string]::IsNullOrEmpty($choice)) { continue }
 
         if ($choice -eq 'X') {
