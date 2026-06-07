@@ -1399,6 +1399,21 @@ Test-SmokeFunction 'ConsoleMenu' 'Invoke-ToolsMenuInteractive presente (handler 
     }
 }
 
+# ─── Router: renderHeader robusto ante '& main.ps1' (regresion) ──────────────
+# Canary del bug del gate 2026-06-07: el renderHeader que dibuja el banner NO debe
+# usar .GetNewClosure(). Ese closure queda atado a un modulo dinamico que solo ve
+# funciones GLOBALES; con '& main.ps1' (vs powershell -File) main.ps1 corre en un
+# script-scope hijo y el closure no resuelve Show-MachineBanner -> CommandNotFound.
+# El smoke NO lo reproduce funcionalmente (corre todo en un scope via -File), por eso
+# el guard es estructural. Fix = scriptblock plano + $script:var (lookup dinamico).
+Test-SmokeFunction 'Router' 'renderHeader sin GetNewClosure (sobrevive a "& main.ps1")' {
+    [string] $routerPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'core\Router.ps1'
+    [string[]] $hits = @(Get-Content -LiteralPath $routerPath | Where-Object { $_ -match '\.GetNewClosure\(' })
+    if ($hits.Count -gt 0) {
+        throw ('Router.ps1 usa .GetNewClosure() ({0}): rompe el render con "& main.ps1" (el closure no ve Show-MachineBanner). Usar scriptblock plano + $script:var.' -f $hits.Count)
+    }
+}
+
 # ─── ConsoleTheme: VT + capa de helpers de output (estructural) ──────────────
 # En smoke el output esta redirigido -> Enable-PctkVT da false y todo cae al
 # render 16-color/texto. Estos tests verifican el contrato del FALLBACK: presencia,

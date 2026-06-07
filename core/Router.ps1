@@ -152,7 +152,13 @@ function Show-MainMenu {
     )
 
     [object[]] $rows = Get-MainMenuRows
-    [scriptblock] $renderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $MachineProfile }.GetNewClosure()
+    # NO usar el closure dinamico (GetNewClosure): ata el scriptblock a un modulo que SOLO ve
+    # funciones globales. Con '& main.ps1' (vs powershell -File) las funciones de
+    # main.ps1 quedan en un script-scope hijo, no global -> el closure no resuelve
+    # Show-MachineBanner (CommandNotFound). Scriptblock plano + $script:var: el lookup
+    # dinamico camina la pila y encuentra la funcion; la var resuelve por script-scope.
+    $script:PctkBannerProfile = $MachineProfile
+    [scriptblock] $renderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $script:PctkBannerProfile }
 
     do {
         [string] $choice = Read-PctkMenuChoice -Rows $rows -RenderHeader $renderHeader
@@ -612,7 +618,8 @@ function Show-IndividualActionsSubmenu {
     )
 
     [object[]] $rows = Get-IndividualActionRows
-    [scriptblock] $renderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $MachineProfile }.GetNewClosure()
+    $script:PctkBannerProfile = $MachineProfile   # ver nota en Show-MainMenu (no GetNewClosure)
+    [scriptblock] $renderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $script:PctkBannerProfile }
 
     do {
         [string] $choice = Read-PctkMenuChoice -Rows $rows -RenderHeader $renderHeader
@@ -1732,7 +1739,8 @@ function Invoke-NamedProfileMenu {
         }
     }
 
-    [scriptblock] $npRenderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $MachineProfile }.GetNewClosure()
+    $script:PctkBannerProfile = $MachineProfile   # ver nota en Show-MainMenu (no GetNewClosure)
+    [scriptblock] $npRenderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $script:PctkBannerProfile }
     [string] $c = Read-PctkMenuChoice -Rows (Get-NamedProfileRows) -RenderHeader $npRenderHeader
 
     if ($c -eq 'B') { return }
