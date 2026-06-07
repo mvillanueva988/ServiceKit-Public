@@ -1349,6 +1349,40 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice fallback no bloquea (input
         throw ("fallback retorno '$result'; esperado '1'")
     }
 }
+Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 17 items en orden + 2 headers' {
+    [object[]] $rows  = Get-IndividualActionRows
+    [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','B')
+    if ($items.Count -ne $expectedKeys.Count) {
+        throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
+    }
+    for ([int] $i = 0; $i -lt $expectedKeys.Count; $i++) {
+        if ([string]$items[$i].Key -ne $expectedKeys[$i]) {
+            throw ('Item[{0}]: key esperada {1}; got {2}' -f $i, $expectedKeys[$i], [string]$items[$i].Key)
+        }
+    }
+    [object[]] $headers = @($rows | Where-Object { $_.Kind -eq 'Header' })
+    if ($headers.Count -ne 2) {
+        throw ('Se esperaban 2 headers; encontrados {0}' -f $headers.Count)
+    }
+}
+Test-SmokeFunction 'ConsoleMenu' 'Get-NamedProfileRows: 4 items en orden + 1 header' {
+    [object[]] $rows  = Get-NamedProfileRows
+    [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
+    [string[]] $expectedKeys = @('1','2','3','B')
+    if ($items.Count -ne $expectedKeys.Count) {
+        throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
+    }
+    for ([int] $i = 0; $i -lt $expectedKeys.Count; $i++) {
+        if ([string]$items[$i].Key -ne $expectedKeys[$i]) {
+            throw ('Item[{0}]: key esperada {1}; got {2}' -f $i, $expectedKeys[$i], [string]$items[$i].Key)
+        }
+    }
+    [object[]] $headers = @($rows | Where-Object { $_.Kind -eq 'Header' })
+    if ($headers.Count -ne 1) {
+        throw ('Se esperaba 1 header; encontrados {0}' -f $headers.Count)
+    }
+}
 
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''

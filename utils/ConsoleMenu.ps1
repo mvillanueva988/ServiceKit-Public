@@ -29,12 +29,63 @@ function Get-MainMenuRows {
     return $rows
 }
 
+function Get-IndividualActionRows {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param()
+    [object[]] $rows = @()
+    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  ACCIONES INDIVIDUALES'; Color = 'DarkCyan' }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '1';   Label = '  [1]  Debloat de Servicios'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '2';   Label = '  [2]  Limpieza de Disco'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '3';   Label = '  [3]  Mantenimiento del Sistema (DISM + SFC)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '4';   Label = '  [4]  Crear Punto de Restauracion'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '5';   Label = '  [5]  Optimizar Red'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '6';   Label = '  [6]  Rendimiento (visuales + power plan + tweaks)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '7';   Label = '  [7]  Backup de Drivers'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '8';   Label = '  [8]  Apps Win32 + UWP'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '9';   Label = '  [9]  Privacidad (registry o OOSU10)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '10';  Label = '  [10] Inicio del Sistema'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '11';  Label = '  [11] Actualizaciones de Windows'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  GAMING / LATENCIA  (avanzado - reinicio salvo USB)'; Color = 'DarkCyan' }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '12';  Label = '  [12] Core Isolation / Memory Integrity (HVCI)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '13';  Label = '  [13] HAGS (GPU Scheduling por hardware)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '14';  Label = '  [14] Timer Resolution global (solo Win11)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '15';  Label = '  [15] Prioridad de proceso por .exe (IFEO)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '16';  Label = '  [16] USB Selective Suspend'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver al menu principal'; Color = 'DarkYellow' }
+    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+    return $rows
+}
+
+function Get-NamedProfileRows {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param()
+    [object[]] $rows = @()
+    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  RECETA NOMBRADA (gaming personalizado)'; Color = 'DarkCyan' }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '1';   Label = '  [1]  Nueva'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '2';   Label = '  [2]  Cargar existente'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '3';   Label = '  [3]  Reaplicar ultima'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver'; Color = 'DarkYellow' }
+    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+    return $rows
+}
+
 function Read-PctkMenuChoice {
     <#
     .SYNOPSIS
         Lee una opcion del menu hibrido: flechas/Enter en consola interactiva,
         fallback a Read-Host si no hay consola real (headless, smoke, redirigido).
         Devuelve la Key (string uppercase) identica al $choice original.
+    .NOTES
+        Modo interactivo v2: redibujo SURGICAL. El menu se dibuja completo UNA vez
+        al entrar; cada flecha solo reescribe las 2 filas que cambian (la que pierde
+        el highlight y la que lo gana) con [Console]::SetCursorPosition, SIN Clear-Host
+        -> cero parpadeo (el flash de la v1 venia del Clear-Host por flecha). Si
+        SetCursorPosition falla (consola rara), cae a un redibujo completo ese frame.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -46,6 +97,23 @@ function Read-PctkMenuChoice {
     )
 
     [object[]] $items = @($Rows | Where-Object { $_.Kind -eq 'Item' })
+
+    # helper local: escribe una fila (con o sin highlight). Mismo largo de texto
+    # en highlight ('> ') y normal ('  ') -> reescribir una fila sobre otra no deja
+    # restos, sin necesidad de padding.
+    function Write-RowLine {
+        param($Row, [bool] $Hi)
+        if ($Row.Kind -eq 'Spacer') { Write-Host ''; return }
+        if ($Row.Kind -eq 'Header') { Write-Host $Row.Label -ForegroundColor DarkCyan; return }
+        [string] $label = ([string]$Row.Label).TrimStart()
+        if ($Hi) {
+            Write-Host ('> ' + $label) -BackgroundColor DarkGray -ForegroundColor White
+        } elseif (-not [string]::IsNullOrEmpty([string]$Row.Color)) {
+            Write-Host ('  ' + $label) -ForegroundColor ([string]$Row.Color)
+        } else {
+            Write-Host ('  ' + $label)
+        }
+    }
 
     # Gate: todas deben pasar para usar modo crudo; si falla alguna -> fallback
     [bool] $interactive = $false
@@ -62,41 +130,36 @@ function Read-PctkMenuChoice {
     if (-not $interactive -or $items.Count -eq 0) {
         # Fallback: render sin highlight + Read-Host (comportamiento original)
         & $RenderHeader
-        foreach ($row in $Rows) {
-            if ($row.Kind -eq 'Spacer') { Write-Host ''; continue }
-            if ($row.Kind -eq 'Header') { Write-Host $row.Label -ForegroundColor DarkCyan; continue }
-            if (-not [string]::IsNullOrEmpty([string]$row.Color)) {
-                Write-Host $row.Label -ForegroundColor ([string]$row.Color)
-            } else {
-                Write-Host $row.Label
-            }
-        }
+        foreach ($row in $Rows) { Write-RowLine -Row $row -Hi $false }
         Write-Host ''
         return (Read-Host $Prompt).Trim().ToUpperInvariant()
     }
 
-    # Modo interactivo: flechas arriba/abajo + Enter + atajos directos por char
-    [int] $hiIdx = 0
+    # --- Modo interactivo: redibujo surgical (sin Clear-Host por flecha) ---
+    [int]   $hiIdx   = 0
+    [int[]] $itemY   = [int[]]::new($items.Count)   # Y de consola de cada Item
+    [int]   $bottomY = 0
+    [bool]   $full   = $true                        # true -> redibujo completo este frame
+    [string] $buffer = ''                           # acumulador de atajo multi-caracter (ej. 10-16)
 
     while ($true) {
-        & $RenderHeader
-        [int] $itemIdx = 0
-        foreach ($row in $Rows) {
-            if ($row.Kind -eq 'Spacer') { Write-Host ''; continue }
-            if ($row.Kind -eq 'Header') { Write-Host $row.Label -ForegroundColor DarkCyan; continue }
-            [bool] $hi = ($itemIdx -eq $hiIdx)
-            $itemIdx++
-            [string] $rowLabel = [string]$row.Label
-            if ($hi) {
-                Write-Host ('> ' + $rowLabel.TrimStart()) -BackgroundColor DarkGray -ForegroundColor White
-            } elseif (-not [string]::IsNullOrEmpty([string]$row.Color)) {
-                Write-Host ('  ' + $rowLabel.TrimStart()) -ForegroundColor ([string]$row.Color)
-            } else {
-                Write-Host ('  ' + $rowLabel.TrimStart())
+        if ($full) {
+            & $RenderHeader
+            [int] $ii = 0
+            foreach ($row in $Rows) {
+                if ($row.Kind -eq 'Item') {
+                    $itemY[$ii] = [Console]::CursorTop
+                    Write-RowLine -Row $row -Hi ($ii -eq $hiIdx)
+                    $ii++
+                } else {
+                    Write-RowLine -Row $row -Hi $false
+                }
             }
+            Write-Host ''
+            Write-Host '  Usa flechas arriba/abajo + Enter, o la tecla del atajo:' -ForegroundColor DarkGray
+            $bottomY = [Console]::CursorTop
+            $full = $false
         }
-        Write-Host ''
-        Write-Host '  Usa flechas + Enter, o la tecla del atajo:' -ForegroundColor DarkGray
 
         $key = $null
         try {
@@ -104,39 +167,74 @@ function Read-PctkMenuChoice {
         } catch {
             # ReadKey fallo (host sin consola real) -> fallback a Read-Host
             & $RenderHeader
-            foreach ($row in $Rows) {
-                if ($row.Kind -eq 'Spacer') { Write-Host ''; continue }
-                if ($row.Kind -eq 'Header') { Write-Host $row.Label -ForegroundColor DarkCyan; continue }
-                if (-not [string]::IsNullOrEmpty([string]$row.Color)) {
-                    Write-Host $row.Label -ForegroundColor ([string]$row.Color)
-                } else {
-                    Write-Host $row.Label
-                }
-            }
+            foreach ($row in $Rows) { Write-RowLine -Row $row -Hi $false }
             Write-Host ''
             return (Read-Host $Prompt).Trim().ToUpperInvariant()
         }
-
         if ($null -eq $key) { continue }
 
-        if ($key.Key -eq [ConsoleKey]::UpArrow) {
-            $hiIdx = if ($hiIdx -le 0) { $items.Count - 1 } else { $hiIdx - 1 }
+        if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
+            $buffer = ''
+            [int] $old = $hiIdx
+            if ($key.Key -eq [ConsoleKey]::UpArrow) {
+                $hiIdx = if ($hiIdx -le 0) { $items.Count - 1 } else { $hiIdx - 1 }
+            } else {
+                $hiIdx = if ($hiIdx -ge ($items.Count - 1)) { 0 } else { $hiIdx + 1 }
+            }
+            if ($old -ne $hiIdx) {
+                try {
+                    # solo las 2 filas que cambian -> cero flash
+                    [Console]::SetCursorPosition(0, $itemY[$old])
+                    Write-RowLine -Row $items[$old]   -Hi $false
+                    [Console]::SetCursorPosition(0, $itemY[$hiIdx])
+                    Write-RowLine -Row $items[$hiIdx] -Hi $true
+                    [Console]::SetCursorPosition(0, $bottomY)
+                } catch {
+                    $full = $true   # consola rara -> redibujo completo el proximo frame
+                }
+            }
             continue
         }
-        if ($key.Key -eq [ConsoleKey]::DownArrow) {
-            $hiIdx = if ($hiIdx -ge ($items.Count - 1)) { 0 } else { $hiIdx + 1 }
-            continue
-        }
-        if ($key.Key -eq [ConsoleKey]::Enter) {
+        # Enter o flecha derecha = elegir la opcion resaltada
+        if ($key.Key -eq [ConsoleKey]::Enter -or $key.Key -eq [ConsoleKey]::RightArrow) {
             return [string]$items[$hiIdx].Key
         }
-        # Atajo directo: char imprimible que coincida con una Key -> devolver sin Enter
+        # Atajo por tecla. Soporta keys de varios caracteres (ej. 10-16): un
+        # digito ambiguo ('1') NO elige solo (es prefijo de 10-16); acumula y
+        # mueve el highlight, y se completa con el 2do digito ('12') o se
+        # confirma con Enter. Los no ambiguos (2-9, B) eligen al toque.
         if ($key.KeyChar -ne [char]0) {
-            [string] $kc = $key.KeyChar.ToString().ToUpperInvariant()
-            foreach ($item in $items) {
-                if ([string]$item.Key -eq $kc) { return $kc }
+            [string] $ch = $key.KeyChar.ToString().ToUpperInvariant()
+            [string[]] $cands = @()
+            if ($buffer -ne '') { $cands += ($buffer + $ch) }
+            $cands += $ch
+
+            [bool] $accepted = $false
+            foreach ($cand in $cands) {
+                [object] $exact     = $items | Where-Object { [string]$_.Key -eq $cand } | Select-Object -First 1
+                [bool]   $hasLonger = @($items | Where-Object { [string]$_.Key -ne $cand -and ([string]$_.Key).StartsWith($cand) }).Count -gt 0
+                if ($null -ne $exact -and -not $hasLonger) {
+                    return [string]$exact.Key                  # match unico y completo -> elegir
+                }
+                if ($hasLonger -or $null -ne $exact) {
+                    $buffer = $cand                            # prefijo (o ambiguo) -> acumular y esperar
+                    [int] $mi = -1
+                    for ($j = 0; $j -lt $items.Count; $j++) { if ([string]$items[$j].Key -eq $cand) { $mi = $j; break } }
+                    if ($mi -lt 0) { for ($j = 0; $j -lt $items.Count; $j++) { if (([string]$items[$j].Key).StartsWith($cand)) { $mi = $j; break } } }
+                    if ($mi -ge 0 -and $mi -ne $hiIdx) {
+                        [int] $old = $hiIdx; $hiIdx = $mi
+                        try {
+                            [Console]::SetCursorPosition(0, $itemY[$old]);   Write-RowLine -Row $items[$old]   -Hi $false
+                            [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-RowLine -Row $items[$hiIdx] -Hi $true
+                            [Console]::SetCursorPosition(0, $bottomY)
+                        } catch { $full = $true }
+                    }
+                    $accepted = $true
+                    break
+                }
             }
+            if (-not $accepted) { $buffer = '' }
         }
-        # Ignorar Esc, F-keys y otros chars sin match
+        # Otras teclas (Esc, F-keys, flecha izquierda): ignorar
     }
 }

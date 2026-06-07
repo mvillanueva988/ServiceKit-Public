@@ -502,35 +502,11 @@ function Show-IndividualActionsSubmenu {
         [PSCustomObject] $MachineProfile
     )
 
+    [object[]] $rows = Get-IndividualActionRows
+    [scriptblock] $renderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $MachineProfile }.GetNewClosure()
+
     do {
-        Clear-Host
-        Show-MachineBanner -MachineProfile $MachineProfile
-
-        Write-Host '  ACCIONES INDIVIDUALES' -ForegroundColor DarkCyan
-        Write-Host '  ====================='
-        Write-Host '  [1]  Debloat de Servicios'
-        Write-Host '  [2]  Limpieza de Disco'
-        Write-Host '  [3]  Mantenimiento del Sistema (DISM + SFC)'
-        Write-Host '  [4]  Crear Punto de Restauracion'
-        Write-Host '  [5]  Optimizar Red'
-        Write-Host '  [6]  Rendimiento (visuales + power plan + tweaks)'
-        Write-Host '  [7]  Backup de Drivers'
-        Write-Host '  [8]  Apps Win32 + UWP'
-        Write-Host '  [9]  Privacidad (registry o OOSU10)'
-        Write-Host '  [10] Inicio del Sistema'
-        Write-Host '  [11] Actualizaciones de Windows'
-        Write-Host ''
-        Write-Host '  GAMING / LATENCIA  (avanzado - reinicio salvo USB)' -ForegroundColor DarkCyan
-        Write-Host '  [12] Core Isolation / Memory Integrity (HVCI)'
-        Write-Host '  [13] HAGS (GPU Scheduling por hardware)'
-        Write-Host '  [14] Timer Resolution global (solo Win11)'
-        Write-Host '  [15] Prioridad de proceso por .exe (IFEO)'
-        Write-Host '  [16] USB Selective Suspend'
-        Write-Host ''
-        Write-Host '  [B]  Volver al menu principal' -ForegroundColor DarkYellow
-        Write-Host ''
-
-        [string] $choice = (Read-Host '  Selecciona una opcion').Trim().ToUpperInvariant()
+        [string] $choice = Read-PctkMenuChoice -Rows $rows -RenderHeader $renderHeader
 
         # Enter vacio = re-mostrar el submenu
         if ([string]::IsNullOrEmpty($choice)) { continue }
@@ -1646,16 +1622,8 @@ function Invoke-NamedProfileMenu {
         }
     }
 
-    Write-Host ''
-    Write-Host '  ================================================' -ForegroundColor DarkCyan
-    Write-Host '    RECETA NOMBRADA (gaming personalizado)' -ForegroundColor Cyan
-    Write-Host '  ================================================' -ForegroundColor DarkCyan
-    Write-Host '  [1]  Nueva'
-    Write-Host '  [2]  Cargar existente'
-    Write-Host '  [3]  Reaplicar ultima'
-    Write-Host '  [B]  Volver'
-    Write-Host ''
-    [string] $c = (Read-Host '  Selecciona').Trim().ToUpperInvariant()
+    [scriptblock] $npRenderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $MachineProfile }.GetNewClosure()
+    [string] $c = Read-PctkMenuChoice -Rows (Get-NamedProfileRows) -RenderHeader $npRenderHeader
 
     if ($c -eq 'B') { return }
 
