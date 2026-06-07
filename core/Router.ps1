@@ -118,24 +118,23 @@ function Show-MachineBanner {
     [string] $tierLabel = if ($MachineProfile.PSObject.Properties['Tier']) { [string]$MachineProfile.Tier } else { 'N/A' }
     [string] $cpuClass  = if ($MachineProfile.PSObject.Properties['CpuClass']) { [string]$MachineProfile.CpuClass } else { 'Unknown' }
 
-    Write-Host '================================================' -ForegroundColor DarkCyan
-    Write-Host '                   PCTk v2' -ForegroundColor Cyan
-    Write-Host '================================================' -ForegroundColor DarkCyan
-    Write-Host ("  OS   : {0} Build {1} {2}" -f $osName, $build, $arch)
-    Write-Host ("  CPU  : {0}  {1} nucleos / {2} hilos  [{3}]" -f $cpuName, $cpuCores, $cpuThreads, $cpuClass)
-    Write-Host ("  RAM  : {0}  |  {1}" -f $ramTotalLabel, $ramFreeLabel)
-    Write-Host ("  GPU  : {0}" -f $gpuLabel)
-    Write-Host ("  OEM  : {0}{1}" -f $manufacturer, $oemSuffix)
-    Write-Host ("  TIER : {0}" -f $tierLabel) -ForegroundColor Yellow
-    # Banner VM — solo si IsVirtualMachine (no ruido en HW real)
+    # Render via tema PCTk (banner block + caja doble). Si VT off -> estilo clasico.
+    [object[]] $rows = @()
+    $rows += [PSCustomObject]@{ Label = 'OS';  Value = ('{0} Build {1} {2}' -f $osName, $build, $arch) }
+    $rows += [PSCustomObject]@{ Label = 'CPU'; Value = ('{0}  {1} nucleos / {2} hilos  [{3}]' -f $cpuName, $cpuCores, $cpuThreads, $cpuClass) }
+    $rows += [PSCustomObject]@{ Label = 'RAM'; Value = ('{0}  |  {1}' -f $ramTotalLabel, $ramFreeLabel) }
+    $rows += [PSCustomObject]@{ Label = 'GPU'; Value = [string]$gpuLabel }
+    $rows += [PSCustomObject]@{ Label = 'OEM'; Value = ('{0}{1}' -f $manufacturer, $oemSuffix) }
+
+    [string] $vmLine = ''
     if ($MachineProfile.PSObject.Properties['IsVirtualMachine'] -and [bool]$MachineProfile.IsVirtualMachine) {
         [string] $vmVendorLabel = if ($MachineProfile.PSObject.Properties['VmVendor'] -and -not [string]::IsNullOrWhiteSpace([string]$MachineProfile.VmVendor)) {
             [string]$MachineProfile.VmVendor
         } else { 'VM' }
-        Write-Host ("  VM   : {0}  [snapshot en modo VM — SMART/PnP/ACPI omitidos]" -f $vmVendorLabel) -ForegroundColor Yellow
+        $vmLine = ('{0}  [modo VM - SMART/PnP/ACPI omitidos]' -f $vmVendorLabel)
     }
-    Write-Host '================================================' -ForegroundColor DarkCyan
-    Write-Host ''
+
+    Write-PctkMachineBanner -Rows $rows -Tier $tierLabel -VmLine $vmLine
 }
 
 # ─── Show-MainMenu ────────────────────────────────────────────────────────────

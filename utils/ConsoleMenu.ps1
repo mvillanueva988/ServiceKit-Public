@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 function Get-MainMenuRows {
     [CmdletBinding()]
@@ -104,12 +104,24 @@ function Read-PctkMenuChoice {
     function Write-RowLine {
         param($Row, [bool] $Hi)
         if ($Row.Kind -eq 'Spacer') { Write-Host ''; return }
-        if ($Row.Kind -eq 'Header') { Write-Host $Row.Label -ForegroundColor DarkCyan; return }
+        [bool] $vt = Test-PctkVT
+        if ($Row.Kind -eq 'Header') {
+            if ($vt) {
+                [string] $nm = ([string]$Row.Label).Trim()
+                Write-Host ('  ' + (Pf 255 170 40) + '── ' + $nm + ' ' + ('─' * [Math]::Max(3, 50 - $nm.Length)) + (Pe))
+            } else {
+                Write-Host $Row.Label -ForegroundColor DarkCyan
+            }
+            return
+        }
         [string] $label = ([string]$Row.Label).TrimStart()
         if ($Hi) {
-            Write-Host ('> ' + $label) -BackgroundColor DarkGray -ForegroundColor White
+            if ($vt) { Write-Host ((Pb 150 95 0) + (Pf 245 240 230) + '> ' + $label + (Pe)) }
+            else     { Write-Host ('> ' + $label) -BackgroundColor DarkGray -ForegroundColor White }
         } elseif (-not [string]::IsNullOrEmpty([string]$Row.Color)) {
             Write-Host ('  ' + $label) -ForegroundColor ([string]$Row.Color)
+        } elseif ($vt) {
+            Write-Host ((Pf 140 152 166) + '  ' + $label + (Pe))
         } else {
             Write-Host ('  ' + $label)
         }
