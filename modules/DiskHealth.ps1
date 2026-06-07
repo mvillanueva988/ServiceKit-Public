@@ -244,6 +244,24 @@ function Get-DiskHealth {
 }
 
 # ─── Show-DiskHealth ──────────────────────────────────────────────────────────
+function Get-DiskWearLabel {
+    <#
+    .SYNOPSIS
+        Etiqueta de desgaste honesta. El Wear de Get-StorageReliabilityCounter es
+        de SSD/flash (wear-leveling) y POCO confiable en discos consumer: Windows
+        suele devolver 0 cuando el firmware no lo expone. Un HDD no tiene wear.
+        El dato real de un SSD lo da CrystalDiskInfo (Percentage Used del SMART).
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([string] $MediaType, [object] $WearPct)
+
+    if ($MediaType -eq 'HDD')   { return 'N/A (disco mecanico)' }
+    if ($null -eq $WearPct)     { return 'no reportado' }
+    if ([int] $WearPct -eq 0)   { return '0% (sin dato real - ver CrystalDiskInfo)' }
+    return ('{0}%' -f $WearPct)
+}
+
 function Show-DiskHealth {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $Data)
@@ -267,7 +285,7 @@ function Show-DiskHealth {
 
     foreach ($d in $Data.Disks) {
         [string] $color = switch ($d.Alert) { 'CRIT' { 'Red' } 'WARN' { 'Yellow' } 'UNKNOWN' { 'DarkGray' } default { 'Green' } }
-        [string] $wear = if ($null -ne $d.WearPct) { "$($d.WearPct)%" } else { 'no reportado' }
+        [string] $wear = Get-DiskWearLabel -MediaType $d.MediaType -WearPct $d.WearPct
         [string] $temp = if ($null -ne $d.TempC)   { "$($d.TempC)C" }   else { 'no reportado' }
         [string] $hlth = if (-not [string]::IsNullOrWhiteSpace($d.HealthStatus)) { $d.HealthStatus } else { 'no reportado' }
 
@@ -288,5 +306,6 @@ function Show-DiskHealth {
     } else {
         Write-Host '  Sin alertas de salud en los discos detectados.' -ForegroundColor Green
     }
+    Write-Host '  El Wear de Windows es aproximado; para el desgaste real de un SSD usa CrystalDiskInfo ([T]).' -ForegroundColor DarkGray
     Write-Host '  (Umbrales provisionales; SMART puede no estar disponible según firmware.)' -ForegroundColor DarkGray
 }

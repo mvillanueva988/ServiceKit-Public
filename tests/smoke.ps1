@@ -547,6 +547,13 @@ Test-SmokeFunction 'DiskHealth' 'umbral: wear warn -> WARN' {
     $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -WearPct 85
     if ($r.Alert -ne 'WARN') { throw "esperado WARN; got $($r.Alert)" }
 }
+Test-SmokeFunction 'DiskHealth' 'Get-DiskWearLabel: HDD->N/A, SSD 0->sin dato real, SSD N->%' {
+    if ((Get-DiskWearLabel -MediaType 'HDD' -WearPct 0)    -notmatch 'N/A')           { throw 'HDD wear deberia ser N/A' }
+    if ((Get-DiskWearLabel -MediaType 'HDD' -WearPct 50)   -notmatch 'N/A')           { throw 'HDD 50 deberia ser N/A (mecanico)' }
+    if ((Get-DiskWearLabel -MediaType 'SSD' -WearPct $null) -ne 'no reportado')       { throw 'SSD null deberia ser no reportado' }
+    if ((Get-DiskWearLabel -MediaType 'SSD' -WearPct 0)    -notmatch 'sin dato real') { throw 'SSD 0 deberia marcarse sin dato real' }
+    if ((Get-DiskWearLabel -MediaType 'SSD' -WearPct 42)   -ne '42%')                 { throw 'SSD 42 deberia ser 42%' }
+}
 Test-SmokeFunction 'DiskHealth' 'umbral: prediccion de falla -> CRIT' {
     $r = Get-DiskAlertLevel -HealthStatus 'Healthy' -PredictFail $true
     if ($r.Alert -ne 'CRIT') { throw "esperado CRIT; got $($r.Alert)" }
