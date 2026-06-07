@@ -1383,6 +1383,21 @@ Test-SmokeFunction 'ConsoleMenu' 'Get-NamedProfileRows: 4 items en orden + 1 hea
         throw ('Se esperaba 1 header; encontrados {0}' -f $headers.Count)
     }
 }
+Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMultiChoice + Test-PctkInteractiveConsole presentes' {
+    foreach ($fn in @('Read-PctkMultiChoice', 'Test-PctkInteractiveConsole')) {
+        if ($null -eq (Get-Command $fn -CommandType Function -ErrorAction SilentlyContinue)) { throw "$fn no encontrado" }
+    }
+}
+Test-SmokeFunction 'ConsoleMenu' 'Test-PctkInteractiveConsole: bool + false bajo input redirigido (smoke)' {
+    $r = Test-PctkInteractiveConsole
+    if ($r -isnot [bool]) { throw 'no devolvio bool' }
+    if ($r -ne $false) { throw "esperado false bajo input redirigido; got $r" }
+}
+Test-SmokeFunction 'ConsoleMenu' 'Invoke-ToolsMenuInteractive presente (handler [T])' {
+    if ($null -eq (Get-Command 'Invoke-ToolsMenuInteractive' -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw 'Invoke-ToolsMenuInteractive no encontrado'
+    }
+}
 
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''

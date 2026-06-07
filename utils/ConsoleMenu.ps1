@@ -238,3 +238,165 @@ function Read-PctkMenuChoice {
         # Otras teclas (Esc, F-keys, flecha izquierda): ignorar
     }
 }
+
+function Test-PctkInteractiveConsole {
+    <#
+    .SYNOPSIS
+        True si hay consola real con teclado (no headless, no redirigido, no smoke).
+        Gate compartido para decidir modo crudo vs fallback tipeado.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+    try {
+        return ([Environment]::UserInteractive -eq $true -and
+                [Console]::IsInputRedirected -eq $false -and
+                [Console]::IsOutputRedirected -eq $false)
+    } catch { return $false }
+}
+
+function Read-PctkMultiChoice {
+    <#
+    .SYNOPSIS
+        Multi-seleccion interactiva con checkboxes. Flechas mueven el highlight,
+        Espacio marca/desmarca, Enter confirma (Action=submit), B/Esc cancela
+        (Action=cancel); cada tecla de ActionKeys devuelve esa accion (el caller
+        la maneja y vuelve a llamar preservando Checked). Redibujo surgical, sin
+        Clear-Host. Asume consola interactiva: el caller chequea
+        Test-PctkInteractiveConsole y maneja el fallback tipeado.
+        Devuelve [PSCustomObject] @{ Action; Checked }.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object[]]    $Items,        # cada uno: { Label; Color }
+        [Parameter(Mandatory)] [scriptblock] $RenderHeader,
+        [Parameter(Mandatory)] [bool[]]      $Checked,      # estado inicial (largo == Items)
+        [int]      $InitialHighlight = 0,                   # fila resaltada inicial (preservar pos entre acciones)
+        [string]   $LegendLine = '  Espacio marca | Enter confirma | B vuelve',
+        [string[]] $ActionKeys = @()
+    )
+
+    function Write-MultiRow {
+        param([bool] $IsChecked, [object] $Item, [bool] $Hi)
+        [string] $box = if ($IsChecked) { '[x] ' } else { '[ ] ' }
+        [string] $txt = $box + ([string]$Item.Label).TrimStart()
+        if ($Hi) {
+            Write-Host ('> ' + $txt) -BackgroundColor DarkGray -ForegroundColor White
+        } elseif (-not [string]::IsNullOrEmpty([string]$Item.Color)) {
+            Write-Host ('  ' + $txt) -ForegroundColor ([string]$Item.Color)
+        } else {
+            Write-Host ('  ' + $txt)
+        }
+    }
+
+    [int]   $count   = $Items.Count
+    [int]   $hiIdx   = if ($InitialHighlight -ge 0 -and $InitialHighlight -lt $count) { $InitialHighlight } else { 0 }
+    [int[]] $itemY   = [int[]]::new([Math]::Max($count, 1))
+    [int]    $legendY = 0
+    [bool]   $full    = $true
+    [string] $buffer  = ''    # acumulador para marcar por numero multi-digito (10-19)
+
+    while ($true) {
+        if ($full) {
+            & $RenderHeader
+            for ([int] $i = 0; $i -lt $count; $i++) {
+                $itemY[$i] = [Console]::CursorTop
+                Write-MultiRow -IsChecked $Checked[$i] -Item $Items[$i] -Hi ($i -eq $hiIdx)
+            }
+            Write-Host ''
+            $legendY = [Console]::CursorTop
+            Write-Host $LegendLine -ForegroundColor DarkGray
+            $full = $false
+        }
+
+        $key = $null
+        try { $key = [Console]::ReadKey($true) }
+        catch { return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx } }
+        if ($null -eq $key) { continue }
+
+        if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
+            $buffer = ''
+            [int] $old = $hiIdx
+            if ($key.Key -eq [ConsoleKey]::UpArrow) { $hiIdx = if ($hiIdx -le 0) { $count - 1 } else { $hiIdx - 1 } }
+            else { $hiIdx = if ($hiIdx -ge ($count - 1)) { 0 } else { $hiIdx + 1 } }
+            if ($old -ne $hiIdx) {
+                try {
+                    [Console]::SetCursorPosition(0, $itemY[$old]);   Write-MultiRow -IsChecked $Checked[$old]   -Item $Items[$old]   -Hi $false
+                    [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                    [Console]::SetCursorPosition(0, $legendY)
+                } catch { $full = $true }
+            }
+            continue
+        }
+        if ($key.Key -eq [ConsoleKey]::RightArrow) {
+            return [PSCustomObject]@{ Action = 'open'; Checked = $Checked; HiIdx = $hiIdx }
+        }
+        if ($key.Key -eq [ConsoleKey]::Spacebar) {
+            $buffer = ''
+            $Checked[$hiIdx] = -not $Checked[$hiIdx]
+            try {
+                [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                [Console]::SetCursorPosition(0, $legendY)
+            } catch { $full = $true }
+            continue
+        }
+        if ($key.Key -eq [ConsoleKey]::Enter) {
+            return [PSCustomObject]@{ Action = 'submit'; Checked = $Checked; HiIdx = $hiIdx }
+        }
+        if ($key.Key -eq [ConsoleKey]::Escape) {
+            return [PSCustomObject]@{ Action = 'cancel'; Checked = $Checked; HiIdx = $hiIdx }
+        }
+        # Numero: marca/desmarca por posicion (1..N). Multi-digito (10-19): un
+        # prefijo ambiguo ('1') mueve el highlight y espera; el numero completo
+        # togglea. El no ambiguo (2-9, o el 2do digito '12') togglea al toque.
+        if ([char]::IsDigit($key.KeyChar)) {
+            [string] $ch = [string] $key.KeyChar
+            [string[]] $cands = @()
+            if ($buffer -ne '') { $cands += ($buffer + $ch) }
+            $cands += $ch
+            [bool] $handled = $false
+            foreach ($cand in $cands) {
+                [int]  $candNum   = 0
+                [bool] $exact     = [int]::TryParse($cand, [ref] $candNum) -and $candNum -ge 1 -and $candNum -le $count
+                [bool] $hasLonger = ($candNum -ge 1 -and ($candNum * 10) -le $count)
+                if ($exact -and -not $hasLonger) {
+                    [int] $idx = $candNum - 1
+                    [int] $old = $hiIdx; $hiIdx = $idx
+                    $Checked[$idx] = -not $Checked[$idx]
+                    $buffer = ''
+                    try {
+                        if ($old -ne $hiIdx) { [Console]::SetCursorPosition(0, $itemY[$old]); Write-MultiRow -IsChecked $Checked[$old] -Item $Items[$old] -Hi $false }
+                        [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                        [Console]::SetCursorPosition(0, $legendY)
+                    } catch { $full = $true }
+                    $handled = $true; break
+                }
+                if ($hasLonger) {
+                    [int] $idx = $candNum - 1
+                    if ($idx -ge 0 -and $idx -lt $count) {
+                        [int] $old = $hiIdx; $hiIdx = $idx
+                        try {
+                            if ($old -ne $hiIdx) { [Console]::SetCursorPosition(0, $itemY[$old]); Write-MultiRow -IsChecked $Checked[$old] -Item $Items[$old] -Hi $false }
+                            [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                            [Console]::SetCursorPosition(0, $legendY)
+                        } catch { $full = $true }
+                    }
+                    $buffer = $cand
+                    $handled = $true; break
+                }
+            }
+            if (-not $handled) { $buffer = '' }
+            continue
+        }
+        if ($key.KeyChar -ne [char]0) {
+            [string] $kc = $key.KeyChar.ToString().ToUpperInvariant()
+            if ($kc -eq 'B') { return [PSCustomObject]@{ Action = 'cancel'; Checked = $Checked; HiIdx = $hiIdx } }
+            foreach ($ak in $ActionKeys) {
+                if ($kc -eq ([string]$ak).ToUpperInvariant()) {
+                    return [PSCustomObject]@{ Action = $kc; Checked = $Checked; HiIdx = $hiIdx }
+                }
+            }
+        }
+        # otras teclas: ignorar
+    }
+}

@@ -383,6 +383,112 @@ function Get-ToolStatus {
 }
 
 # ─── Tools menu (selector interactivo D-TS1) ──────────────────────────────────
+function Invoke-ToolsMenuInteractive {
+    <#
+    .SYNOPSIS
+        Modo interactivo del menu de herramientas: multi-seleccion con flechas +
+        Espacio (marca varias) + Enter (baja las marcadas). Mantiene F (toggle
+        -Force), O (abrir carpeta), T (marca todas), B/Esc (volver). Reusa
+        Read-PctkMultiChoice. El estado OK/falta se recalcula cada vuelta.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object[]] $Tools,
+        [Parameter(Mandatory)] [string]   $BinDir,
+        [Parameter(Mandatory)] [string]   $Bootstrap
+    )
+
+    [bool[]] $checked = [bool[]]::new($Tools.Count)
+    [bool]   $force   = $false
+    [int]    $hi      = 0
+
+    while ($true) {
+        [object[]] $items = @()
+        for ([int] $i = 0; $i -lt $Tools.Count; $i++) {
+            $t   = $Tools[$i]
+            $ok  = Get-ToolStatus -Tool $t -BinDir $BinDir
+            [string] $lbl = ('[{0,2}] {1,-26} [{2,-12}] {3}' -f ($i + 1), $t.name, $t.category, $(if ($ok) { 'OK' } else { 'falta' }))
+            $items += [PSCustomObject]@{ Label = $lbl; Color = $(if ($ok) { 'Green' } else { 'DarkYellow' }) }
+        }
+        [string] $legend = ('  Espacio/Num:marca  Enter:baja  ->:abre  [F]orce:{0}  [O]carpeta  [T]odas  [B]volver' -f $(if ($force) { 'ON' } else { 'off' }))
+        [scriptblock] $rh = {
+            Clear-Host
+            Write-Host ''
+            Write-Host '  HERRAMIENTAS EXTERNAS' -ForegroundColor DarkCyan
+            Write-Host '  =====================' -ForegroundColor DarkCyan
+            Write-Host ''
+        }
+
+        $res = Read-PctkMultiChoice -Items $items -RenderHeader $rh -Checked $checked -InitialHighlight $hi -LegendLine $legend -ActionKeys @('F', 'O', 'T')
+        $checked = $res.Checked
+        $hi      = [int] $res.HiIdx
+
+        switch ($res.Action) {
+            'cancel'   { return }
+            'fallback' { return }
+            'F' { $force = -not $force; continue }
+            'O' {
+                if (-not (Test-Path $BinDir)) { New-Item -ItemType Directory -Path $BinDir -Force | Out-Null }
+                Start-Process explorer.exe $BinDir
+                continue
+            }
+            'open' {
+                # flecha derecha: abrir la tool resaltada SI esta descargada; si no, nada.
+                [int] $oi = [int] $res.HiIdx
+                if ($oi -ge 0 -and $oi -lt $Tools.Count) {
+                    $ot = $Tools[$oi]
+                    if (Get-ToolStatus -Tool $ot -BinDir $BinDir) {
+                        [string] $exeRel = if ($ot.PSObject.Properties['launchExe'] -and -not [string]::IsNullOrWhiteSpace([string]$ot.launchExe)) { [string]$ot.launchExe }
+                                           elseif ($ot.PSObject.Properties['filename']) { [string]$ot.filename }
+                                           else { '' }
+                        if ($exeRel -ne '') {
+                            [string] $exePath = Join-Path $BinDir $exeRel
+                            if (Test-Path -LiteralPath $exePath -PathType Leaf) {
+                                [string] $ext     = ([System.IO.Path]::GetExtension($exePath)).ToLowerInvariant()
+                                [string] $workDir = Split-Path -Parent $exePath
+                                try {
+                                    if ($ext -eq '.ps1') {
+                                        # un .ps1 se EJECUTA con powershell (Start-Process directo lo abriria en el editor)
+                                        Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $exePath) -WorkingDirectory $workDir
+                                    } else {
+                                        Start-Process -FilePath $exePath -WorkingDirectory $workDir
+                                    }
+                                } catch {}
+                            }
+                        }
+                    }
+                }
+                continue
+            }
+            'T' {
+                for ([int] $i = 0; $i -lt $checked.Count; $i++) { $checked[$i] = $true }
+                continue
+            }
+            'submit' {
+                [System.Collections.Generic.List[int]] $sel = [System.Collections.Generic.List[int]]::new()
+                for ([int] $i = 0; $i -lt $checked.Count; $i++) { if ($checked[$i]) { $sel.Add($i) } }
+                if ($sel.Count -eq 0) { continue }
+                if (-not (Test-Path $Bootstrap)) {
+                    Write-Host ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $Bootstrap) -ForegroundColor Red
+                    Read-Host '  [Enter] para continuar' | Out-Null
+                    continue
+                }
+                Clear-Host
+                foreach ($idx in $sel) {
+                    $t = $Tools[$idx]
+                    Write-Host ('  Procesando: {0}...' -f $t.name) -ForegroundColor Cyan
+                    if ($force) { & $Bootstrap -ToolName $t.name -Force }
+                    else        { & $Bootstrap -ToolName $t.name }
+                }
+                Write-Host ''
+                Read-Host '  [Enter] para continuar' | Out-Null
+                $checked = [bool[]]::new($Tools.Count)
+                continue
+            }
+        }
+    }
+}
+
 function Show-ToolsMenu {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
@@ -406,6 +512,13 @@ function Show-ToolsMenu {
     [object[]] $tools = @($manifest.tools)
     if ($tools.Count -eq 0) {
         Write-Host '  [!] manifest.json no contiene herramientas.' -ForegroundColor Yellow
+        return
+    }
+
+    # Consola interactiva -> multi-seleccion con flechas. Si no (headless/smoke/
+    # redirigido) -> cae al loop tipeado original de abajo (cero regresion).
+    if (Test-PctkInteractiveConsole) {
+        Invoke-ToolsMenuInteractive -Tools $tools -BinDir $binDir -Bootstrap $bootstrap
         return
     }
 
