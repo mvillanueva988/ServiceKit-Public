@@ -26,9 +26,9 @@ function Confirm-Action {
     )
 
     Write-Host ''
-    Write-Host ('  {0}' -f $Title) -ForegroundColor Cyan
+    Write-PctkWork ('  {0}' -f $Title)
     foreach ($l in $Lines) {
-        Write-Host ('    - {0}' -f $l) -ForegroundColor DarkGray
+        Write-PctkHint ('    - {0}' -f $l)
     }
     [string] $defaultLabel = if ($DefaultYes) { '[S/n]' } else { '[s/N]' }
     [string] $ans = (Read-Host ('  Confirmar? ' + $defaultLabel)).Trim().ToUpperInvariant()
@@ -412,10 +412,7 @@ function Invoke-ToolsMenuInteractive {
         [string] $legend = ('  Espacio/Num:marca  Enter:baja  ->:abre  [F]orce:{0}  [O]carpeta  [T]odas  [B]volver' -f $(if ($force) { 'ON' } else { 'off' }))
         [scriptblock] $rh = {
             Clear-Host
-            Write-Host ''
-            Write-Host '  HERRAMIENTAS EXTERNAS' -ForegroundColor DarkCyan
-            Write-Host '  =====================' -ForegroundColor DarkCyan
-            Write-Host ''
+            Write-PctkActionTitle 'HERRAMIENTAS EXTERNAS'
         }
 
         $res = Read-PctkMultiChoice -Items $items -RenderHeader $rh -Checked $checked -InitialHighlight $hi -LegendLine $legend -ActionKeys @('F', 'O', 'T')
@@ -468,14 +465,14 @@ function Invoke-ToolsMenuInteractive {
                 for ([int] $i = 0; $i -lt $checked.Count; $i++) { if ($checked[$i]) { $sel.Add($i) } }
                 if ($sel.Count -eq 0) { continue }
                 if (-not (Test-Path $Bootstrap)) {
-                    Write-Host ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $Bootstrap) -ForegroundColor Red
+                    Write-PctkErr ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $Bootstrap)
                     Read-Host '  [Enter] para continuar' | Out-Null
                     continue
                 }
                 Clear-Host
                 foreach ($idx in $sel) {
                     $t = $Tools[$idx]
-                    Write-Host ('  Procesando: {0}...' -f $t.name) -ForegroundColor Cyan
+                    Write-PctkWork ('  Procesando: {0}...' -f $t.name)
                     if ($force) { & $Bootstrap -ToolName $t.name -Force }
                     else        { & $Bootstrap -ToolName $t.name }
                 }
@@ -725,29 +722,29 @@ function Invoke-ActionCleanup {
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
 
-    Write-Host '  [P]review (escanea sin borrar)  /  [R]un (borra)  /  [B]volver'
+    Write-PctkValue '  [P]review (escanea sin borrar)  /  [R]un (borra)  /  [B]volver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
 
     if ($sub -eq 'P') {
         Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Started'
-        Write-Host '  Escaneando rutas de limpieza...' -ForegroundColor Cyan
+        Write-PctkWork '  Escaneando rutas de limpieza...'
         $job = Start-CleanupPreviewJob
         $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Escaneo temporales' -TimeoutSeconds 180)[0]
-        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Failed'; return }
-        Write-Host ('  Total a liberar: {0} MB ({1} GB)' -f $r.TotalMB, $r.TotalGB) -ForegroundColor Green
+        if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Failed'; return }
+        Write-PctkOk ('  Total a liberar: {0} MB ({1} GB)' -f $r.TotalMB, $r.TotalGB)
         foreach ($f in $r.Folders) {
-            Write-Host ('    {0,-50}  {1,8} MB' -f $f.Label, $f.SizeMB)
+            Write-PctkValue ('    {0,-50}  {1,8} MB' -f $f.Label, $f.SizeMB)
         }
         Write-ActionAudit -Action 'Cleanup.Preview' -Status 'Success' -Summary ('Estimate {0} MB' -f $r.TotalMB) -Details $r
         return
     }
     if ($sub -eq 'R') {
         Write-ActionAudit -Action 'Cleanup.Run' -Status 'Started'
-        Write-Host '  Limpiando temporales y caches...' -ForegroundColor Cyan
+        Write-PctkWork '  Limpiando temporales y caches...'
         $job = Start-CleanupProcess
         $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Limpieza de disco' -TimeoutSeconds 300)[0]
-        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Cleanup.Run' -Status 'Failed'; return }
-        Write-Host ('  [OK] Liberado: {0} MB ({1} GB)  |  Errores: {2}' -f $r.FreedMB, $r.FreedGB, $r.SoftErrors) -ForegroundColor Green
+        if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Cleanup.Run' -Status 'Failed'; return }
+        Write-PctkOk ('  [OK] Liberado: {0} MB ({1} GB)  |  Errores: {2}' -f $r.FreedMB, $r.FreedGB, $r.SoftErrors)
         Write-ActionAudit -Action 'Cleanup.Run' -Status 'Success' -Summary ('Freed {0} MB' -f $r.FreedMB) -Details $r
         return
     }
@@ -1228,25 +1225,26 @@ function Invoke-ActionStartup {
     do {
         [object[]] $entries = @(Get-StartupEntries)
         if ($entries.Count -eq 0) {
-            Write-Host '  Sin entradas de inicio.' -ForegroundColor DarkGray
+            Write-PctkHint '  Sin entradas de inicio.'
             if (-not $listed) { Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary '0 entries' }
             return
         }
 
-        Write-Host ''
-        Write-Host ('  INICIO DEL SISTEMA  ({0} entradas detectadas)' -f $entries.Count) -ForegroundColor DarkCyan
+        Write-PctkActionTitle ('INICIO DEL SISTEMA  ({0} entradas detectadas)' -f $entries.Count)
         for ([int] $i = 0; $i -lt $entries.Count; $i++) {
             [PSCustomObject] $e = $entries[$i]
             [string] $state = if ($e.Enabled) { 'ON ' } else { 'OFF' }
             [string] $extra = if (-not $e.CanToggle) { '  (RunOnce - no editable)' } else { '' }
-            Write-Host ('  [{0,3}] {1}  {2,-25}  {3}{4}' -f $i, $state, $e.Location, $e.Name, $extra)
+            # fila coloreada por estado: habilitada = slate (normal), deshabilitada = dim.
+            [string] $row = ('  [{0,3}] {1}  {2,-25}  {3}{4}' -f $i, $state, $e.Location, $e.Name, $extra)
+            if ($e.Enabled) { Write-PctkValue $row } else { Write-PctkHint $row }
         }
         if (-not $listed) {
             Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary ('{0} entries' -f $entries.Count)
             $listed = $true
         }
         Write-Host ''
-        Write-Host '  Indice/s (ej: 3  o  1,4  o  2-5), V para volver:' -ForegroundColor DarkGray
+        Write-PctkHint '  Indice/s (ej: 3  o  1,4  o  2-5), V para volver:'
         [string] $raw = (Read-Host '  >').Trim().ToUpperInvariant()
 
         if ($raw -eq 'V' -or [string]::IsNullOrEmpty($raw)) { break }
@@ -1266,7 +1264,7 @@ function Invoke-ActionStartup {
         }
         [object[]] $selIdx = @($selRaw | Sort-Object -Unique | Where-Object { $_ -ge 0 -and $_ -lt $entries.Count })
         if ($selIdx.Count -eq 0) {
-            Write-Host ('  [!] Sin indices validos entre 0 y {0}.' -f ($entries.Count - 1)) -ForegroundColor Red
+            Write-PctkErr ('  [!] Sin indices validos entre 0 y {0}.' -f ($entries.Count - 1))
             continue
         }
 
@@ -1274,7 +1272,7 @@ function Invoke-ActionStartup {
         [object[]] $toToggle = @($selIdx | ForEach-Object { $entries[$_] } | Where-Object { $_.CanToggle })
         [object[]] $skipped  = @($selIdx | ForEach-Object { $entries[$_] } | Where-Object { -not $_.CanToggle })
         foreach ($sk in $skipped) {
-            Write-Host ('  [skip] {0} ({1}): no se puede modificar.' -f $sk.Name, $sk.Location) -ForegroundColor DarkGray
+            Write-PctkHint ('  [skip] {0} ({1}): no se puede modificar.' -f $sk.Name, $sk.Location)
         }
         if ($toToggle.Count -eq 0) { continue }
 
@@ -1287,7 +1285,7 @@ function Invoke-ActionStartup {
             })
             if (-not (Confirm-Action -Title ('Alternar {0} entrada(s) de inicio?' -f $toToggle.Count) `
                                      -Lines $confirmLines -DefaultYes $false)) {
-                Write-Host '  Cancelado.' -ForegroundColor DarkGray
+                Write-PctkHint '  Cancelado.'
                 continue
             }
         }
@@ -1298,14 +1296,14 @@ function Invoke-ActionStartup {
 
             if ($r.Success) {
                 [string] $newState = if ($target) { 'ON' } else { 'OFF' }
-                Write-Host ('  [OK] {0} {1} -> {2}' -f $entry.Location, $entry.Name, $newState) -ForegroundColor Green
+                Write-PctkOk ('  [OK] {0} {1} -> {2}' -f $entry.Location, $entry.Name, $newState)
                 $toggleCount++
                 Write-ActionAudit -Action 'Startup.Toggle' -Status 'Success' `
                     -Summary ('{0} {1} -> {2}' -f $entry.Location, $entry.Name, $(if ($target) { 'ON' } else { 'OFF' })) `
                     -Details $r
             }
             else {
-                Write-Host ('  [!] {0}: {1}' -f $entry.Name, $r.Error) -ForegroundColor Red
+                Write-PctkErr ('  [!] {0}: {1}' -f $entry.Name, $r.Error)
                 Write-ActionAudit -Action 'Startup.Toggle' -Status 'Failed' `
                     -Summary ('{0} {1}' -f $entry.Location, $entry.Name) -Details $r
             }

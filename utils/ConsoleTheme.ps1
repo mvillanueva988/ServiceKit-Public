@@ -125,3 +125,137 @@ function Write-PctkMachineBanner {
     Write-Host ('  ' + $bx + '╚' + ('═' * ($innerW + 2)) + '╝' + (Pe))
     Write-Host ''
 }
+
+# ─── Capa de salida tematizada (helpers de modulo) ───────────────────────────
+# Cada helper degrada solo: VT on -> ANSI truecolor del tema; VT off -> Write-Host
+# con el 16-color mas cercano (mismo look clasico de hoy). NUNCA emite ANSI crudo
+# con VT off. Los handlers del Router / modulos adoptan estos en vez de cablear
+# -ForegroundColor a mano, para que el tema sea una sola fuente de verdad.
+
+function Get-PctkKindSpec {
+    # Devuelve @{ R; G; B; C16 } para una intencion semantica de output.
+    [OutputType([hashtable])]
+    param([string] $Kind)
+    switch (([string]$Kind).ToLowerInvariant()) {
+        'work'    { return @{ R = 110; G = 225; B = 200; C16 = 'Cyan'     } }  # trabajando / en curso
+        'ok'      { return @{ R = 90;  G = 210; B = 120; C16 = 'Green'    } }  # exito
+        'warn'    { return @{ R = 255; G = 170; B = 40;  C16 = 'Yellow'   } }  # aviso blando
+        'err'     { return @{ R = 210; G = 95;  B = 95;  C16 = 'Red'      } }  # error
+        'hint'    { return @{ R = 95;  G = 108; B = 124; C16 = 'DarkGray' } }  # detalle / cancel / skip
+        'section' { return @{ R = 80;  G = 215; B = 185; C16 = 'DarkCyan' } }  # sub-encabezado de reporte
+        'white'   { return @{ R = 235; G = 238; B = 242; C16 = 'White'    } }  # enfasis
+        default   { return @{ R = 140; G = 152; B = 166; C16 = 'Gray'     } }  # value / texto normal
+    }
+}
+
+function Write-PctkLine {
+    <#
+    .SYNOPSIS
+        Primitiva de salida tematizada. VT on -> ANSI truecolor; VT off -> 16-color.
+        Kind: work/ok/warn/err/hint/section/white/value (default value). No-throw.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Text,
+        [string] $Kind = 'value',
+        [switch] $NoNewline
+    )
+    [hashtable] $s = Get-PctkKindSpec $Kind
+    if ($script:PctkVT) {
+        Write-Host ((Pf $s.R $s.G $s.B) + $Text + (Pe)) -NoNewline:$NoNewline
+    } else {
+        Write-Host $Text -ForegroundColor ([string]$s.C16) -NoNewline:$NoNewline
+    }
+}
+
+function Write-PctkOk      { param([AllowEmptyString()][string] $Text) Write-PctkLine -Text $Text -Kind 'ok' }
+function Write-PctkWarn    { param([AllowEmptyString()][string] $Text) Write-PctkLine -Text $Text -Kind 'warn' }
+function Write-PctkErr     { param([AllowEmptyString()][string] $Text) Write-PctkLine -Text $Text -Kind 'err' }
+function Write-PctkHint    { param([AllowEmptyString()][string] $Text) Write-PctkLine -Text $Text -Kind 'hint' }
+function Write-PctkWork    { param([AllowEmptyString()][string] $Text) Write-PctkLine -Text $Text -Kind 'work' }
+function Write-PctkSection { param([AllowEmptyString()][string] $Text) Write-PctkLine -Text $Text -Kind 'section' }
+function Write-PctkValue   { param([AllowEmptyString()][string] $Text) Write-PctkLine -Text $Text -Kind 'value' }
+
+function ConvertTo-PctkAnsiFg {
+    <#
+    .SYNOPSIS
+        Mapea un nombre 16-color (campo .Color heredado de las filas) a un Pf del
+        tema. Devuelve '' si VT off, vacio, o nombre desconocido -> el caller cae a
+        -ForegroundColor con el nombre original (sin regresion).
+    #>
+    [OutputType([string])]
+    param([string] $Name)
+    if (-not $script:PctkVT) { return '' }
+    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
+    switch ($Name.ToLowerInvariant()) {
+        'green'      { return (Pf 90 210 120) }
+        'darkgreen'  { return (Pf 70 165 95) }
+        'yellow'     { return (Pf 255 190 70) }
+        'darkyellow' { return (Pf 255 170 40) }
+        'red'        { return (Pf 210 95 95) }
+        'darkred'    { return (Pf 200 80 80) }
+        'cyan'       { return (Pf 110 225 200) }
+        'darkcyan'   { return (Pf 80 215 185) }
+        'gray'       { return (Pf 140 152 166) }
+        'darkgray'   { return (Pf 95 108 124) }
+        'white'      { return (Pf 235 238 242) }
+        default      { return '' }
+    }
+}
+
+function Write-PctkActionTitle {
+    <#
+    .SYNOPSIS
+        Encabezado de accion (b2): barra ambar '── TITULO ───' con VT; clasico
+        DarkCyan + linea '====' sin VT. Imprime una linea en blanco antes y despues.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $Text)
+    [string] $t = ([string]$Text).Trim()
+    Write-Host ''
+    if ($script:PctkVT) {
+        [int] $pad = [Math]::Max(3, 50 - $t.Length)
+        Write-Host ('  ' + (Pf 255 170 40) + '── ' + $t + ' ' + ('─' * $pad) + (Pe))
+    } else {
+        Write-Host ('  ' + $t) -ForegroundColor DarkCyan
+        Write-Host ('  ' + ('=' * $t.Length)) -ForegroundColor DarkCyan
+    }
+    Write-Host ''
+}
+
+function Get-PctkBadge {
+    <#
+    .SYNOPSIS
+        Pastilla inline (c1) como token string para componer dentro de una fila.
+        VT on -> fondo + fg con padding; VT off -> '[Texto]' plano (componible en
+        una linea -ForegroundColor sin romper). Kind: ok/warn/danger/info/neutral.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $Text,
+        [string] $Kind = 'neutral'
+    )
+    if (-not $script:PctkVT) { return ('[' + $Text + ']') }
+    switch (([string]$Kind).ToLowerInvariant()) {
+        'ok'     { return ((Pb 40 120 60)  + (Pf 230 255 238) + ' ' + $Text + ' ' + (Pe)) }
+        'warn'   { return ((Pb 150 95 0)   + (Pf 255 240 210) + ' ' + $Text + ' ' + (Pe)) }
+        'danger' { return ((Pb 120 40 40)  + (Pf 255 225 225) + ' ' + $Text + ' ' + (Pe)) }
+        'info'   { return ((Pb 30 90 80)   + (Pf 200 255 245) + ' ' + $Text + ' ' + (Pe)) }
+        default  { return ((Pb 60 68 80)   + (Pf 220 225 232) + ' ' + $Text + ' ' + (Pe)) }
+    }
+}
+
+function Write-PctkDivider {
+    <#
+    .SYNOPSIS
+        Divisor (e3): linea con gradiente ambar->dim con VT; '─' DarkGray sin VT.
+    #>
+    [CmdletBinding()]
+    param([int] $Width = 60)
+    if ($Width -lt 1) { $Width = 1 }
+    if ($script:PctkVT) {
+        Write-Host ('  ' + (Get-PctkGrad ('━' * $Width) 255 170 40 95 108 124))
+    } else {
+        Write-Host ('  ' + ('─' * $Width)) -ForegroundColor DarkGray
+    }
+}

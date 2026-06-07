@@ -1399,6 +1399,62 @@ Test-SmokeFunction 'ConsoleMenu' 'Invoke-ToolsMenuInteractive presente (handler 
     }
 }
 
+# ─── ConsoleTheme: VT + capa de helpers de output (estructural) ──────────────
+# En smoke el output esta redirigido -> Enable-PctkVT da false y todo cae al
+# render 16-color/texto. Estos tests verifican el contrato del FALLBACK: presencia,
+# no-throw, devuelve bool, y que los Get-* NO emiten ANSI crudo con VT off.
+Test-SmokeFunction 'ConsoleTheme' 'Enable-PctkVT presente + devuelve bool + no-throw' {
+    if ($null -eq (Get-Command 'Enable-PctkVT' -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw 'Enable-PctkVT no encontrado'
+    }
+    $r = Enable-PctkVT
+    if ($r -isnot [bool]) { throw ('Enable-PctkVT no devolvio bool; got {0}' -f $r.GetType().Name) }
+    $t = Test-PctkVT
+    if ($t -isnot [bool]) { throw 'Test-PctkVT no devolvio bool' }
+}
+Test-SmokeFunction 'ConsoleTheme' 'helpers de tema presentes' {
+    [string[]] $fns = @(
+        'Write-PctkLine','Write-PctkOk','Write-PctkWarn','Write-PctkErr','Write-PctkHint',
+        'Write-PctkWork','Write-PctkSection','Write-PctkValue','Write-PctkActionTitle',
+        'Get-PctkBadge','Write-PctkDivider','ConvertTo-PctkAnsiFg','Get-PctkKindSpec',
+        'Write-PctkMachineBanner','Get-PctkGrad'
+    )
+    foreach ($fn in $fns) {
+        if ($null -eq (Get-Command $fn -CommandType Function -ErrorAction SilentlyContinue)) { throw "$fn no encontrado" }
+    }
+}
+Test-SmokeFunction 'ConsoleTheme' 'helpers de output no-throw con VT off' {
+    # Sub-scriptblock con *>$null: no ensuciamos el reporte; un throw igual propaga.
+    & {
+        Write-PctkLine -Text 'x' -Kind 'ok'
+        Write-PctkOk 'x'; Write-PctkWarn 'x'; Write-PctkErr 'x'; Write-PctkHint 'x'
+        Write-PctkWork 'x'; Write-PctkSection 'x'; Write-PctkValue 'x'; Write-PctkValue ''
+        Write-PctkActionTitle 'TITULO DE PRUEBA'
+        Write-PctkDivider 20
+    } *> $null
+}
+Test-SmokeFunction 'ConsoleTheme' 'Get-* no emiten ANSI crudo con VT off' {
+    [char] $esc = [char]27
+    [string] $b = Get-PctkBadge 'OK' 'ok'
+    if ($b.IndexOf($esc) -ge 0) { throw 'Get-PctkBadge emitio ESC con VT off' }
+    if ($b -ne '[OK]')          { throw ("Get-PctkBadge VT off esperado '[OK]'; got '{0}'" -f $b) }
+    [string] $g = Get-PctkGrad 'abc' 255 170 40 95 108 124
+    if ($g.IndexOf($esc) -ge 0) { throw 'Get-PctkGrad emitio ESC con VT off' }
+    if ($g -ne 'abc')           { throw ("Get-PctkGrad VT off esperado 'abc'; got '{0}'" -f $g) }
+    [string] $f = ConvertTo-PctkAnsiFg 'Green'
+    if ($f -ne '')              { throw ("ConvertTo-PctkAnsiFg VT off esperado ''; got '{0}'" -f $f) }
+}
+Test-SmokeFunction 'ConsoleTheme' 'Get-PctkKindSpec: shape + 16-color por kind' {
+    $s = Get-PctkKindSpec 'ok'
+    foreach ($k in @('R','G','B','C16')) {
+        if (-not $s.ContainsKey($k)) { throw "Get-PctkKindSpec sin clave $k" }
+    }
+    if ($s.C16 -ne 'Green') { throw ("kind 'ok' C16 esperado Green; got {0}" -f $s.C16) }
+    if ((Get-PctkKindSpec 'err').C16  -ne 'Red')      { throw "kind 'err' C16 != Red" }
+    if ((Get-PctkKindSpec 'hint').C16 -ne 'DarkGray') { throw "kind 'hint' C16 != DarkGray" }
+    if ((Get-PctkKindSpec 'zzz').C16  -ne 'Gray')     { throw "kind desconocido C16 != Gray (default value)" }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

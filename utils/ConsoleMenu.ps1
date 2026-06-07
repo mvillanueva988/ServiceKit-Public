@@ -119,7 +119,13 @@ function Read-PctkMenuChoice {
             if ($vt) { Write-Host ((Pb 150 95 0) + (Pf 245 240 230) + '> ' + $label + (Pe)) }
             else     { Write-Host ('> ' + $label) -BackgroundColor DarkGray -ForegroundColor White }
         } elseif (-not [string]::IsNullOrEmpty([string]$Row.Color)) {
-            Write-Host ('  ' + $label) -ForegroundColor ([string]$Row.Color)
+            if ($vt) {
+                [string] $fg = ConvertTo-PctkAnsiFg ([string]$Row.Color)
+                if ([string]::IsNullOrEmpty($fg)) { $fg = Pf 140 152 166 }
+                Write-Host ($fg + '  ' + $label + (Pe))
+            } else {
+                Write-Host ('  ' + $label) -ForegroundColor ([string]$Row.Color)
+            }
         } elseif ($vt) {
             Write-Host ((Pf 140 152 166) + '  ' + $label + (Pe))
         } else {
@@ -168,7 +174,9 @@ function Read-PctkMenuChoice {
                 }
             }
             Write-Host ''
-            Write-Host '  Usa flechas arriba/abajo + Enter, o la tecla del atajo:' -ForegroundColor DarkGray
+            [string] $hintLine = '  Usa flechas arriba/abajo + Enter, o la tecla del atajo:'
+            if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $hintLine + (Pe)) }
+            else             { Write-Host $hintLine -ForegroundColor DarkGray }
             $bottomY = [Console]::CursorTop
             $full = $false
         }
@@ -290,14 +298,26 @@ function Read-PctkMultiChoice {
 
     function Write-MultiRow {
         param([bool] $IsChecked, [object] $Item, [bool] $Hi)
-        [string] $box = if ($IsChecked) { '[x] ' } else { '[ ] ' }
-        [string] $txt = $box + ([string]$Item.Label).TrimStart()
+        [bool]   $vt    = Test-PctkVT
+        [string] $box   = if ($IsChecked) { '[x] ' } else { '[ ] ' }
+        [string] $label = ([string]$Item.Label).TrimStart()
         if ($Hi) {
-            Write-Host ('> ' + $txt) -BackgroundColor DarkGray -ForegroundColor White
+            # fila resaltada: fondo ambar (a1) con VT; clasico gris sin VT. Mismo
+            # ancho visible que la fila normal -> overwrite surgical sin restos.
+            if ($vt) { Write-Host ((Pb 150 95 0) + (Pf 245 240 230) + '> ' + $box + $label + (Pe)) }
+            else     { Write-Host ('> ' + $box + $label) -BackgroundColor DarkGray -ForegroundColor White }
+            return
+        }
+        if ($vt) {
+            # checkbox marcado = verde ok, vacio = dim; texto = .Color mapeado al tema (o slate).
+            [string] $boxCol = if ($IsChecked) { Pf 90 210 120 } else { Pf 95 108 124 }
+            [string] $txtCol = ConvertTo-PctkAnsiFg ([string]$Item.Color)
+            if ([string]::IsNullOrEmpty($txtCol)) { $txtCol = Pf 140 152 166 }
+            Write-Host ('  ' + $boxCol + $box + (Pe) + $txtCol + $label + (Pe))
         } elseif (-not [string]::IsNullOrEmpty([string]$Item.Color)) {
-            Write-Host ('  ' + $txt) -ForegroundColor ([string]$Item.Color)
+            Write-Host ('  ' + $box + $label) -ForegroundColor ([string]$Item.Color)
         } else {
-            Write-Host ('  ' + $txt)
+            Write-Host ('  ' + $box + $label)
         }
     }
 
@@ -317,7 +337,8 @@ function Read-PctkMultiChoice {
             }
             Write-Host ''
             $legendY = [Console]::CursorTop
-            Write-Host $LegendLine -ForegroundColor DarkGray
+            if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $LegendLine + (Pe)) }
+            else             { Write-Host $LegendLine -ForegroundColor DarkGray }
             $full = $false
         }
 
