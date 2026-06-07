@@ -1230,20 +1230,32 @@ function Invoke-ActionStartup {
     [bool] $listed      = $false
 
     do {
-        [object[]] $entries = @(Get-StartupEntries)
-        if ($entries.Count -eq 0) {
+        [object[]] $entriesRaw = @(Get-StartupEntries)
+        if ($entriesRaw.Count -eq 0) {
             Write-PctkHint '  Sin entradas de inicio.'
             if (-not $listed) { Write-ActionAudit -Action 'Startup.List' -Status 'Success' -Summary '0 entries' }
             return
         }
 
+        # Agrupar: ON primero, OFF despues. Where-Object preserva el orden de
+        # deteccion dentro de cada grupo (estable; Sort-Object -Stable no existe en
+        # PS5.1). El indice [i] que tipea el operador sigue mapeando a $entries.
+        [object[]] $on  = @($entriesRaw | Where-Object { $_.Enabled })
+        [object[]] $off = @($entriesRaw | Where-Object { -not $_.Enabled })
+        [object[]] $entries = @($on + $off)
+        [int] $onCount = $on.Count
+
         Write-PctkActionTitle ('INICIO DEL SISTEMA  ({0} entradas detectadas)' -f $entries.Count)
         for ([int] $i = 0; $i -lt $entries.Count; $i++) {
+            if ($i -eq 0 -and $onCount -gt 0)            { Write-PctkSection ('  ACTIVAS  ({0})' -f $onCount) }
+            if ($i -eq $onCount -and $off.Count -gt 0)   { Write-Host ''; Write-PctkSection ('  DESACTIVADAS  ({0})' -f $off.Count) }
             [PSCustomObject] $e = $entries[$i]
             [string] $state = if ($e.Enabled) { 'ON ' } else { 'OFF' }
             [string] $extra = if (-not $e.CanToggle) { '  (RunOnce - no editable)' } else { '' }
+            [string] $desc  = Get-StartupDescription -Name ([string]$e.Name)
+            [string] $descTag = if (-not [string]::IsNullOrEmpty($desc)) { '  - ' + $desc } else { '' }
             # fila coloreada por estado: habilitada = slate (normal), deshabilitada = dim.
-            [string] $row = ('  [{0,3}] {1}  {2,-25}  {3}{4}' -f $i, $state, $e.Location, $e.Name, $extra)
+            [string] $row = ('  [{0,3}] {1}  {2,-16}  {3}{4}{5}' -f $i, $state, $e.Location, $e.Name, $extra, $descTag)
             if ($e.Enabled) { Write-PctkValue $row } else { Write-PctkHint $row }
         }
         if (-not $listed) {

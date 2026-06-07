@@ -245,3 +245,74 @@ function Open-Autoruns {
         return [PSCustomObject]@{ Success = $false; Error = $_.Exception.Message }
     }
 }
+
+# ─── Get-StartupDescription ───────────────────────────────────────────────────
+# DRAFT a validar por Mateo (criterio de campo). Mapa curado nombre+comando ->
+# descripcion corta + hint (dejar / opcional / seguro apagar). Match por subcadena
+# (case-insensitive), primer match gana -> ordenar de especifico a generico.
+# Devuelve '' si no hay match conocido (honesto: no inventar para lo ambiguo).
+function Get-StartupDescription {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Name
+    )
+
+    # Match SOLO sobre el Name: el Command (ruta/cmdline) mete falsos positivos
+    # (ej. el RunOnce "Application Restart" cuyo comando referencia a Brave, o paths
+    # que contienen "office"/"logi"). El Name es el identificador real de la entrada.
+    [string] $hay = ([string]$Name).ToLowerInvariant()
+
+    [object[]] $rules = @(
+        # --- Audio ---
+        @{ K = 'rtkaud';              D = 'Audio Realtek (dejar)' }
+        @{ K = 'nahimic';             D = 'Nahimic audio (opcional)' }
+        @{ K = 'fxsound';             D = 'FxSound mejora audio (opcional)' }
+        @{ K = 'edb90prosound';       D = 'FxSound mejora audio (opcional)' }
+        @{ K = 'amdnoisesuppression'; D = 'AMD supresion de ruido de mic (opcional)' }
+        @{ K = 'equalizerapo';        D = 'Equalizer APO updater (seguro apagar)' }
+        @{ K = 'amdscosupport';       D = 'AMD audio Bluetooth (dejar)' }
+        # --- GPU / OEM / perifericos ---
+        @{ K = 'nvidia broadcast';    D = 'NVIDIA Broadcast mic/cam IA (opcional, consume)' }
+        @{ K = 'nvcontainer';         D = 'NVIDIA driver/panel (dejar)' }
+        @{ K = 'armoury';             D = 'ASUS Armoury Crate (opcional)' }
+        @{ K = 'lenovolegion';        D = 'Lenovo Legion Toolkit (opcional)' }
+        @{ K = 'startcn';             D = 'MSI Center / Dragon Center (opcional)' }
+        @{ K = 'lightshot';           D = 'Lightshot capturas de pantalla (opcional)' }
+        @{ K = 'fwcustom';            D = 'Lightshot capturas de pantalla (opcional)' }
+        @{ K = 'logitech';            D = 'Logitech G HUB / Options (opcional)' }
+        @{ K = 'lghub';               D = 'Logitech G HUB (opcional)' }
+        @{ K = 'logioptions';         D = 'Logitech Options (opcional)' }
+        # --- Tuning de CPU (terceros) ---
+        @{ K = 'process lasso';       D = 'Process Lasso gestion de CPU (opcional)' }
+        @{ K = 'parkcontrol';         D = 'ParkControl parking de nucleos (opcional)' }
+        # --- Apps comunes ---
+        @{ K = 'discord';             D = 'Discord chat/voz (opcional)' }
+        @{ K = 'steam';               D = 'Steam (opcional)' }
+        @{ K = 'epicgames';           D = 'Epic Games Launcher (opcional)' }
+        @{ K = 'spotify';             D = 'Spotify (opcional)' }
+        @{ K = 'onedrive';            D = 'OneDrive sincronizacion (opcional)' }
+        @{ K = 'notion';              D = 'Notion notas (opcional)' }
+        @{ K = 'teams';               D = 'Microsoft Teams (opcional)' }
+        # --- Actualizadores (normalmente seguro apagar) ---
+        @{ K = 'bravesoftware';       D = 'Actualizador Brave (seguro apagar)' }
+        @{ K = 'googleupdat';         D = 'Actualizador Google/Chrome (dejar o apagar)' }
+        @{ K = 'edgeupdate';          D = 'Actualizador Edge (dejar o apagar)' }
+        @{ K = 'adobe';               D = 'Adobe updater (seguro apagar)' }
+        # --- Microsoft / Office / Windows (normalmente dejar) ---
+        @{ K = 'office';              D = 'Microsoft Office mantenimiento/updates (dejar)' }
+        @{ K = 'rms rights policy';   D = 'Office RMS plantillas de permisos (dejar)' }
+        @{ K = 'securityhealth';      D = 'Windows Security (dejar)' }
+        @{ K = 'application restart'; D = 'Restaurar apps tras reinicio' }
+        @{ K = 'verifiedpublisher';  D = 'Windows verificacion de certificados (dejar)' }
+        @{ K = 'pre-staged app';     D = 'Windows limpieza de apps (dejar)' }
+        @{ K = 'ucpd';               D = 'Windows proteccion de navegador default (dejar)' }
+        @{ K = 'keypregen';          D = 'Windows criptografia (dejar)' }
+        @{ K = 'clipesu';            D = 'Windows portapapeles (dejar)' }
+    )
+
+    foreach ($r in $rules) {
+        if ($hay -like ('*' + [string]$r.K + '*')) { return [string]$r.D }
+    }
+    return ''
+}

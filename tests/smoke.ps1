@@ -146,6 +146,20 @@ Test-SmokeFunction 'Apps' 'Get-UwpUninstallPreview shape' {
 
 Test-SmokeFunction 'Cleanup' 'Get-CleanupPreview' { Get-CleanupPreview }
 
+Test-SmokeFunction 'StartupManager' 'Get-StartupDescription: conocido vs desconocido' {
+    if ($null -eq (Get-Command 'Get-StartupDescription' -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw 'Get-StartupDescription no encontrado'
+    }
+    [string] $known = Get-StartupDescription -Name 'RtkAudUService'
+    if ([string]::IsNullOrEmpty($known)) { throw 'RtkAudUService deberia tener descripcion' }
+    # Regresion del falso positivo: 'Application Restart' NO debe matchear Brave por
+    # el comando (ahora el match es solo por Name) -> debe ser "Restaurar...".
+    [string] $appRestart = Get-StartupDescription -Name 'Application Restart #1'
+    if ($appRestart -notmatch 'Restaurar') { throw ("Application Restart deberia ser Restaurar...; got '{0}'" -f $appRestart) }
+    [string] $unknown = Get-StartupDescription -Name 'ZxQ_nada_123'
+    if ($unknown -ne '') { throw ("desconocido deberia dar ''; got '{0}'" -f $unknown) }
+}
+
 Test-SmokeFunction 'Diagnostics' 'Get-BsodHistory' { Get-BsodHistory -Days 7 }
 
 Test-SmokeFunction 'Network' 'Get-NetworkDiagnostics' { Get-NetworkDiagnostics }
