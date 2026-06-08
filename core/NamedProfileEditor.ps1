@@ -509,7 +509,7 @@ function New-NamedProfileInteractive {
         } else {
             "  {0}  (actual: {1}  |  preset: {2})" -f $Label, $CurrentState, $PresetDefault
         }
-        Write-Host $hint -ForegroundColor Cyan
+        Write-PctkWork $hint
         [string] $promptTxt = if ([string]::IsNullOrWhiteSpace($PresetDefault)) {
             '    [o]n / [f]off / Enter=no tocar'
         } else {
@@ -524,7 +524,7 @@ function New-NamedProfileInteractive {
     }
 
     Write-Host ''
-    Write-Host '  ── Nueva receta nombrada (gaming) ──' -ForegroundColor DarkCyan
+    Write-PctkActionTitle 'Nueva receta nombrada (gaming)'
     [string] $name = (Read-Host '  Nombre de la receta (ej. PC Carlos CS2)').Trim()
     if ([string]::IsNullOrWhiteSpace($name)) { $name = 'Receta ' + (Get-Date -Format 'yyyy-MM-dd HH:mm') }
 
@@ -545,7 +545,7 @@ function New-NamedProfileInteractive {
     # Defaults HW-smart del preset (si se activo; sino string vacio = sin sugerencia)
     [PSCustomObject] $presetGt = $null
     if ($UseGamingPreset) {
-        Write-Host '  [Preset gaming] Calculando defaults HW-smart...' -ForegroundColor DarkGray
+        Write-PctkHint '  [Preset gaming] Calculando defaults HW-smart...'
         $presetGt = New-GamingPreset -MachineProfile $MachineProfile
     }
     function Get-PresetDefault([string]$Key) {
@@ -558,7 +558,7 @@ function New-NamedProfileInteractive {
     Add-Tweak 'hvci'                  (Read-OnOffSkip 'HVCI / Memory Integrity (off recomendado gaming; VBS se preserva)' (Safe-State { Get-CoreIsolationStatus } 'HvciEnabled') (Get-PresetDefault 'hvci'))
     [string] $hagsChoice = Read-OnOffSkip 'HAGS (Hardware-Accelerated GPU Scheduling)' (Safe-State { Get-HagsStatus } 'Enabled') (Get-PresetDefault 'hags')
     if ($hagsChoice -eq 'off' -and (Test-IsRtx40Plus -MachineProfile $MachineProfile)) {
-        Write-Host '    [!] OJO: GPU RTX 40/50 -> con HAGS off, DLSS Frame Generation NO funciona (se desactiva solo).' -ForegroundColor Yellow
+        Write-PctkWarn '    [!] OJO: GPU RTX 40/50 -> con HAGS off, DLSS Frame Generation NO funciona (se desactiva solo).'
     }
     Add-Tweak 'hags' $hagsChoice
     Add-Tweak 'usb_selective_suspend' (Read-OnOffSkip 'USB Selective Suspend (off recomendado p/ periféricos gaming)'      (Safe-State { Get-UsbSelectiveSuspendStatus } 'Enabled') (Get-PresetDefault 'usb_selective_suspend'))
@@ -574,13 +574,13 @@ function New-NamedProfileInteractive {
     # Juegos instalados -- scan multi-tienda + toggle por juego (D: Get-InstalledGames)
     # Los elegidos van a defender_exclusions (Path) + process_priority (exe -> High).
     Write-Host ''
-    Write-Host '  Escaneando juegos instalados (Steam/Epic/GOG/EA/Ubisoft/Xbox)...' -ForegroundColor DarkGray
+    Write-PctkHint '  Escaneando juegos instalados (Steam/Epic/GOG/EA/Ubisoft/Xbox)...'
     [PSCustomObject[]] $allGames = @(Get-InstalledGames)
     [System.Collections.Generic.List[string]] $dePaths = [System.Collections.Generic.List[string]]::new()
     [PSCustomObject] $ppObj = [PSCustomObject]@{}
     [bool] $ppHasEntries = $false
     if ($allGames.Count -gt 0) {
-        Write-Host ("  {0} juego(s) detectado(s):" -f $allGames.Count) -ForegroundColor DarkYellow
+        Write-PctkValue ("  {0} juego(s) detectado(s):" -f $allGames.Count)
         # Paginar: mostrar hasta 30 por pantalla para no truncar en silencio
         [int] $pageSize = 30
         [int] $totalPages = [int][Math]::Ceiling($allGames.Count / $pageSize)
@@ -591,10 +591,10 @@ function New-NamedProfileInteractive {
             for ([int] $gi = $start; $gi -le $end; $gi++) {
                 [string] $src = $allGames[$gi].Source
                 [string] $gname = $allGames[$gi].Name
-                Write-Host ("    [{0}] [{1}] {2}" -f ($gi + 1), $src, $gname) -ForegroundColor DarkYellow
+                Write-PctkValue ("    [{0}] [{1}] {2}" -f ($gi + 1), $src, $gname)
             }
             if ($totalPages -gt 1) {
-                Write-Host ("  (Pagina {0}/{1}; Total: {2})" -f ($page + 1), $totalPages, $allGames.Count) -ForegroundColor DarkGray
+                Write-PctkHint ("  (Pagina {0}/{1}; Total: {2})" -f ($page + 1), $totalPages, $allGames.Count)
             }
             [string] $numIn = (Read-Host '  Numeros a optimizar (Defender + IFEO High; ej. 1 3) o Enter=ninguno').Trim()
             foreach ($tok in @($numIn -split '\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
@@ -617,9 +617,9 @@ function New-NamedProfileInteractive {
                                       Where-Object { $_.Length -gt 1MB })
                         }
                         if ($exes.Count -gt 0) {
-                            Write-Host ("    Ejecutables detectados en {0}:" -f $chosen.Name) -ForegroundColor DarkGray
+                            Write-PctkHint ("    Ejecutables detectados en {0}:" -f $chosen.Name)
                             for ([int] $ei = 0; $ei -lt $exes.Count; $ei++) {
-                                Write-Host ("      [{0}] {1}" -f ($ei + 1), $exes[$ei].Name) -ForegroundColor DarkGray
+                                Write-PctkHint ("      [{0}] {1}" -f ($ei + 1), $exes[$ei].Name)
                             }
                             [string] $exeIn = (Read-Host '      Numeros IFEO High (ej. 1 2) o Enter=ninguno').Trim()
                             foreach ($etok in @($exeIn -split '\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
@@ -637,7 +637,7 @@ function New-NamedProfileInteractive {
             $page++
         }
     } else {
-        Write-Host '  No se detectaron juegos instalados (o ninguna tienda compatible presente).' -ForegroundColor DarkGray
+        Write-PctkHint '  No se detectaron juegos instalados (o ninguna tienda compatible presente).'
         Write-Verbose 'Get-InstalledGames: sin juegos detectados; Xbox/MS Store puede no estar cubierto en este sistema.'
     }
     [string] $deExtra = (Read-Host '  Paths adicionales de exclusion Defender (sep. ;) o Enter=ninguno').Trim()

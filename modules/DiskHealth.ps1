@@ -266,46 +266,44 @@ function Show-DiskHealth {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $Data)
 
-    Write-Host ''
-    Write-Host '  SALUD DE DISCOS (SMART / wear)' -ForegroundColor DarkCyan
-    Write-Host '  ==============================' -ForegroundColor DarkCyan
+    Write-PctkActionTitle 'SALUD DE DISCOS (SMART / wear)'
 
     if ($Data.IsVM) {
-        Write-Host '  [i] Máquina virtual detectada: SMART no disponible en disco virtual.' -ForegroundColor DarkYellow
+        Write-PctkLine '  [i] Máquina virtual detectada: SMART no disponible en disco virtual.' 'warn'
     }
     if (@($Data.Disks).Count -eq 0) {
         if ($null -ne $Data.PSObject.Properties['EnumTimedOut'] -and $Data.EnumTimedOut) {
-            Write-Host '  [!] Se agoto el tiempo leyendo los discos (PC o disco muy lento).' -ForegroundColor Yellow
-            Write-Host '      No se pudo completar la lectura. Esto NO significa que no haya disco.' -ForegroundColor DarkYellow
+            Write-PctkLine '  [!] Se agoto el tiempo leyendo los discos (PC o disco muy lento).' 'warn'
+            Write-PctkLine '      No se pudo completar la lectura. Esto NO significa que no haya disco.' 'warn'
         } else {
-            Write-Host '  [!] No se detectaron discos físicos.' -ForegroundColor Yellow
+            Write-PctkLine '  [!] No se detectaron discos físicos.' 'warn'
         }
         return
     }
 
     foreach ($d in $Data.Disks) {
-        [string] $color = switch ($d.Alert) { 'CRIT' { 'Red' } 'WARN' { 'Yellow' } 'UNKNOWN' { 'DarkGray' } default { 'Green' } }
+        [string] $kind = switch ($d.Alert) { 'CRIT' { 'err' } 'WARN' { 'warn' } 'UNKNOWN' { 'hint' } default { 'ok' } }
         [string] $wear = Get-DiskWearLabel -MediaType $d.MediaType -WearPct $d.WearPct
         [string] $temp = if ($null -ne $d.TempC)   { "$($d.TempC)C" }   else { 'no reportado' }
         [string] $hlth = if (-not [string]::IsNullOrWhiteSpace($d.HealthStatus)) { $d.HealthStatus } else { 'no reportado' }
 
         Write-Host ''
-        Write-Host ('  [{0}] {1}  ({2} GB, {3})' -f $d.Alert, $d.Name, $d.SizeGb, $d.MediaType) -ForegroundColor $color
-        Write-Host ('        Health: {0}   Wear: {1}   Temp: {2}' -f $hlth, $wear, $temp) -ForegroundColor DarkGray
+        Write-PctkLine ('  [{0}] {1}  ({2} GB, {3})' -f $d.Alert, $d.Name, $d.SizeGb, $d.MediaType) $kind
+        Write-PctkLine ('        Health: {0}   Wear: {1}   Temp: {2}' -f $hlth, $wear, $temp) 'hint'
         if (@($d.AlertReasons).Count -gt 0 -and $d.Alert -ne 'OK') {
-            foreach ($r in $d.AlertReasons) { Write-Host ('        -> {0}' -f $r) -ForegroundColor $color }
+            foreach ($r in $d.AlertReasons) { Write-PctkLine ('        -> {0}' -f $r) $kind }
         }
         if ($null -ne $d.PSObject.Properties['SmartTimedOut'] -and $d.SmartTimedOut) {
-            Write-Host '        [i] SMART no leido: se agoto el tiempo (disco lento). Wear/Temp no disponibles.' -ForegroundColor DarkYellow
+            Write-PctkLine '        [i] SMART no leido: se agoto el tiempo (disco lento). Wear/Temp no disponibles.' 'warn'
         }
     }
 
     Write-Host ''
     if ($Data.AlertCount -gt 0) {
-        Write-Host ('  {0} disco(s) con alerta. Revisar arriba; considerar backup / reemplazo.' -f $Data.AlertCount) -ForegroundColor Yellow
+        Write-PctkLine ('  {0} disco(s) con alerta. Revisar arriba; considerar backup / reemplazo.' -f $Data.AlertCount) 'warn'
     } else {
-        Write-Host '  Sin alertas de salud en los discos detectados.' -ForegroundColor Green
+        Write-PctkLine '  Sin alertas de salud en los discos detectados.' 'ok'
     }
-    Write-Host '  El Wear de Windows es aproximado; para el desgaste real de un SSD usa CrystalDiskInfo ([T]).' -ForegroundColor DarkGray
-    Write-Host '  (Umbrales provisionales; SMART puede no estar disponible según firmware.)' -ForegroundColor DarkGray
+    Write-PctkLine '  El Wear de Windows es aproximado; para el desgaste real de un SSD usa CrystalDiskInfo ([T]).' 'hint'
+    Write-PctkLine '  (Umbrales provisionales; SMART puede no estar disponible según firmware.)' 'hint'
 }

@@ -926,87 +926,84 @@ function Show-SnapshotComparison {
         [PSCustomObject] $Diff
     )
 
-    Write-Host ''
-    Write-Host '  ================================================' -ForegroundColor DarkCyan
-    Write-Host '    COMPARACION PRE/POST SERVICE' -ForegroundColor Cyan
-    Write-Host '  ================================================' -ForegroundColor DarkCyan
-    Write-Host "    PC      : $($Diff.ComputerName)"  -ForegroundColor Gray
-    Write-Host "    Pre     : $($Diff.PreTimestamp)"  -ForegroundColor DarkGray
-    Write-Host "    Post    : $($Diff.PostTimestamp)" -ForegroundColor DarkGray
+    Write-PctkActionTitle 'COMPARACION PRE/POST SERVICE'
+    Write-PctkHint "    PC      : $($Diff.ComputerName)"
+    Write-PctkHint "    Pre     : $($Diff.PreTimestamp)"
+    Write-PctkHint "    Post    : $($Diff.PostTimestamp)"
     Write-Host ''
 
     # Almacenamiento
-    Write-Host '  [ALMACENAMIENTO]' -ForegroundColor DarkCyan
+    Write-PctkSection '  [ALMACENAMIENTO]'
     foreach ($vol in $Diff.VolumeDiff) {
         [string] $ind   = if ($vol.SpaceFreedGb -gt 0.1) { '[+]' } elseif ($vol.SpaceFreedGb -lt -0.1) { '[-]' } else { '[ ]' }
-        [string] $clr   = if ($vol.SpaceFreedGb -gt 0.1) { 'Green' } elseif ($vol.SpaceFreedGb -lt -0.1) { 'Red' } else { 'DarkGray' }
+        [string] $kind  = if ($vol.SpaceFreedGb -gt 0.1) { 'ok' } elseif ($vol.SpaceFreedGb -lt -0.1) { 'err' } else { 'hint' }
         [string] $sign  = if ($vol.SpaceFreedGb -ge 0) { '+' } else { '' }
         [string] $delta = "$sign$($vol.SpaceFreedGb.ToString('0.00')) GB"
-        Write-Host "    $ind $($vol.Letter):  $($vol.PreFreeGb.ToString('0.00')) GB libre -> $($vol.PostFreeGb.ToString('0.00')) GB libre  ($delta)" -ForegroundColor $clr
+        Write-PctkLine "    $ind $($vol.Letter):  $($vol.PreFreeGb.ToString('0.00')) GB libre -> $($vol.PostFreeGb.ToString('0.00')) GB libre  ($delta)" $kind
     }
-    [string] $totalClr = if ($Diff.TotalFreedGb -gt 0.1) { 'Green' } else { 'DarkGray' }
-    Write-Host "         Total liberado: $($Diff.TotalFreedGb.ToString('0.00')) GB" -ForegroundColor $totalClr
+    [string] $totalKind = if ($Diff.TotalFreedGb -gt 0.1) { 'ok' } else { 'hint' }
+    Write-PctkLine "         Total liberado: $($Diff.TotalFreedGb.ToString('0.00')) GB" $totalKind
     Write-Host ''
 
     # Servicios
-    Write-Host '  [SERVICIOS]' -ForegroundColor DarkCyan
+    Write-PctkSection '  [SERVICIOS]'
     [string] $svcInd  = if ($Diff.ServicesDelta -gt 0) { '[+]' } elseif ($Diff.ServicesDelta -lt 0) { '[-]' } else { '[ ]' }
-    [string] $svcClr  = if ($Diff.ServicesDelta -gt 0) { 'Green' } elseif ($Diff.ServicesDelta -lt 0) { 'Red' } else { 'DarkGray' }
+    [string] $svcKind = if ($Diff.ServicesDelta -gt 0) { 'ok' } elseif ($Diff.ServicesDelta -lt 0) { 'err' } else { 'hint' }
     [string] $svcSign = if ($Diff.ServicesDelta -gt 0) { '-' } elseif ($Diff.ServicesDelta -lt 0) { '+' } else { '' }
-    Write-Host "    $svcInd En ejecucion: $($Diff.PreRunningCount) -> $($Diff.PostRunningCount)  (${svcSign}$([math]::Abs($Diff.ServicesDelta)))" -ForegroundColor $svcClr
+    Write-PctkLine "    $svcInd En ejecucion: $($Diff.PreRunningCount) -> $($Diff.PostRunningCount)  (${svcSign}$([math]::Abs($Diff.ServicesDelta)))" $svcKind
     if ($Diff.BloatFixed.Count -gt 0) {
-        Write-Host "    [+] Bloat deshabilitado: $($Diff.BloatFixed -join ', ')" -ForegroundColor Green
+        Write-PctkOk "    [+] Bloat deshabilitado: $($Diff.BloatFixed -join ', ')"
     }
     Write-Host ''
 
     # Inicio del sistema
-    Write-Host '  [INICIO DEL SISTEMA]' -ForegroundColor DarkCyan
+    Write-PctkSection '  [INICIO DEL SISTEMA]'
     [string] $stInd  = if ($Diff.StartupDelta -gt 0) { '[+]' } elseif ($Diff.StartupDelta -lt 0) { '[-]' } else { '[ ]' }
-    [string] $stClr  = if ($Diff.StartupDelta -gt 0) { 'Green' } elseif ($Diff.StartupDelta -lt 0) { 'Red' } else { 'DarkGray' }
+    [string] $stKind = if ($Diff.StartupDelta -gt 0) { 'ok' } elseif ($Diff.StartupDelta -lt 0) { 'err' } else { 'hint' }
     [string] $stSign = if ($Diff.StartupDelta -gt 0) { '-' } elseif ($Diff.StartupDelta -lt 0) { '+' } else { '' }
-    Write-Host "    $stInd Programas de inicio: $($Diff.PreStartupCount) -> $($Diff.PostStartupCount)  (${stSign}$([math]::Abs($Diff.StartupDelta)))" -ForegroundColor $stClr
+    Write-PctkLine "    $stInd Programas de inicio: $($Diff.PreStartupCount) -> $($Diff.PostStartupCount)  (${stSign}$([math]::Abs($Diff.StartupDelta)))" $stKind
     Write-Host ''
 
     # Bateria (solo laptops)
     if ($Diff.BatteryDiff) {
-        Write-Host '  [BATERIA]' -ForegroundColor DarkCyan
-        Write-Host "    [ ] Carga  : $($Diff.BatteryDiff.PreCharge)% -> $($Diff.BatteryDiff.PostCharge)%" -ForegroundColor DarkGray
-        [string] $healthClr = if ($Diff.BatteryDiff.PostHealth -lt ($Diff.BatteryDiff.PreHealth - 5)) { 'Red' } else { 'DarkGray' }
-        Write-Host "    [ ] Salud  : $($Diff.BatteryDiff.PreHealth)% -> $($Diff.BatteryDiff.PostHealth)%" -ForegroundColor $healthClr
+        Write-PctkSection '  [BATERIA]'
+        Write-PctkHint "    [ ] Carga  : $($Diff.BatteryDiff.PreCharge)% -> $($Diff.BatteryDiff.PostCharge)%"
+        [string] $healthKind = if ($Diff.BatteryDiff.PostHealth -lt ($Diff.BatteryDiff.PreHealth - 5)) { 'err' } else { 'hint' }
+        Write-PctkLine "    [ ] Salud  : $($Diff.BatteryDiff.PreHealth)% -> $($Diff.BatteryDiff.PostHealth)%" $healthKind
         Write-Host ''
     }
 
     # Antivirus (auditoria de estado, no escaneo)
-    Write-Host '  [ANTIVIRUS]' -ForegroundColor DarkCyan
-    Write-Host '    [i] Auditoria de estado (sin escaneo activo)' -ForegroundColor DarkGray
+    Write-PctkSection '  [ANTIVIRUS]'
+    Write-PctkHint '    [i] Auditoria de estado (sin escaneo activo)'
     if ($Diff.AvFixed) {
-        Write-Host '    [+] Conflicto de antivirus resuelto' -ForegroundColor Green
+        Write-PctkOk '    [+] Conflicto de antivirus resuelto'
     } else {
-        Write-Host '    [ ] Sin cambios en antivirus' -ForegroundColor DarkGray
+        Write-PctkHint '    [ ] Sin cambios en antivirus'
     }
     Write-Host ''
 
     # Sistema
-    Write-Host '  [SISTEMA]' -ForegroundColor DarkCyan
-    Write-Host ('    [i] Uptime PRE/POST: {0}h -> {1}h' -f $Diff.PreUptimeHours.ToString('0.0'), $Diff.PostUptimeHours.ToString('0.0')) -ForegroundColor DarkGray
+    Write-PctkSection '  [SISTEMA]'
+    Write-PctkHint ('    [i] Uptime PRE/POST: {0}h -> {1}h' -f $Diff.PreUptimeHours.ToString('0.0'), $Diff.PostUptimeHours.ToString('0.0'))
     if ($Diff.Rebooted) {
-        Write-Host '    [+] Sistema reiniciado correctamente' -ForegroundColor Green
+        Write-PctkOk '    [+] Sistema reiniciado correctamente'
     } else {
-        Write-Host '    [!] Sistema NO reiniciado (recomendado para aplicar cambios)' -ForegroundColor Yellow
+        Write-PctkWarn '    [!] Sistema NO reiniciado (recomendado para aplicar cambios)'
     }
     Write-Host ''
 
     # Score final
-    Write-Host '  ================================================' -ForegroundColor DarkCyan
-    [string] $scoreClr = if ($Diff.Score -ge 5) { 'Green' } elseif ($Diff.Score -ge 3) { 'Yellow' } else { 'Red' }
-    Write-Host "    EFECTIVIDAD DEL SERVICE: $($Diff.Score)/$($Diff.ScoreMax)" -ForegroundColor $scoreClr
+    Write-PctkSection '  ================================================'
+    [string] $scoreKind = if ($Diff.Score -ge 5) { 'ok' } elseif ($Diff.Score -ge 3) { 'warn' } else { 'err' }
+    Write-PctkLine "    EFECTIVIDAD DEL SERVICE: $($Diff.Score)/$($Diff.ScoreMax)" $scoreKind
     if ($Diff.Improvements.Count -gt 0) {
         Write-Host ''
         foreach ($imp in $Diff.Improvements) {
-            Write-Host "    [OK] $imp" -ForegroundColor Green
+            Write-PctkOk "    [OK] $imp"
         }
     }
-    Write-Host '  ================================================' -ForegroundColor DarkCyan
+    Write-PctkSection '  ================================================'
     Write-Host ''
 }
 

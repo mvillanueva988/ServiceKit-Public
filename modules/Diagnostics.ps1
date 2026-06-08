@@ -109,39 +109,39 @@ function Show-BsodHistory {
     )
 
     Write-Host ''
-    Write-Host ("  Crashes / reinicios inesperados en los ultimos {0} dias:" -f $Data.DaysScanned) -ForegroundColor DarkCyan
+    Write-PctkSection ("  Crashes / reinicios inesperados en los ultimos {0} dias:" -f $Data.DaysScanned)
 
     if ($Data.TotalCrashes -eq 0) {
-        Write-Host '  Sin eventos criticos registrados.' -ForegroundColor Green
+        Write-PctkOk '  Sin eventos criticos registrados.'
     } else {
-        Write-Host ("  Total eventos : {0}" -f $Data.TotalCrashes) -ForegroundColor $(
-            if ($Data.TotalCrashes -ge 5) { 'Red' } elseif ($Data.TotalCrashes -ge 2) { 'Yellow' } else { 'Green' }
+        Write-PctkLine ("  Total eventos : {0}" -f $Data.TotalCrashes) $(
+            if ($Data.TotalCrashes -ge 5) { 'err' } elseif ($Data.TotalCrashes -ge 2) { 'warn' } else { 'ok' }
         )
         Write-Host ''
-        Write-Host ('  {0,-21} {1,-7} {2,-35} {3}' -f 'Fecha', 'ID', 'Tipo', 'Detalle') -ForegroundColor DarkCyan
-        Write-Host ('  {0}' -f ('-' * 80)) -ForegroundColor DarkCyan
+        Write-PctkSection ('  {0,-21} {1,-7} {2,-35} {3}' -f 'Fecha', 'ID', 'Tipo', 'Detalle')
+        Write-PctkSection ('  {0}' -f ('-' * 80))
 
         foreach ($ev in $Data.Events) {
-            [string] $rowColor = switch ($ev.EventId) {
-                1001 { 'Red'    }
-                41   { 'Yellow' }
-                6008 { 'DarkYellow' }
+            [string] $rowKind = switch ($ev.EventId) {
+                1001 { 'err'  }
+                41   { 'warn' }
+                6008 { 'warn' }
             }
-            Write-Host ('  {0,-21} {1,-7} {2,-35} {3}' -f `
+            Write-PctkLine ('  {0,-21} {1,-7} {2,-35} {3}' -f `
                 $ev.Fecha.ToString('dd/MM/yyyy HH:mm:ss'), `
                 $ev.EventId, `
                 $ev.Tipo, `
-                $ev.Detalle) -ForegroundColor $rowColor
+                $ev.Detalle) $rowKind
         }
     }
 
     Write-Host ''
-    Write-Host ('  Minidumps en {0}:' -f "$env:SystemRoot\Minidump") -ForegroundColor DarkCyan
+    Write-PctkSection ('  Minidumps en {0}:' -f "$env:SystemRoot\Minidump")
 
     if ($Data.Minidumps.Count -eq 0) {
-        Write-Host '  Sin minidumps.' -ForegroundColor DarkGray
+        Write-PctkHint '  Sin minidumps.'
     } else {
-        Write-Host ('  {0,-30} {1,-22} {2}' -f 'Archivo', 'Fecha', 'Tamanio') -ForegroundColor DarkCyan
+        Write-PctkSection ('  {0,-30} {1,-22} {2}' -f 'Archivo', 'Fecha', 'Tamanio')
         foreach ($d in $Data.Minidumps) {
             Write-Host ('  {0,-30} {1,-22} {2} MB' -f `
                 $d.Name, `
@@ -153,8 +153,8 @@ function Show-BsodHistory {
     # ── Guia de diagnostico ───────────────────────────────────────────────────
     if ($Data.TotalCrashes -gt 0) {
         Write-Host ''
-        Write-Host '  Diagnostico sugerido:' -ForegroundColor DarkCyan
-        Write-Host ('  {0}' -f ('-' * 60)) -ForegroundColor DarkCyan
+        Write-PctkSection '  Diagnostico sugerido:'
+        Write-PctkSection ('  {0}' -f ('-' * 60))
 
         # Recopilar todos los Stop Codes presentes
         [string[]] $stopCodes = @(
@@ -201,8 +201,8 @@ function Show-BsodHistory {
             }
             if ($hit) {
                 $matchFound = $true
-                Write-Host ("  [!] {0}" -f $entry.Causa) -ForegroundColor Yellow
-                Write-Host ("      {0}" -f $entry.Accion) -ForegroundColor Gray
+                Write-PctkWarn ("  [!] {0}" -f $entry.Causa)
+                Write-PctkHint ("      {0}" -f $entry.Accion)
                 Write-Host ''
             }
         }
@@ -212,22 +212,22 @@ function Show-BsodHistory {
         [int] $bsodCount        = @($Data.Events | Where-Object { $_.EventId -eq 1001 }).Count
 
         if (-not $matchFound -and $bsodCount -gt 0) {
-            Write-Host '  [!] Stop Code no identificado automaticamente.' -ForegroundColor Yellow
-            Write-Host '      Subir el .dmp mas reciente a https://www.osronline.com' -ForegroundColor Gray
-            Write-Host '      o analizarlo con: windbg -z "C:\Windows\Minidump\<archivo>.dmp"' -ForegroundColor Gray
+            Write-PctkWarn '  [!] Stop Code no identificado automaticamente.'
+            Write-PctkHint '      Subir el .dmp mas reciente a https://www.osronline.com'
+            Write-PctkHint '      o analizarlo con: windbg -z "C:\Windows\Minidump\<archivo>.dmp"'
             Write-Host ''
         }
 
         if ($kernelPowerCount -ge 3 -and $bsodCount -eq 0) {
-            Write-Host '  [!] Multiples Kernel-Power 41 sin BSOD asociado.' -ForegroundColor Yellow
-            Write-Host '      Causas comunes: PSU deteriorada, cortes de luz, overheating.' -ForegroundColor Gray
-            Write-Host '      Verificar temperaturas en carga y revisar fuente de alimentacion.' -ForegroundColor Gray
+            Write-PctkWarn '  [!] Multiples Kernel-Power 41 sin BSOD asociado.'
+            Write-PctkHint '      Causas comunes: PSU deteriorada, cortes de luz, overheating.'
+            Write-PctkHint '      Verificar temperaturas en carga y revisar fuente de alimentacion.'
             Write-Host ''
         }
 
         if ($kernelPowerCount -eq 0 -and @($Data.Events | Where-Object { $_.EventId -eq 6008 }).Count -ge 3) {
-            Write-Host '  [i] Multiples apagados abruptos (6008) sin crash de kernel.' -ForegroundColor DarkYellow
-            Write-Host '      Probablemente cortes de luz o apagados forzados. No indica falla de hardware.' -ForegroundColor Gray
+            Write-PctkWarn '  [i] Multiples apagados abruptos (6008) sin crash de kernel.'
+            Write-PctkHint '      Probablemente cortes de luz o apagados forzados. No indica falla de hardware.'
             Write-Host ''
         }
     }

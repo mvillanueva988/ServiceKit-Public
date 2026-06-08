@@ -225,11 +225,11 @@ function Invoke-MainMenuDispatch {
             return
         }
         'X' {
-            Write-Host '  Saliendo de PCTk v2...' -ForegroundColor Cyan
+            Write-PctkWork '  Saliendo de PCTk v2...'
             return
         }
         default {
-            Write-Host '  Opcion invalida.' -ForegroundColor Red
+            Write-PctkErr '  Opcion invalida.'
             return
         }
     }
@@ -246,16 +246,16 @@ function Invoke-DiagnosticSnapshot {
     $null = $MachineProfile
     [string] $action = "Snapshot.$Phase"
     Write-ActionAudit -Action $action -Status 'Started'
-    Write-Host ('  Capturando snapshot {0}-service...' -f $Phase) -ForegroundColor Cyan
+    Write-PctkWork ('  Capturando snapshot {0}-service...' -f $Phase)
     $job = Start-TelemetryJob -Phase $Phase
     $results = Invoke-JobWithProgress -Jobs @($job) -Activity ('Snapshot {0}' -f $Phase) -TimeoutSeconds 120
     if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
         $r = $results[0]
-        Write-Host ('  [OK] Snapshot guardado: {0}' -f $r.FileName) -ForegroundColor Green
-        Write-Host ('       {0}' -f $r.FilePath) -ForegroundColor DarkGray
+        Write-PctkOk ('  [OK] Snapshot guardado: {0}' -f $r.FileName)
+        Write-PctkHint ('       {0}' -f $r.FilePath)
         Write-ActionAudit -Action $action -Status 'Success' -Summary $r.FileName -Details $r
     } else {
-        Write-Host '  [!] No se obtuvo resultado del snapshot.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] No se obtuvo resultado del snapshot.'
         Write-ActionAudit -Action $action -Status 'Failed' -Summary 'No result'
     }
 }
@@ -271,7 +271,7 @@ function Invoke-DiagnosticCompare {
         Write-ActionAudit -Action 'Snapshot.Compare' -Status 'Success' -Summary ('Score {0}/{1}' -f $diff.Score, $diff.ScoreMax) -Details $diff
     }
     catch {
-        Write-Host ('  [!] {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-PctkWarn ('  [!] {0}' -f $_.Exception.Message)
         Write-ActionAudit -Action 'Snapshot.Compare' -Status 'Failed' -Summary $_.Exception.Message
     }
 }
@@ -281,14 +281,14 @@ function Invoke-DiagnosticBsod {
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
     Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Started'
-    Write-Host '  Analizando Event Log (ultimos 90 dias)...' -ForegroundColor Cyan
+    Write-PctkWork '  Analizando Event Log (ultimos 90 dias)...'
     $job = Start-BsodHistoryJob -Days 90
     $results = Invoke-JobWithProgress -Jobs @($job) -Activity 'Historial BSOD' -TimeoutSeconds 120
     if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
         Show-BsodHistory -Data $results[0]
         Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Success' -Summary ('{0} eventos en {1} dias' -f $results[0].TotalCrashes, $results[0].DaysScanned)
     } else {
-        Write-Host '  [!] No se pudo leer el Event Log.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] No se pudo leer el Event Log.'
         Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Failed' -Summary 'No result'
     }
 }
@@ -298,14 +298,14 @@ function Invoke-DiagnosticDiskHealth {
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
     Write-ActionAudit -Action 'Diagnostics.DiskHealth' -Status 'Started'
-    Write-Host '  Leyendo salud de discos (SMART / wear)...' -ForegroundColor Cyan
+    Write-PctkWork '  Leyendo salud de discos (SMART / wear)...'
     try {
         $data = Get-DiskHealth
         Show-DiskHealth -Data $data
         Write-ActionAudit -Action 'Diagnostics.DiskHealth' -Status 'Success' -Summary ('{0} discos, {1} alertas' -f @($data.Disks).Count, $data.AlertCount) -Details $data
     }
     catch {
-        Write-Host ('  [!] {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-PctkWarn ('  [!] {0}' -f $_.Exception.Message)
         Write-ActionAudit -Action 'Diagnostics.DiskHealth' -Status 'Failed' -Summary $_.Exception.Message
     }
 }
@@ -316,18 +316,18 @@ function Invoke-ResearchPrompt {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
 
-    Write-Host '  PLANTILLAS DE PROMPT' -ForegroundColor DarkCyan
+    Write-PctkSection '  PLANTILLAS DE PROMPT'
     [object[]] $templates = @(Get-ResearchPromptTemplates)
     for ([int] $i = 0; $i -lt $templates.Count; $i++) {
         Write-Host ('  [{0}] {1}' -f ($i + 1), $templates[$i].Label)
-        Write-Host ('      {0}' -f $templates[$i].Description) -ForegroundColor DarkGray
+        Write-PctkHint ('      {0}' -f $templates[$i].Description)
     }
     Write-Host ''
     [string] $choice = (Read-Host '  Numero de plantilla (Enter para cancelar)').Trim()
     if ([string]::IsNullOrWhiteSpace($choice)) { return }
     [int] $idx = -1
     if (-not [int]::TryParse($choice, [ref] $idx) -or $idx -lt 1 -or $idx -gt $templates.Count) {
-        Write-Host '  Opcion invalida.' -ForegroundColor Red
+        Write-PctkErr '  Opcion invalida.'
         return
     }
     [string] $tplKey = $templates[$idx - 1].Key
@@ -335,7 +335,7 @@ function Invoke-ResearchPrompt {
     [string] $useCase = (Read-Host '  Use-case del cliente (opcional, Enter para skip)').Trim()
     [bool] $includeId = $false
     if ($MachineProfile.PSObject.Properties['IsHome'] -and -not [bool] $MachineProfile.IsHome) {
-        Write-Host '  Privacy: identificadores se scrubean por default (OS no-Home).' -ForegroundColor DarkGray
+        Write-PctkHint '  Privacy: identificadores se scrubean por default (OS no-Home).'
         [string] $ans = (Read-Host '  Incluir identificadores reales? [s/N]').Trim().ToUpperInvariant()
         $includeId = ($ans -eq 'S')
     }
@@ -349,24 +349,24 @@ function Invoke-ResearchPrompt {
     if (-not [string]::IsNullOrWhiteSpace($useCase)) { $params['UseCase'] = $useCase }
     if ($includeId) { $params['IncludeIdentifiers'] = $true }
 
-    Write-Host '  Generando snapshot + prompt (puede tardar ~30s)...' -ForegroundColor Cyan
+    Write-PctkWork '  Generando snapshot + prompt (puede tardar ~30s)...'
     $r = New-ResearchPrompt @params
 
     if ($null -eq $r -or -not $r.Success) {
-        Write-Host '  [!] No se pudo generar el prompt.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] No se pudo generar el prompt.'
         Write-ActionAudit -Action 'Research.Prompt' -Status 'Failed'
         return
     }
 
-    Write-Host ('  [OK] Prompt generado: {0}' -f $r.FileName) -ForegroundColor Green
-    Write-Host ('       {0}' -f $r.FilePath) -ForegroundColor DarkGray
+    Write-PctkOk ('  [OK] Prompt generado: {0}' -f $r.FileName)
+    Write-PctkHint ('       {0}' -f $r.FilePath)
     if ($r.ClipboardSet) {
-        Write-Host '  [OK] Copiado al clipboard. Pegalo en Claude/ChatGPT/Perplexity con web search habilitado.' -ForegroundColor Green
+        Write-PctkOk '  [OK] Copiado al clipboard. Pegalo en Claude/ChatGPT/Perplexity con web search habilitado.'
     } else {
-        Write-Host '  [!] No se pudo copiar al clipboard. Abri el archivo manualmente.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] No se pudo copiar al clipboard. Abri el archivo manualmente.'
     }
     if ($r.Scrubbed) {
-        Write-Host '  [i] ComputerName/dominio scrubeados. Pasar -IncludeIdentifiers para incluirlos.' -ForegroundColor DarkGray
+        Write-PctkHint '  [i] ComputerName/dominio scrubeados. Pasar -IncludeIdentifiers para incluirlos.'
     }
     Write-ActionAudit -Action 'Research.Prompt' -Status 'Success' -Summary ('{0} ({1} bytes)' -f $tplKey, $r.FileSize) -Details $r
 }
@@ -503,17 +503,17 @@ function Show-ToolsMenu {
     [bool]   $forceToggle  = $false
 
     if (-not (Test-Path $manifestPath)) {
-        Write-Host ('  [!] tools\manifest.json no encontrado en {0}' -f $manifestPath) -ForegroundColor Red
+        Write-PctkErr ('  [!] tools\manifest.json no encontrado en {0}' -f $manifestPath)
         return
     }
 
     $manifest = $null
     try   { $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json }
-    catch { Write-Host ('  [!] Error leyendo manifest.json: {0}' -f $_.Exception.Message) -ForegroundColor Red; return }
+    catch { Write-PctkErr ('  [!] Error leyendo manifest.json: {0}' -f $_.Exception.Message); return }
 
     [object[]] $tools = @($manifest.tools)
     if ($tools.Count -eq 0) {
-        Write-Host '  [!] manifest.json no contiene herramientas.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] manifest.json no contiene herramientas.'
         return
     }
 
@@ -525,23 +525,20 @@ function Show-ToolsMenu {
     }
 
     do {
-        Write-Host ''
-        Write-Host '  HERRAMIENTAS EXTERNAS' -ForegroundColor DarkCyan
-        Write-Host '  ====================='
-        Write-Host ''
+        Write-PctkActionTitle 'HERRAMIENTAS EXTERNAS'
 
         for ([int] $i = 0; $i -lt $tools.Count; $i++) {
             $t     = $tools[$i]
             $ok    = Get-ToolStatus -Tool $t -BinDir $binDir
             $label = if ($ok) { 'OK   ' } else { 'falta' }
-            $clr   = if ($ok) { 'Green' } else { 'DarkYellow' }
-            Write-Host ('  [{0,2}]  {1,-26}  [{2,-12}]  {3}' -f ($i + 1), $t.name, $t.category, $label) -ForegroundColor $clr
+            $clr   = if ($ok) { 'ok' } else { 'warn' }
+            Write-PctkLine ('  [{0,2}]  {1,-26}  [{2,-12}]  {3}' -f ($i + 1), $t.name, $t.category, $label) $clr
         }
 
         Write-Host ''
         [string] $fLabel = if ($forceToggle) { 'ON ' } else { 'off' }
         Write-Host ('  [T] Todas  [F] -Force: {0}  [O] Abrir carpeta  [B] Volver' -f $fLabel)
-        Write-Host ('  Binarios: {0}' -f $binDir) -ForegroundColor DarkGray
+        Write-PctkHint ('  Binarios: {0}' -f $binDir)
         Write-Host ''
         [string] $raw = (Read-Host '  Seleccion (numero/s, T/F/O/B)').Trim()
 
@@ -552,7 +549,7 @@ function Show-ToolsMenu {
 
         if ($up -eq 'F') {
             $forceToggle = -not $forceToggle
-            Write-Host ('  -Force: {0}' -f $(if ($forceToggle) { 'ON' } else { 'off' })) -ForegroundColor Cyan
+            Write-PctkWork ('  -Force: {0}' -f $(if ($forceToggle) { 'ON' } else { 'off' }))
             continue
         }
 
@@ -564,7 +561,7 @@ function Show-ToolsMenu {
 
         if ($up -eq 'T') {
             if (-not (Test-Path $bootstrap)) {
-                Write-Host ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap) -ForegroundColor Red
+                Write-PctkErr ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap)
             } elseif ($forceToggle) {
                 & $bootstrap -Force
             } else {
@@ -582,20 +579,20 @@ function Show-ToolsMenu {
             if ([int]::TryParse($tok, [ref] $n) -and $n -ge 1 -and $n -le $tools.Count) {
                 if (-not $sel.Contains($n - 1)) { $sel.Add($n - 1) }
             } else {
-                Write-Host ('  [!] "{0}" no valido (1-{1}, T, F, O, B).' -f $tok, $tools.Count) -ForegroundColor Red
+                Write-PctkErr ('  [!] "{0}" no valido (1-{1}, T, F, O, B).' -f $tok, $tools.Count)
                 $valid = $false; break
             }
         }
         if (-not $valid -or $sel.Count -eq 0) { continue }
 
         if (-not (Test-Path $bootstrap)) {
-            Write-Host ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap) -ForegroundColor Red
+            Write-PctkErr ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap)
             continue
         }
 
         foreach ($idx in $sel) {
             $t = $tools[$idx]
-            Write-Host ('  Procesando: {0}...' -f $t.name) -ForegroundColor Cyan
+            Write-PctkWork ('  Procesando: {0}...' -f $t.name)
             if ($forceToggle) { & $bootstrap -ToolName $t.name -Force }
             else              { & $bootstrap -ToolName $t.name }
         }
@@ -671,7 +668,7 @@ function Invoke-IndividualActionDispatch {
         '15' { Invoke-ActionProcessPriority -MachineProfile $MachineProfile; return }
         '16' { Invoke-ActionUsbPower        -MachineProfile $MachineProfile; return }
         default {
-            Write-Host '  Opcion invalida.' -ForegroundColor Red
+            Write-PctkErr '  Opcion invalida.'
         }
     }
 }
@@ -695,31 +692,31 @@ function Invoke-ActionDebloat {
         'Reversible: Set-Service -Name <X> -StartupType Automatic; Start-Service <X>',
         'OJO con Spooler/PrintNotify si imprimis desde esta PC.'
     ))) {
-        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'Debloat' -Status 'Cancelled'
         return
     }
 
     Write-ActionAudit -Action 'Debloat' -Status 'Started'
-    Write-Host '  Deshabilitando servicios bloat...' -ForegroundColor Cyan
+    Write-PctkWork '  Deshabilitando servicios bloat...'
     $job = Start-DebloatProcess
     $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Debloat' -TimeoutSeconds 120)[0]
     if ($null -eq $r) {
-        Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] Sin resultado.'
         Write-ActionAudit -Action 'Debloat' -Status 'Failed' -Summary 'No result'
         return
     }
-    Write-Host ('  Servicios objetivo: {0}' -f $r.TotalTargeted) -ForegroundColor Cyan
-    Write-Host ('    [OK]            Deshabilitados ahora:   {0}' -f $r.Disabled) -ForegroundColor Green
-    Write-Host ('    [SKIP]          Ya estaban disabled:    {0}' -f $r.AlreadyDisabled) -ForegroundColor DarkGray
-    Write-Host ('    [SKIP]          No existen en sistema:  {0}' -f $r.Skipped) -ForegroundColor DarkGray
-    Write-Host ('    [FAIL]          Errores:                {0}' -f $r.Failed) -ForegroundColor $(if ($r.Failed -gt 0) { 'Yellow' } else { 'DarkGray' })
+    Write-PctkWork ('  Servicios objetivo: {0}' -f $r.TotalTargeted)
+    Write-PctkOk ('    [OK]            Deshabilitados ahora:   {0}' -f $r.Disabled)
+    Write-PctkHint ('    [SKIP]          Ya estaban disabled:    {0}' -f $r.AlreadyDisabled)
+    Write-PctkHint ('    [SKIP]          No existen en sistema:  {0}' -f $r.Skipped)
+    Write-PctkLine ('    [FAIL]          Errores:                {0}' -f $r.Failed) $(if ($r.Failed -gt 0) { 'warn' } else { 'hint' })
     if ($r.SkippedNames.Count -gt 0) {
-        Write-Host ('  Omitidos (no existen): {0}' -f ($r.SkippedNames -join ', ')) -ForegroundColor DarkGray
+        Write-PctkHint ('  Omitidos (no existen): {0}' -f ($r.SkippedNames -join ', '))
     }
     if ($r.Errors.Count -gt 0) {
-        Write-Host '  Errores:' -ForegroundColor Yellow
-        foreach ($e in $r.Errors) { Write-Host ('    - {0}' -f $e) -ForegroundColor DarkGray }
+        Write-PctkWarn '  Errores:'
+        foreach ($e in $r.Errors) { Write-PctkHint ('    - {0}' -f $e) }
     }
     Write-ActionAudit -Action 'Debloat' -Status 'Success' -Summary ('Disabled={0} AlreadyDisabled={1} Skipped={2} Failed={3}' -f $r.Disabled, $r.AlreadyDisabled, $r.Skipped, $r.Failed) -Details $r
 }
@@ -761,15 +758,15 @@ function Invoke-ActionMaintenance {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
-    Write-Host '  DISM + SFC toma 10-20 minutos. Confirma [S/n]:' -ForegroundColor Yellow
+    Write-PctkWarn '  DISM + SFC toma 10-20 minutos. Confirma [S/n]:'
     [string] $ans = (Read-Host).Trim().ToUpperInvariant()
-    if ($ans -ne 'S' -and $ans -ne '') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; Write-ActionAudit -Action 'Maintenance' -Status 'Cancelled'; return }
+    if ($ans -ne 'S' -and $ans -ne '') { Write-PctkHint '  Cancelado.'; Write-ActionAudit -Action 'Maintenance' -Status 'Cancelled'; return }
     Write-ActionAudit -Action 'Maintenance' -Status 'Started'
-    Write-Host '  Ejecutando DISM RestoreHealth + SFC scannow...' -ForegroundColor Cyan
+    Write-PctkWork '  Ejecutando DISM RestoreHealth + SFC scannow...'
     $job = Start-MaintenanceProcess
     $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'DISM + SFC' -TimeoutSeconds 1800)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Maintenance' -Status 'Failed'; return }
-    Write-Host ('  [OK] DISM exit={0}  SFC exit={1}' -f $r.DismExitCode, $r.SfcExitCode) -ForegroundColor Green
+    if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Maintenance' -Status 'Failed'; return }
+    Write-PctkOk ('  [OK] DISM exit={0}  SFC exit={1}' -f $r.DismExitCode, $r.SfcExitCode)
     Write-ActionAudit -Action 'Maintenance' -Status 'Success' -Summary ('DISM={0} SFC={1}' -f $r.DismExitCode, $r.SfcExitCode)
 }
 
@@ -778,15 +775,15 @@ function Invoke-ActionRestorePoint {
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
     Write-ActionAudit -Action 'RestorePoint' -Status 'Started'
-    Write-Host '  Creando punto de restauracion...' -ForegroundColor Cyan
+    Write-PctkWork '  Creando punto de restauracion...'
     $job = Start-RestorePointProcess
     $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Restore Point' -TimeoutSeconds 180)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'RestorePoint' -Status 'Failed'; return }
+    if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'RestorePoint' -Status 'Failed'; return }
 
     if ($r.Success) {
-        Write-Host ('  [OK] {0}' -f $r.Message) -ForegroundColor Green
+        Write-PctkOk ('  [OK] {0}' -f $r.Message)
         if ($r.Bypassed) {
-            Write-Host '  (Cooldown bypaseado via registry temporal)' -ForegroundColor DarkGray
+            Write-PctkHint '  (Cooldown bypaseado via registry temporal)'
         }
         Write-ActionAudit -Action 'RestorePoint' -Status 'Success' -Summary $r.Message -Details $r
         return
@@ -794,28 +791,28 @@ function Invoke-ActionRestorePoint {
 
     # Caso cooldown: mostrar info del RP existente y ofrecer bypass.
     if ($r.PSObject.Properties['CooldownActive'] -and $r.CooldownActive -and $null -ne $r.LatestRp) {
-        Write-Host ('  [!] Cooldown activo: ya hay un RP reciente.') -ForegroundColor Yellow
-        Write-Host ('       Ultimo RP: "{0}" creado hace {1} horas (SequenceNumber={2})' -f $r.LatestRp.Description, $r.LatestRp.HoursAgo, $r.LatestRp.SequenceNumber) -ForegroundColor DarkGray
-        Write-Host ('       CreationTime: {0}' -f $r.LatestRp.CreationTime) -ForegroundColor DarkGray
+        Write-PctkWarn ('  [!] Cooldown activo: ya hay un RP reciente.')
+        Write-PctkHint ('       Ultimo RP: "{0}" creado hace {1} horas (SequenceNumber={2})' -f $r.LatestRp.Description, $r.LatestRp.HoursAgo, $r.LatestRp.SequenceNumber)
+        Write-PctkHint ('       CreationTime: {0}' -f $r.LatestRp.CreationTime)
         Write-Host ''
         if (Confirm-Action -Title 'Forzar creacion de RP nuevo? (bypass cooldown via registry temporal)' -Lines @(
             'Va a modificar HKLM\...\SystemRestore\SystemRestorePointCreationFrequency=0 temporalmente',
             'Despues de crear el RP, el registry se restaura al valor previo',
             'El RP existente queda intacto, se suma uno nuevo'
         ) -DefaultYes $false) {
-            Write-Host '  Forzando nuevo RP...' -ForegroundColor Cyan
+            Write-PctkWork '  Forzando nuevo RP...'
             $bypassJob = Start-RestorePointProcess -BypassCooldown
             $r2 = (Invoke-JobWithProgress -Jobs @($bypassJob) -Activity 'Restore Point bypass' -TimeoutSeconds 180)[0]
             if ($null -ne $r2 -and $r2.Success) {
-                Write-Host ('  [OK] {0}  (bypass aplicado)' -f $r2.Message) -ForegroundColor Green
+                Write-PctkOk ('  [OK] {0}  (bypass aplicado)' -f $r2.Message)
                 Write-ActionAudit -Action 'RestorePoint' -Status 'Success' -Summary 'Created with bypass' -Details $r2
             } else {
                 [string] $em = if ($null -ne $r2) { $r2.Message } else { 'sin resultado' }
-                Write-Host ('  [!] Bypass fallo: {0}' -f $em) -ForegroundColor Yellow
+                Write-PctkWarn ('  [!] Bypass fallo: {0}' -f $em)
                 Write-ActionAudit -Action 'RestorePoint' -Status 'Failed' -Summary ('Bypass failed: ' + $em)
             }
         } else {
-            Write-Host '  OK, te quedas con el RP existente como fallback.' -ForegroundColor DarkGray
+            Write-PctkHint '  OK, te quedas con el RP existente como fallback.'
             Write-ActionAudit -Action 'RestorePoint' -Status 'Cancelled' -Summary 'Cooldown - operator kept existing RP' -Details $r
         }
         return
@@ -823,7 +820,7 @@ function Invoke-ActionRestorePoint {
 
     # Cualquier otro fallo (System Restore disabled, etc.)
     [string] $msg = if ($r.PSObject.Properties['Reason']) { $r.Reason } else { $r.Message }
-    Write-Host ('  [!] {0}' -f $msg) -ForegroundColor Yellow
+    Write-PctkWarn ('  [!] {0}' -f $msg)
     Write-ActionAudit -Action 'RestorePoint' -Status 'Failed' -Summary $msg
 }
 
@@ -837,10 +834,10 @@ function Invoke-ActionNetwork {
 
     if ($sub -eq 'D') {
         Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Started'
-        Write-Host '  Recopilando diagnostico de red...' -ForegroundColor Cyan
+        Write-PctkWork '  Recopilando diagnostico de red...'
         $job = Start-NetworkDiagnosticsProcess
         $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Diagnostico de red' -TimeoutSeconds 60)[0]
-        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Failed'; return }
+        if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Failed'; return }
         Write-Host ('  TCP AutoTuning : {0}' -f $r.TcpAutoTuning)
         Write-Host ('  Ping 8.8.8.8   : {0} ms' -f $r.PingMs)
         foreach ($a in $r.Adapters) { Write-Host ('  Adapter        : {0,-25} {1,-15} [{2}]' -f $a.Name, $a.LinkSpeed, $a.MediaType) }
@@ -863,25 +860,25 @@ function Invoke-ActionNetwork {
             'Reversible manual: Device Manager > adapter > Advanced/Power Management.'
         )
         if (-not (Confirm-Action -Title 'Aplicar Network Optimize?' -Lines $previewLines)) {
-            Write-Host '  Cancelado.' -ForegroundColor DarkGray
+            Write-PctkHint '  Cancelado.'
             Write-ActionAudit -Action 'Network.Optimize' -Status 'Cancelled'
             return
         }
         Write-ActionAudit -Action 'Network.Optimize' -Status 'Started'
-        Write-Host '  Optimizando red (NIC power props + TCP global)...' -ForegroundColor Cyan
+        Write-PctkWork '  Optimizando red (NIC power props + TCP global)...'
         $job = Start-NetworkProcess
         $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Optimizar red' -TimeoutSeconds 120)[0]
-        if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Network.Optimize' -Status 'Failed'; return }
+        if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Network.Optimize' -Status 'Failed'; return }
         if ($r.AdaptersOptimized.Count -eq 0) {
-            Write-Host '  [i] No se encontraron adapters fisicos (802.3 Ethernet / Wi-Fi 802.11) para optimizar.' -ForegroundColor DarkYellow
-            Write-Host '      Esto es esperable en Windows Sandbox o VMs (solo tienen adapter virtual).' -ForegroundColor DarkGray
+            Write-PctkWarn '  [i] No se encontraron adapters fisicos (802.3 Ethernet / Wi-Fi 802.11) para optimizar.'
+            Write-PctkHint '      Esto es esperable en Windows Sandbox o VMs (solo tienen adapter virtual).'
         } else {
             foreach ($a in $r.AdaptersOptimized) {
                 Write-Host ('  [{0}] {1}  changes={2}' -f $(if ($a.ChangesMade -gt 0) { 'OK' } else { '--' }), $a.Name, $a.ChangesMade)
             }
         }
         if ($r.PSObject.Properties['NetshIssues'] -and $r.NetshIssues.Count -gt 0) {
-            foreach ($i in $r.NetshIssues) { Write-Host ('  [!] {0}' -f $i) -ForegroundColor Yellow }
+            foreach ($i in $r.NetshIssues) { Write-PctkWarn ('  [!] {0}' -f $i) }
         }
         Write-ActionAudit -Action 'Network.Optimize' -Status 'Success' -Summary ('{0} adapters' -f $r.AdaptersOptimized.Count) -Details $r
         return
@@ -894,7 +891,7 @@ function Invoke-ActionPerformance {
 
     [string] $defaultProfile = if ($MachineProfile.IsLowRam) { 'Full' } else { 'Balanced' }
     Write-Host ('  Perfiles disponibles: [B]alanced  [F]ull (max performance)  [R]estore (defaults)  [T]weaksOnly (sin visuales)')
-    Write-Host ('  Default sugerido segun tu hardware: {0}' -f $defaultProfile) -ForegroundColor DarkGray
+    Write-PctkHint ('  Default sugerido segun tu hardware: {0}' -f $defaultProfile)
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
     [string] $vp = switch ($sub) {
         'B' { 'Balanced' }
@@ -903,7 +900,7 @@ function Invoke-ActionPerformance {
         'T' { 'TweaksOnly' }
         default { '' }
     }
-    if ([string]::IsNullOrWhiteSpace($vp)) { Write-Host '  Opcion invalida o cancelada.' -ForegroundColor DarkGray; return }
+    if ([string]::IsNullOrWhiteSpace($vp)) { Write-PctkHint '  Opcion invalida o cancelada.'; return }
 
     # Mostrar plan de energia actual ANTES de tocar nada — el usuario lo necesita para revertir si no le gusta.
     [string] $currentPlanLabel = '(desconocido)'
@@ -930,22 +927,22 @@ function Invoke-ActionPerformance {
         'Reversible: re-correr con [R]estore para volver a defaults.',
         'Plan de energia previo se imprime al terminar (anotalo).'
     ))) {
-        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'Performance' -Status 'Cancelled' -Summary $vp
         return
     }
 
     Write-ActionAudit -Action 'Performance' -Status 'Started' -Summary ('Profile={0}' -f $vp)
-    Write-Host ('  Aplicando perfil {0} + power plan + system tweaks...' -f $vp) -ForegroundColor Cyan
+    Write-PctkWork ('  Aplicando perfil {0} + power plan + system tweaks...' -f $vp)
     $job = Start-PerformanceProcess -VisualProfile $vp
     $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Rendimiento' -TimeoutSeconds 120)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Performance' -Status 'Failed'; return }
+    if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Performance' -Status 'Failed'; return }
     if ($null -ne $r.Visuals)    { Write-Host ('  Visuales:  Success={0}  Applied={1}' -f $r.Visuals.Success, $r.Visuals.Applied.Count) }
     if ($null -ne $r.PowerPlan)  {
         Write-Host ('  PowerPlan: {0}  ({1})' -f $r.PowerPlan.PlanName, $r.PowerPlan.Reason)
         if (-not [string]::IsNullOrWhiteSpace($r.PowerPlan.PreviousName)) {
-            Write-Host ('             Plan previo: {0}  (GUID: {1})' -f $r.PowerPlan.PreviousName, $r.PowerPlan.PreviousGuid) -ForegroundColor DarkGray
-            Write-Host ('             Para revertir: powercfg /setactive {0}' -f $r.PowerPlan.PreviousGuid) -ForegroundColor DarkGray
+            Write-PctkHint ('             Plan previo: {0}  (GUID: {1})' -f $r.PowerPlan.PreviousName, $r.PowerPlan.PreviousGuid)
+            Write-PctkHint ('             Para revertir: powercfg /setactive {0}' -f $r.PowerPlan.PreviousGuid)
         }
     }
     if ($null -ne $r.Tweaks)     { Write-Host ('  Tweaks:    Success={0}  Applied={1}' -f $r.Tweaks.Success, $r.Tweaks.Applied.Count) }
@@ -959,16 +956,16 @@ function Invoke-ActionDriverBackup {
     [string] $toolkitRoot = Split-Path -Parent $PSScriptRoot
     [string] $outDir = Join-Path $toolkitRoot 'output\driver_backup'
     Write-ActionAudit -Action 'Drivers.Backup' -Status 'Started'
-    Write-Host ('  Exportando drivers a {0}...' -f $outDir) -ForegroundColor Cyan
+    Write-PctkWork ('  Exportando drivers a {0}...' -f $outDir)
     $job = Start-DriverBackupJob -OutputRoot $outDir
     $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Backup drivers' -TimeoutSeconds 600)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed'; return }
+    if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed'; return }
     if ($r.Success) {
-        Write-Host ('  [OK] {0} drivers exportados de {1} candidatos. {2}' -f $r.Exported, $r.Total, $r.Message) -ForegroundColor Green
-        Write-Host ('       {0}' -f $r.Destination) -ForegroundColor DarkGray
+        Write-PctkOk ('  [OK] {0} drivers exportados de {1} candidatos. {2}' -f $r.Exported, $r.Total, $r.Message)
+        Write-PctkHint ('       {0}' -f $r.Destination)
         Write-ActionAudit -Action 'Drivers.Backup' -Status 'Success' -Summary ('{0}/{1} drivers' -f $r.Exported, $r.Total) -Details $r
     } else {
-        Write-Host ('  [!] {0}' -f $r.Message) -ForegroundColor Yellow
+        Write-PctkWarn ('  [!] {0}' -f $r.Message)
         Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed' -Summary $r.Message
     }
 }
@@ -979,7 +976,7 @@ function Invoke-ActionApps {
     $null = $MachineProfile
 
     Write-ActionAudit -Action 'Apps.List' -Status 'Started'
-    Write-Host '  Listando apps Win32 + UWP (puede tardar)...' -ForegroundColor Cyan
+    Write-PctkWork '  Listando apps Win32 + UWP (puede tardar)...'
     $win32Job   = Start-Win32AppsJob
     $uwpJob     = Start-UwpAppsJob
     $jobResults = Invoke-JobWithProgress -Jobs @($win32Job, $uwpJob) -Activity 'Listado de apps' -TimeoutSeconds 180
@@ -991,7 +988,7 @@ function Invoke-ActionApps {
     Write-ActionAudit -Action 'Apps.List' -Status 'Success' -Summary ('Win32={0} UWP={1}' -f $win32.Count, $uwp.Count)
 
     if ($win32.Count -eq 0 -and $uwp.Count -eq 0) {
-        Write-Host '  Sin apps instaladas detectadas.' -ForegroundColor Yellow
+        Write-PctkWarn '  Sin apps instaladas detectadas.'
         return
     }
 
@@ -1003,7 +1000,7 @@ function Invoke-ActionApps {
 
     Write-Host ''
     if ($win32.Count -gt 0) {
-        Write-Host ('  Win32 ({0}):' -f $win32.Count) -ForegroundColor Cyan
+        Write-PctkWork ('  Win32 ({0}):' -f $win32.Count)
         for ([int] $i = 0; $i -lt $win32.Count; $i++) {
             $a = $win32[$i]
             [string] $nm  = ($a.Name -replace '[\r\n]', ' ')
@@ -1017,7 +1014,7 @@ function Invoke-ActionApps {
     [int] $uwpOffset = $win32.Count
     if ($uwp.Count -gt 0) {
         Write-Host ''
-        Write-Host ('  UWP ({0}):' -f $uwp.Count) -ForegroundColor Cyan
+        Write-PctkWork ('  UWP ({0}):' -f $uwp.Count)
         for ([int] $i = 0; $i -lt $uwp.Count; $i++) {
             $a       = $uwp[$i]
             [int]    $idx   = $uwpOffset + $i
@@ -1029,7 +1026,7 @@ function Invoke-ActionApps {
     }
 
     Write-Host ''
-    Write-Host ('  Total: {0} Win32 + {1} UWP = {2}. Numeros, lista (3,7), rango (4-8) o V para volver:' -f $win32.Count, $uwp.Count, $allApps.Count) -ForegroundColor DarkGray
+    Write-PctkHint ('  Total: {0} Win32 + {1} UWP = {2}. Numeros, lista (3,7), rango (4-8) o V para volver:' -f $win32.Count, $uwp.Count, $allApps.Count)
     [string] $raw = (Read-Host '  >').Trim()
     if ([string]::IsNullOrWhiteSpace($raw) -or $raw.ToUpperInvariant() -eq 'V') { return }
 
@@ -1042,7 +1039,7 @@ function Invoke-ActionApps {
             if ($n -ge 0 -and $n -lt $allApps.Count) {
                 if (-not $selIdx.Contains($n)) { $selIdx.Add($n) }
             } else {
-                Write-Host ('  [!] "{0}" fuera de rango (0-{1}), ignorado.' -f $tok, ($allApps.Count - 1)) -ForegroundColor Yellow
+                Write-PctkWarn ('  [!] "{0}" fuera de rango (0-{1}), ignorado.' -f $tok, ($allApps.Count - 1))
             }
         } elseif ($tok -match '^\d+-\d+$') {
             [string[]] $parts = $tok -split '-'
@@ -1053,21 +1050,21 @@ function Invoke-ActionApps {
                 if ($r -ge 0 -and $r -lt $allApps.Count) {
                     if (-not $selIdx.Contains($r)) { $selIdx.Add($r) }
                 } else {
-                    Write-Host ('  [!] Indice {0} fuera de rango (0-{1}), ignorado.' -f $r, ($allApps.Count - 1)) -ForegroundColor Yellow
+                    Write-PctkWarn ('  [!] Indice {0} fuera de rango (0-{1}), ignorado.' -f $r, ($allApps.Count - 1))
                 }
             }
         } else {
-            Write-Host ('  [!] "{0}" no valido, ignorado.' -f $tok) -ForegroundColor Yellow
+            Write-PctkWarn ('  [!] "{0}" no valido, ignorado.' -f $tok)
         }
     }
     if ($selIdx.Count -eq 0) {
-        Write-Host '  Sin seleccion valida. Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Sin seleccion valida. Cancelado.'
         return
     }
 
     # Preview por app seleccionada
     Write-Host ''
-    Write-Host '  Preview:' -ForegroundColor Cyan
+    Write-PctkWork '  Preview:'
     [System.Collections.Generic.List[PSCustomObject]] $queue = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($idx in @($selIdx | Sort-Object)) {
         $entry = $allApps[$idx]
@@ -1078,11 +1075,11 @@ function Invoke-ActionApps {
             $preview = Get-UwpUninstallPreview -App $entry.App
             [string] $appName = $entry.App.DisplayName
         }
-        Write-Host ('  [{0,3}] {1}' -f $idx, ($appName -replace '[\r\n]', ' ')) -ForegroundColor White
-        Write-Host ('         Metodo:  {0}' -f $preview.MethodLabel) -ForegroundColor DarkGray
-        Write-Host ('         Comando: {0}' -f $preview.CommandLine) -ForegroundColor DarkGray
+        Write-PctkLine ('  [{0,3}] {1}' -f $idx, ($appName -replace '[\r\n]', ' ')) 'white'
+        Write-PctkHint ('         Metodo:  {0}' -f $preview.MethodLabel)
+        Write-PctkHint ('         Comando: {0}' -f $preview.CommandLine)
         if (-not $preview.Success) {
-            Write-Host ('         AVISO:   {0}' -f $preview.Error) -ForegroundColor Yellow
+            Write-PctkWarn ('         AVISO:   {0}' -f $preview.Error)
         }
         $queue.Add([PSCustomObject]@{ Idx = $idx; Entry = $entry; Preview = $preview; AppName = $appName })
     }
@@ -1094,7 +1091,7 @@ function Invoke-ActionApps {
     Write-Host ''
     if (-not (Confirm-Action -Title ('Desinstalar {0} app(s)?' -f $queue.Count) `
                              -Lines $confirmLines -DefaultYes $false)) {
-        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'Apps.Uninstall' -Status 'Cancelled' -Summary ('Seleccion={0}' -f $queue.Count)
         return
     }
@@ -1104,7 +1101,7 @@ function Invoke-ActionApps {
     [int] $okCount   = 0
     [int] $failCount = 0
     foreach ($item in $queue) {
-        Write-Host ('  Desinstalando: {0}...' -f $item.AppName) -ForegroundColor Cyan -NoNewline
+        Write-PctkLine ('  Desinstalando: {0}...' -f $item.AppName) 'work' -NoNewline
         if ($item.Entry.Type -eq 'Win32') {
             $r = Invoke-Win32Uninstall -App $item.Entry.App
         } else {
@@ -1112,12 +1109,12 @@ function Invoke-ActionApps {
         }
         if ($r.Success) {
             $okCount++
-            Write-Host ' [OK]' -ForegroundColor Green
+            Write-PctkOk ' [OK]'
             Write-ActionAudit -Action 'Apps.Uninstall' -Status 'Success' `
                 -Summary ('{0} via {1}' -f $item.AppName, $r.Method) -Details $r
         } else {
             $failCount++
-            Write-Host (' [!] {0}' -f $r.Error) -ForegroundColor Red
+            Write-PctkErr (' [!] {0}' -f $r.Error)
             Write-ActionAudit -Action 'Apps.Uninstall' -Status 'Failed' `
                 -Summary ('{0} via {1}' -f $item.AppName, $r.Method) -Details $r
         }
@@ -1125,8 +1122,7 @@ function Invoke-ActionApps {
 
     # Resumen + audit batch
     Write-Host ''
-    [string] $summaryColor = if ($failCount -gt 0) { 'Yellow' } else { 'Green' }
-    Write-Host ('  Resultado: {0} OK / {1} fallidas' -f $okCount, $failCount) -ForegroundColor $summaryColor
+    Write-PctkLine ('  Resultado: {0} OK / {1} fallidas' -f $okCount, $failCount) $(if ($failCount -gt 0) { 'warn' } else { 'ok' })
     Write-ActionAudit -Action 'Apps.Uninstall.Batch' -Status 'Success' `
         -Summary ('OK={0} Failed={1}' -f $okCount, $failCount)
 }
@@ -1142,10 +1138,10 @@ function Invoke-ActionPrivacy {
         Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Started'
         if (Test-ShutUp10Available) {
             $r = Open-ShutUp10
-            if ($r.Success) { Write-Host ('  [OK] OOSU10 abierto: {0}' -f $r.Path) -ForegroundColor Green; Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Success' -Summary $r.Path }
-            else            { Write-Host ('  [!] {0}' -f $r.Error) -ForegroundColor Yellow; Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary $r.Error }
+            if ($r.Success) { Write-PctkOk ('  [OK] OOSU10 abierto: {0}' -f $r.Path); Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Success' -Summary $r.Path }
+            else            { Write-PctkWarn ('  [!] {0}' -f $r.Error); Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary $r.Error }
         } else {
-            Write-Host '  [!] OOSU10.exe no esta descargado. Usa [T] Herramientas para bajarlo.' -ForegroundColor Yellow
+            Write-PctkWarn '  [!] OOSU10.exe no esta descargado. Usa [T] Herramientas para bajarlo.'
             Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary 'OOSU10 not installed'
         }
         return
@@ -1192,31 +1188,31 @@ function Invoke-ActionPrivacy {
         }
     }
     Write-Host ''
-    Write-Host '  [!] DEPRECATED: esta accion aplica tweaks privacy NATIVOS' -ForegroundColor Yellow
-    Write-Host '       (registry hardcoded por el toolkit, NO mantenido upstream).' -ForegroundColor Yellow
-    Write-Host '       Recomendado: usar [1] perfil automatico, que aplica' -ForegroundColor Yellow
-    Write-Host '       OOSU10 con .cfg curadas (mantenido por el proyecto OOSU).' -ForegroundColor Yellow
+    Write-PctkWarn '  [!] DEPRECATED: esta accion aplica tweaks privacy NATIVOS'
+    Write-PctkWarn '       (registry hardcoded por el toolkit, NO mantenido upstream).'
+    Write-PctkWarn '       Recomendado: usar [1] perfil automatico, que aplica'
+    Write-PctkWarn '       OOSU10 con .cfg curadas (mantenido por el proyecto OOSU).'
     Write-Host ''
     [string] $depConfirm = (Read-Host '  Continuar con tweaks nativos igual? [s/N]').Trim().ToUpperInvariant()
     if ($depConfirm -ne 'S' -and $depConfirm -ne 'SI') {
-        Write-Host '  Cancelado (recomendado).' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado (recomendado).'
         Write-ActionAudit -Action 'Privacy.Apply' -Status 'Cancelled' `
             -Summary ('DEPRECATED-skip: {0}' -f $profile)
         return
     }
 
     if (-not (Confirm-Action -Title ('Aplicar Privacy: perfil {0}?' -f $profile) -Lines $profileDescription)) {
-        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'Privacy.Apply' -Status 'Cancelled' -Summary $profile
         return
     }
 
     Write-ActionAudit -Action 'Privacy.Apply' -Status 'Started' -Summary ('Profile={0}' -f $profile)
-    Write-Host ('  Aplicando perfil {0} (registry tweaks)...' -f $profile) -ForegroundColor Cyan
+    Write-PctkWork ('  Aplicando perfil {0} (registry tweaks)...' -f $profile)
     $job = Start-PrivacyJob -Profile $profile
     $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Privacidad' -TimeoutSeconds 120)[0]
-    if ($null -eq $r) { Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow; Write-ActionAudit -Action 'Privacy.Apply' -Status 'Failed'; return }
-    Write-Host ('  [OK] Aplicados: {0}  |  Errores: {1}' -f $r.Applied.Count, $r.Errors.Count) -ForegroundColor Green
+    if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Privacy.Apply' -Status 'Failed'; return }
+    Write-PctkOk ('  [OK] Aplicados: {0}  |  Errores: {1}' -f $r.Applied.Count, $r.Errors.Count)
     Write-ActionAudit -Action 'Privacy.Apply' -Status 'Success' -Summary ('{0}: Applied={1} Errors={2}' -f $profile, $r.Applied.Count, $r.Errors.Count) -Details $r
 }
 
@@ -1341,7 +1337,7 @@ function Invoke-ActionWindowsUpdate {
     if ($MachineProfile.PSObject.Properties['IsHome']) { $isLtsc = $false }
     Write-ActionAudit -Action 'WindowsUpdate.Status' -Status 'Started'
     $status = Get-WindowsUpdateStatus -IsLtsc $isLtsc
-    Write-Host '  ESTADO DE WINDOWS UPDATE' -ForegroundColor DarkCyan
+    Write-PctkSection '  ESTADO DE WINDOWS UPDATE'
     Write-Host ('  Ultima instalacion: {0}' -f $status.LastInstall)
     Write-Host ('  Ultima busqueda  : {0}' -f $status.LastCheck)
     Write-Host ('  Fuente           : {0}' -f $status.Source)
@@ -1358,22 +1354,22 @@ function Show-OrphanModuleResult {
         [Parameter()]          [object] $Result
     )
     if ($null -eq $Result) {
-        Write-Host '  [!] Sin resultado.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] Sin resultado.'
         Write-ActionAudit -Action $Action -Status 'Failed' -Summary 'No result'
         return
     }
     if ($Result.PSObject.Properties['Skipped'] -and $Result.Skipped) {
-        Write-Host ('  [SKIP] {0}' -f $Result.Reason) -ForegroundColor DarkYellow
+        Write-PctkWarn ('  [SKIP] {0}' -f $Result.Reason)
         Write-ActionAudit -Action $Action -Status 'Skipped' -Summary $Result.Reason -Details $Result
         return
     }
-    foreach ($a in $Result.Applied) { Write-Host ('  [OK]   {0}' -f $a) -ForegroundColor Green }
-    foreach ($e in $Result.Errors)  { Write-Host ('  [FAIL] {0}' -f $e) -ForegroundColor Yellow }
+    foreach ($a in $Result.Applied) { Write-PctkOk ('  [OK]   {0}' -f $a) }
+    foreach ($e in $Result.Errors)  { Write-PctkWarn ('  [FAIL] {0}' -f $e) }
     if ($Result.RestartRequired) {
-        Write-Host '  [i] Reinicio requerido para que el cambio tome efecto.' -ForegroundColor Cyan
+        Write-PctkWork '  [i] Reinicio requerido para que el cambio tome efecto.'
     }
     if (-not [string]::IsNullOrWhiteSpace($Result.Reason)) {
-        Write-Host ('  {0}' -f $Result.Reason) -ForegroundColor DarkGray
+        Write-PctkHint ('  {0}' -f $Result.Reason)
     }
     [string] $st = if ($Result.Success) { 'Success' } else { 'Failed' }
     Write-ActionAudit -Action $Action -Status $st -Summary ('Applied={0} Errors={1}' -f $Result.Applied.Count, $Result.Errors.Count) -Details $Result
@@ -1390,10 +1386,10 @@ function Invoke-ActionCoreIsolation {
     $null = $MachineProfile
 
     $st = Get-CoreIsolationStatus
-    Write-Host '  CORE ISOLATION / MEMORY INTEGRITY (HVCI)' -ForegroundColor DarkCyan
+    Write-PctkSection '  CORE ISOLATION / MEMORY INTEGRITY (HVCI)'
     Write-Host ('  VBS  : configurado={0}  corriendo={1}' -f $st.VbsConfigured, $st.VbsRunning)
     Write-Host ('  HVCI : configurado={0}  corriendo={1}  (Memory Integrity)' -f $st.HvciConfigured, $st.HvciRunning)
-    Write-Host ('  Hypervisor presente: {0}  (WSL2/Hyper-V dependen de esto, NO de HVCI)' -f $st.HypervisorPresent) -ForegroundColor DarkGray
+    Write-PctkHint ('  Hypervisor presente: {0}  (WSL2/Hyper-V dependen de esto, NO de HVCI)' -f $st.HypervisorPresent)
     Write-Host ''
     Write-Host '  [D]eshabilitar HVCI (preserva VBS -> WSL2/Hyper-V intactos)  /  [E]nable HVCI+VBS  /  [B]volver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
@@ -1408,12 +1404,12 @@ function Invoke-ActionCoreIsolation {
         if ($vbsToo) { $lines += 'TAMBIEN VBS=0: WSL2/Hyper-V se rompen si dependian de VBS.' }
         else         { $lines += 'VBS preservado: WSL2/Hyper-V siguen funcionando.' }
         if (-not (Confirm-Action -Title 'Deshabilitar HVCI (Memory Integrity)?' -Lines $lines -DefaultYes $false)) {
-            Write-Host '  Cancelado.' -ForegroundColor DarkGray
+            Write-PctkHint '  Cancelado.'
             Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled'
             return
         }
         Write-ActionAudit -Action 'CoreIsolation' -Status 'Started' -Summary ('Disable HVCI VbsToo={0}' -f $vbsToo)
-        Write-Host '  Deshabilitando HVCI...' -ForegroundColor Cyan
+        Write-PctkWork '  Deshabilitando HVCI...'
         if ($vbsToo) { $r = Disable-Hvci -DisableVbsToo } else { $r = Disable-Hvci }
         Show-OrphanModuleResult -Action 'CoreIsolation' -Result $r
         return
@@ -1423,17 +1419,17 @@ function Invoke-ActionCoreIsolation {
             'Registry: HypervisorEnforcedCodeIntegrity Enabled=1 + EnableVirtualizationBasedSecurity=1',
             'Reinicio requerido. Memory Integrity activo tras el reboot.'
         ))) {
-            Write-Host '  Cancelado.' -ForegroundColor DarkGray
+            Write-PctkHint '  Cancelado.'
             Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled'
             return
         }
         Write-ActionAudit -Action 'CoreIsolation' -Status 'Started' -Summary 'Enable HVCI+VBS'
-        Write-Host '  Habilitando HVCI + VBS...' -ForegroundColor Cyan
+        Write-PctkWork '  Habilitando HVCI + VBS...'
         $r = Enable-Hvci
         Show-OrphanModuleResult -Action 'CoreIsolation' -Result $r
         return
     }
-    Write-Host '  Cancelado.' -ForegroundColor DarkGray
+    Write-PctkHint '  Cancelado.'
 }
 
 function Invoke-ActionHags {
@@ -1443,14 +1439,14 @@ function Invoke-ActionHags {
 
     $st = Get-HagsStatus
     [string] $rawTxt = if ($null -ne $st.RawValue) { [string]$st.RawValue } else { '(sin valor)' }
-    Write-Host '  HAGS - HARDWARE-ACCELERATED GPU SCHEDULING' -ForegroundColor DarkCyan
+    Write-PctkSection '  HAGS - HARDWARE-ACCELERATED GPU SCHEDULING'
     Write-Host ('  Estado actual: {0}  (HwSchMode={1})' -f $st.Mode, $rawTxt)
-    Write-Host '  Trade-off: HAGS reserva ~1GB VRAM. Off recomendado en GPUs <8GB sin DLSS Frame Gen;' -ForegroundColor DarkGray
-    Write-Host '             On requerido para DLSS Frame Generation (RTX 40+).' -ForegroundColor DarkGray
+    Write-PctkHint '  Trade-off: HAGS reserva ~1GB VRAM. Off recomendado en GPUs <8GB sin DLSS Frame Gen;'
+    Write-PctkHint '             On requerido para DLSS Frame Generation (RTX 40+).'
     Write-Host ''
     Write-Host '  [E]nable (HwSchMode=2)  /  [D]eshabilitar (=1)  /  [B]volver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
-    if ($sub -ne 'E' -and $sub -ne 'D') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+    if ($sub -ne 'E' -and $sub -ne 'D') { Write-PctkHint '  Cancelado.'; return }
 
     [bool] $enable = ($sub -eq 'E')
     [string] $title = if ($enable) { 'Habilitar HAGS (HwSchMode=2)?' } else { 'Deshabilitar HAGS (HwSchMode=1)?' }
@@ -1458,13 +1454,13 @@ function Invoke-ActionHags {
         'Registry: GraphicsDrivers\HwSchMode (1=Off, 2=On)',
         'Reinicio requerido para tomar efecto.'
     ))) {
-        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'Hags' -Status 'Cancelled'
         return
     }
     [string] $verb = if ($enable) { 'Enable' } else { 'Disable' }
     Write-ActionAudit -Action 'Hags' -Status 'Started' -Summary $verb
-    Write-Host '  Aplicando HAGS...' -ForegroundColor Cyan
+    Write-PctkWork '  Aplicando HAGS...'
     if ($enable) { $r = Enable-Hags } else { $r = Disable-Hags }
     Show-OrphanModuleResult -Action 'Hags' -Result $r
 }
@@ -1475,31 +1471,31 @@ function Invoke-ActionTimerResolution {
     $null = $MachineProfile
 
     $st = Get-TimerResolutionStatus
-    Write-Host '  TIMER RESOLUTION GLOBAL (solo Win11)' -ForegroundColor DarkCyan
+    Write-PctkSection '  TIMER RESOLUTION GLOBAL (solo Win11)'
     Write-Host ('  Estado actual: Enabled={0}  (build Windows={1})' -f $st.Enabled, $st.WinBuild)
     if (-not $st.GateWin11) {
-        Write-Host ('  [SKIP] Solo Win11 (build >= 22000). En esta PC (build {0}) GlobalTimerResolutionRequests' -f $st.WinBuild) -ForegroundColor DarkYellow
-        Write-Host '         no tiene efecto documentado. No se aplica nada.' -ForegroundColor DarkYellow
+        Write-PctkWarn ('  [SKIP] Solo Win11 (build >= 22000). En esta PC (build {0}) GlobalTimerResolutionRequests' -f $st.WinBuild)
+        Write-PctkWarn '         no tiene efecto documentado. No se aplica nada.'
         Write-ActionAudit -Action 'TimerResolution' -Status 'Skipped' -Summary ('build {0} sin gate Win11' -f $st.WinBuild)
         return
     }
-    Write-Host '  Cost-zero: solo registry, sin proceso residente. Reinicio para efecto pleno.' -ForegroundColor DarkGray
+    Write-PctkHint '  Cost-zero: solo registry, sin proceso residente. Reinicio para efecto pleno.'
     Write-Host ''
     Write-Host '  [O]n  /  [F] off  /  [B]volver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
-    if ($sub -ne 'O' -and $sub -ne 'F') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+    if ($sub -ne 'O' -and $sub -ne 'F') { Write-PctkHint '  Cancelado.'; return }
 
     [string] $state = if ($sub -eq 'O') { 'on' } else { 'off' }
     if (-not (Confirm-Action -Title ('Timer Resolution global = {0}?' -f $state) -Lines @(
         'Registry: Session Manager\kernel\GlobalTimerResolutionRequests',
         'Reinicio requerido para efecto pleno. Cost-zero (sin proceso residente).'
     ))) {
-        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'TimerResolution' -Status 'Cancelled'
         return
     }
     Write-ActionAudit -Action 'TimerResolution' -Status 'Started' -Summary $state
-    Write-Host '  Aplicando Timer Resolution...' -ForegroundColor Cyan
+    Write-PctkWork '  Aplicando Timer Resolution...'
     $r = Set-TimerResolutionRegistry -State $state
     Show-OrphanModuleResult -Action 'TimerResolution' -Result $r
 }
@@ -1510,9 +1506,9 @@ function Invoke-ActionProcessPriority {
     $null = $MachineProfile
 
     $current = Get-ProcessPriorityIFEO
-    Write-Host '  PRIORIDAD DE PROCESO POR .EXE (IFEO)' -ForegroundColor DarkCyan
-    Write-Host '  AVISO: prioridad estatica via registry IFEO. NO es Process Lasso,' -ForegroundColor DarkGray
-    Write-Host '         sin ProBalance dinamico, sin proceso residente (cost-zero).' -ForegroundColor DarkGray
+    Write-PctkSection '  PRIORIDAD DE PROCESO POR .EXE (IFEO)'
+    Write-PctkHint '  AVISO: prioridad estatica via registry IFEO. NO es Process Lasso,'
+    Write-PctkHint '         sin ProBalance dinamico, sin proceso residente (cost-zero).'
     Write-Host ''
     if ($current.Count -gt 0) {
         Write-Host '  Entradas actuales:'
@@ -1520,33 +1516,33 @@ function Invoke-ActionProcessPriority {
             Write-Host ('    {0,-28} {1}' -f $k, $current[$k])
         }
     } else {
-        Write-Host '  (sin entradas IFEO de prioridad configuradas)' -ForegroundColor DarkGray
+        Write-PctkHint '  (sin entradas IFEO de prioridad configuradas)'
     }
     Write-Host ''
     Write-Host '  [A]gregar/cambiar prioridad de un .exe  /  [B]volver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
-    if ($sub -ne 'A') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+    if ($sub -ne 'A') { Write-PctkHint '  Cancelado.'; return }
 
     [string] $exe = (Read-Host '  Nombre del ejecutable (ej. valorant.exe)').Trim()
-    if ([string]::IsNullOrWhiteSpace($exe)) { Write-Host '  Nombre vacio, cancelado.' -ForegroundColor DarkGray; return }
-    if ($exe -notmatch '(?i)\.exe$')        { Write-Host '  Debe terminar en .exe, cancelado.' -ForegroundColor Yellow; return }
+    if ([string]::IsNullOrWhiteSpace($exe)) { Write-PctkHint '  Nombre vacio, cancelado.'; return }
+    if ($exe -notmatch '(?i)\.exe$')        { Write-PctkWarn '  Debe terminar en .exe, cancelado.'; return }
 
     Write-Host '  Clase: [H]igh (maximo seguro)  /  [A]boveNormal  /  [N]ormal (default; resetea)'
     [string] $clsSub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
     [string] $cls = switch ($clsSub) { 'H' { 'High' } 'A' { 'AboveNormal' } 'N' { 'Normal' } default { '' } }
-    if ([string]::IsNullOrWhiteSpace($cls)) { Write-Host '  Clase invalida, cancelado.' -ForegroundColor DarkGray; return }
+    if ([string]::IsNullOrWhiteSpace($cls)) { Write-PctkHint '  Clase invalida, cancelado.'; return }
 
     if (-not (Confirm-Action -Title ('Setear prioridad IFEO {0} -> {1}?' -f $exe, $cls) -Lines @(
         'Registry: Image File Execution Options\<exe>\PerfOptions\CpuPriorityClass',
         'Prioridad estatica: Windows la aplica al arrancar el proceso. Sin reinicio.',
         'NO es Process Lasso / sin ProBalance dinamico.'
     ))) {
-        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'ProcessPriority' -Status 'Cancelled'
         return
     }
     Write-ActionAudit -Action 'ProcessPriority' -Status 'Started' -Summary ('{0}={1}' -f $exe, $cls)
-    Write-Host '  Aplicando prioridad IFEO...' -ForegroundColor Cyan
+    Write-PctkWork '  Aplicando prioridad IFEO...'
     [hashtable] $map = @{}
     $map[$exe] = $cls
     $r = Set-ProcessPriorityIFEO -PriorityMap $map
@@ -1562,14 +1558,14 @@ function Invoke-ActionUsbPower {
     [string] $acTxt  = if ($null -ne $st.AcValueIndex)           { [string]$st.AcValueIndex }           else { '-' }
     [string] $dcTxt  = if ($null -ne $st.DcValueIndex)           { [string]$st.DcValueIndex }           else { '-' }
     [string] $regTxt = if ($null -ne $st.RegistryGlobalDisabled) { [string]$st.RegistryGlobalDisabled } else { '(sin valor)' }
-    Write-Host '  USB SELECTIVE SUSPEND' -ForegroundColor DarkCyan
+    Write-PctkSection '  USB SELECTIVE SUSPEND'
     Write-Host ('  Plan activo: AC={0}  DC={1}   (0=disabled, 1=enabled, - =oculto)' -f $acTxt, $dcTxt)
-    Write-Host ('  Registry global DisableSelectiveSuspend: {0}' -f $regTxt) -ForegroundColor DarkGray
-    if ($st.IsHiddenInGui) { Write-Host '  (El setting esta oculto en Power Options; Win11 24H2 lo oculta por default)' -ForegroundColor DarkGray }
+    Write-PctkHint ('  Registry global DisableSelectiveSuspend: {0}' -f $regTxt)
+    if ($st.IsHiddenInGui) { Write-PctkHint '  (El setting esta oculto en Power Options; Win11 24H2 lo oculta por default)' }
     Write-Host ''
     Write-Host '  [D]eshabilitar (off - dongles 2.4GHz/HID/latencia)  /  [E]nable (default Windows)  /  [B]volver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
-    if ($sub -ne 'D' -and $sub -ne 'E') { Write-Host '  Cancelado.' -ForegroundColor DarkGray; return }
+    if ($sub -ne 'D' -and $sub -ne 'E') { Write-PctkHint '  Cancelado.'; return }
 
     [bool] $disable = ($sub -eq 'D')
     [string] $title = if ($disable) { 'Deshabilitar USB Selective Suspend?' } else { 'Re-habilitar USB Selective Suspend (default Windows)?' }
@@ -1578,13 +1574,13 @@ function Invoke-ActionUsbPower {
         'Registry: Services\USB\DisableSelectiveSuspend',
         'Sin reinicio. Win11 24H2 oculta el setting; el modulo lo des-oculta para tocarlo.'
     ))) {
-        Write-Host '  Cancelado.' -ForegroundColor DarkGray
+        Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'UsbPower' -Status 'Cancelled'
         return
     }
     [string] $verb = if ($disable) { 'Disable' } else { 'Enable' }
     Write-ActionAudit -Action 'UsbPower' -Status 'Started' -Summary $verb
-    Write-Host '  Aplicando USB Selective Suspend...' -ForegroundColor Cyan
+    Write-PctkWork '  Aplicando USB Selective Suspend...'
     if ($disable) { $r = Disable-UsbSelectiveSuspend } else { $r = Enable-UsbSelectiveSuspend }
     Show-OrphanModuleResult -Action 'UsbPower' -Result $r
 }
@@ -1607,11 +1603,8 @@ function Invoke-ApplyAutoProfile {
     [object] $tierProp = $MachineProfile.PSObject.Properties['Tier']
     if ($null -ne $tierProp) { $detectedTier = [string]$tierProp.Value }
 
-    Write-Host ''
-    Write-Host '  ================================================' -ForegroundColor DarkCyan
-    Write-Host '    APLICAR PERFIL AUTOMATICO' -ForegroundColor Cyan
-    Write-Host '  ================================================' -ForegroundColor DarkCyan
-    Write-Host ("  Tier detectado: {0}" -f $detectedTier) -ForegroundColor Yellow
+    Write-PctkActionTitle 'APLICAR PERFIL AUTOMATICO'
+    Write-PctkWarn ("  Tier detectado: {0}" -f $detectedTier)
     Write-Host ''
     Write-Host '  [1]  Generic         (PC de servicio sin contexto claro)'
     Write-Host '  [2]  Work            (oficina/estudio: Office/Outlook/Teams, browser, impresion)'
@@ -1626,7 +1619,7 @@ function Invoke-ApplyAutoProfile {
         '1'     { $useCase = 'generic' }
         '2'     { $useCase = 'work' }
         '3'     { $useCase = 'multimedia' }
-        default { Write-Host '  Opcion invalida.' -ForegroundColor Red; return }
+        default { Write-PctkErr '  Opcion invalida.'; return }
     }
 
     # ── Cargar receta para el use-case (v2.0: sin tier en el path) ────────────
@@ -1638,7 +1631,7 @@ function Invoke-ApplyAutoProfile {
     try {
         $profile = Import-AutoProfile -Path $profPath
     } catch {
-        Write-Host ("  [!] No se pudo cargar la receta: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        Write-PctkErr ("  [!] No se pudo cargar la receta: {0}" -f $_.Exception.Message)
         Write-ActionAudit -Action $auditAction -Status 'Failed' -Summary $_.Exception.Message
         return
     }
@@ -1666,7 +1659,7 @@ function Invoke-ApplyAutoProfile {
             $clientSlug = 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant()
         }
     }
-    Write-Host ("  Cliente: {0}" -f $clientSlug) -ForegroundColor DarkGray
+    Write-PctkHint ("  Cliente: {0}" -f $clientSlug)
 
     # ── Gate Restore Point ────────────────────────────────────────────────────
     [bool] $createRp = Confirm-Action `
@@ -1680,7 +1673,7 @@ function Invoke-ApplyAutoProfile {
 
     # ── Ejecutar pipeline ─────────────────────────────────────────────────────
     Write-Host ''
-    Write-Host '  Iniciando pipeline...' -ForegroundColor Cyan
+    Write-PctkWork '  Iniciando pipeline...'
     $result = Invoke-AutoProfile `
         -Profile       $profile `
         -MachineProfile $MachineProfile `
@@ -1690,16 +1683,16 @@ function Invoke-ApplyAutoProfile {
 
     # ── Mostrar resumen final ─────────────────────────────────────────────────
     Write-Host ''
-    [string] $statusColor = switch ($result.Status) {
-        'Success' { 'Green'  }
-        'Partial' { 'Yellow' }
-        default   { 'Red'    }
+    [string] $statusKind = switch ($result.Status) {
+        'Success' { 'ok'   }
+        'Partial' { 'warn' }
+        default   { 'err'  }
     }
-    Write-Host ('  === Resultado: {0} | Duracion: {1}s ===' -f $result.Status, $result.DurationSec) -ForegroundColor $statusColor
+    Write-PctkLine ('  === Resultado: {0} | Duracion: {1}s ===' -f $result.Status, $result.DurationSec) $statusKind
 
     [object] $crDir = $result.ClientRun.PSObject.Properties['Dir']
     if ($null -ne $crDir -and -not [string]::IsNullOrWhiteSpace([string]$crDir.Value)) {
-        Write-Host ('  Carpeta de run: {0}' -f [string]$crDir.Value) -ForegroundColor Cyan
+        Write-PctkWork ('  Carpeta de run: {0}' -f [string]$crDir.Value)
     }
 }
 
@@ -1737,16 +1730,16 @@ function Invoke-NamedProfileMenu {
         [string] $st = if ($null -ne $r -and $r.PSObject.Properties['NamedStatus']) { [string]$r.NamedStatus }
                        elseif ($null -ne $r -and $r.PSObject.Properties['Status']) { [string]$r.Status }
                        else { 'Unknown' }
-        [string] $clr = switch ($st) { 'Success' { 'Green' } 'Partial' { 'Yellow' } default { 'Red' } }
+        [string] $npKind = switch ($st) { 'Success' { 'ok' } 'Partial' { 'warn' } default { 'err' } }
         Write-Host ''
-        Write-Host ('  === Resultado receta nombrada: {0} ===' -f $st) -ForegroundColor $clr
+        Write-PctkLine ('  === Resultado receta nombrada: {0} ===' -f $st) $npKind
         if ($null -ne $r -and $r.PSObject.Properties['RebootNeeded'] -and [bool]$r.RebootNeeded) {
-            Write-Host '  [i] Requiere REINICIO para efecto pleno (HVCI/HAGS).' -ForegroundColor Yellow
+            Write-PctkWarn '  [i] Requiere REINICIO para efecto pleno (HVCI/HAGS).'
         }
         if ($null -ne $r -and $r.PSObject.Properties['ClientRun'] -and $null -ne $r.ClientRun) {
             [object] $d = $r.ClientRun.PSObject.Properties['Dir']
             if ($null -ne $d -and -not [string]::IsNullOrWhiteSpace([string]$d.Value)) {
-                Write-Host ('  Carpeta de run: {0}' -f [string]$d.Value) -ForegroundColor Cyan
+                Write-PctkWork ('  Carpeta de run: {0}' -f [string]$d.Value)
             }
         }
     }
@@ -1767,12 +1760,12 @@ function Invoke-NamedProfileMenu {
         }
         [string] $slug = (Read-Host '  Nombre de archivo (slug, ej. pc-carlos-cs2)').Trim()
         [string] $path = Save-NamedProfile -Profile $prof -Slug $slug
-        Write-Host ('  [OK] Guardada: {0}' -f $path) -ForegroundColor Green
+        Write-PctkOk ('  [OK] Guardada: {0}' -f $path)
         if (Confirm-Action -Title 'Aplicar la receta ahora?' -DefaultYes:$true) {
             [string] $cs = _Np_ClientSlug
             [bool]   $rp = _Np_RpGate
             Write-Host ''
-            Write-Host '  Iniciando pipeline (core + gaming_tweaks)...' -ForegroundColor Cyan
+            Write-PctkWork '  Iniciando pipeline (core + gaming_tweaks)...'
             $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
                 -ClientSlug $cs -SourcePath $path -SkipRestorePoint:(-not $rp) -ShowProgress
             _Np_ShowResult $r
@@ -1784,7 +1777,7 @@ function Invoke-NamedProfileMenu {
         [object[]] $list = @(Get-NamedProfileList)
         if ($c -eq '3') { $list = @($list | Where-Object { -not $_.IsSample }) }
         if ($list.Count -eq 0) {
-            Write-Host '  No hay recetas nombradas guardadas.' -ForegroundColor Yellow
+            Write-PctkWarn '  No hay recetas nombradas guardadas.'
             return
         }
 
@@ -1798,7 +1791,7 @@ function Invoke-NamedProfileMenu {
             } else {
                 $sel = ($list | Sort-Object { (Get-Item -LiteralPath $_.Path).LastWriteTime } -Descending | Select-Object -First 1)
             }
-            Write-Host ('  Ultima receta: {0}  (last_applied: {1})' -f $sel.Name, $(if ($sel.LastApplied) { $sel.LastApplied } else { 'nunca' })) -ForegroundColor Cyan
+            Write-PctkWork ('  Ultima receta: {0}  (last_applied: {1})' -f $sel.Name, $(if ($sel.LastApplied) { $sel.LastApplied } else { 'nunca' }))
         } else {
             Write-Host ''
             for ($i = 0; $i -lt $list.Count; $i++) {
@@ -1809,7 +1802,7 @@ function Invoke-NamedProfileMenu {
             [string] $pick = (Read-Host '  Numero de receta').Trim()
             [int] $idx = 0
             if (-not [int]::TryParse($pick, [ref]$idx) -or $idx -lt 1 -or $idx -gt $list.Count) {
-                Write-Host '  Seleccion invalida.' -ForegroundColor Red
+                Write-PctkErr '  Seleccion invalida.'
                 return
             }
             $sel = $list[$idx - 1]
@@ -1819,7 +1812,7 @@ function Invoke-NamedProfileMenu {
         try {
             $prof = Import-NamedProfile -Path $sel.Path
         } catch {
-            Write-Host ('  [!] No se pudo cargar: {0}' -f $_.Exception.Message) -ForegroundColor Red
+            Write-PctkErr ('  [!] No se pudo cargar: {0}' -f $_.Exception.Message)
             Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Failed' -Summary $_.Exception.Message
             return
         }
@@ -1832,7 +1825,7 @@ function Invoke-NamedProfileMenu {
 
         [string] $cs = _Np_ClientSlug
         Write-Host ''
-        Write-Host '  Iniciando pipeline (core + gaming_tweaks)...' -ForegroundColor Cyan
+        Write-PctkWork '  Iniciando pipeline (core + gaming_tweaks)...'
         if ($c -eq '3') {
             # Reaplicar = headless (prereq #3): -Unattended evita que la falla
             # dura de RP cuelgue. RP igual se intenta (no -SkipRestorePoint).
@@ -1847,5 +1840,5 @@ function Invoke-NamedProfileMenu {
         return
     }
 
-    Write-Host '  Opcion invalida.' -ForegroundColor Red
+    Write-PctkErr '  Opcion invalida.'
 }

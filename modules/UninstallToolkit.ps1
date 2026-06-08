@@ -94,17 +94,17 @@ function Save-PreUninstallArtifacts {
     if (Test-Path $clientsDir -PathType Container) {
         [string] $defaultDest = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PCTk-historial-clientes'
         Write-Host ''
-        Write-Host ('  Historial de clientes: {0}' -f $clientsDir) -ForegroundColor Cyan
+        Write-PctkWork ('  Historial de clientes: {0}' -f $clientsDir)
         [string] $rawDest = (Read-Host ("  Ruta de copia (Enter = {0})" -f $defaultDest)).Trim()
         $preserveDest = if ([string]::IsNullOrWhiteSpace($rawDest)) { $defaultDest } else { $rawDest }
 
         try {
             if (Test-Path $preserveDest) { Remove-Item $preserveDest -Recurse -Force }
             Copy-Item -Path $clientsDir -Destination $preserveDest -Recurse -Force
-            Write-Host ('  [OK] Historial copiado a: {0}' -f $preserveDest) -ForegroundColor Green
+            Write-PctkOk ('  [OK] Historial copiado a: {0}' -f $preserveDest)
         } catch {
-            Write-Host ('  [!] No se pudo copiar el historial: {0}' -f $_.Exception.Message) -ForegroundColor Red
-            Write-Host '  Abortando sin borrar nada.' -ForegroundColor DarkGray
+            Write-PctkErr ('  [!] No se pudo copiar el historial: {0}' -f $_.Exception.Message)
+            Write-PctkHint '  Abortando sin borrar nada.'
             return $null
         }
     }
@@ -119,10 +119,10 @@ function Save-PreUninstallArtifacts {
             try {
                 [string] $auditExportDest = Join-Path $preserveDest 'audit'
                 Copy-Item -Path $auditDir -Destination $auditExportDest -Recurse -Force
-                Write-Host ('  [OK] Audit copiado a: {0}' -f $auditExportDest) -ForegroundColor Green
+                Write-PctkOk ('  [OK] Audit copiado a: {0}' -f $auditExportDest)
                 $auditCopiedTo = $auditExportDest
             } catch {
-                Write-Host ('  [!] No se pudo copiar el audit: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+                Write-PctkWarn ('  [!] No se pudo copiar el audit: {0}' -f $_.Exception.Message)
             }
         }
     }
@@ -131,7 +131,7 @@ function Save-PreUninstallArtifacts {
     [string] $zipPath = ''
     try {
         Write-Host ''
-        Write-Host '  Empaquetando audit + snapshots...' -ForegroundColor Cyan
+        Write-PctkWork '  Empaquetando audit + snapshots...'
         [string] $outputRoot = Join-Path $InstallRoot 'output'
         [hashtable] $exportParams = @{
             TagOverride        = 'preuninstall'
@@ -142,15 +142,15 @@ function Save-PreUninstallArtifacts {
         }
         [PSCustomObject] $zipResult = Invoke-ExportClientLogs @exportParams
         if ($zipResult.Status -eq 'OK') {
-            Write-Host ('  [OK] Zip generado: {0}' -f $zipResult.ZipPath) -ForegroundColor Green
+            Write-PctkOk ('  [OK] Zip generado: {0}' -f $zipResult.ZipPath)
             $zipPath = $zipResult.ZipPath
         } elseif ($zipResult.Status -eq 'Empty') {
-            Write-Host '  [i] Sin audit ni snapshots para empaquetar.' -ForegroundColor DarkGray
+            Write-PctkHint '  [i] Sin audit ni snapshots para empaquetar.'
         } else {
-            Write-Host ('  [!] No se pudo empaquetar (Status={0}). Borrado continua.' -f $zipResult.Status) -ForegroundColor Yellow
+            Write-PctkWarn ('  [!] No se pudo empaquetar (Status={0}). Borrado continua.' -f $zipResult.Status)
         }
     } catch {
-        Write-Host ('  [!] Falla al empaquetar logs: {0}. Borrado continua.' -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-PctkWarn ('  [!] Falla al empaquetar logs: {0}. Borrado continua.' -f $_.Exception.Message)
     }
 
     return [PSCustomObject]@{
@@ -178,9 +178,9 @@ function Invoke-UninstallToolkit {
     # antes de generar cualquier Remove-Item -Recurse -Force.
     if (-not (Test-Path (Join-Path $installRoot 'main.ps1') -PathType Leaf) -or
         -not (Test-Path (Join-Path $installRoot 'core\Router.ps1') -PathType Leaf)) {
-        Write-Host '  [!] No se pudo validar la instalacion de PCTk.' -ForegroundColor Red
-        Write-Host ("      Ruta resuelta: {0}" -f $installRoot) -ForegroundColor DarkGray
-        Write-Host '  Abortando sin borrar nada.' -ForegroundColor DarkGray
+        Write-PctkErr '  [!] No se pudo validar la instalacion de PCTk.'
+        Write-PctkHint ("      Ruta resuelta: {0}" -f $installRoot)
+        Write-PctkHint '  Abortando sin borrar nada.'
         return $false
     }
 
@@ -191,16 +191,16 @@ function Invoke-UninstallToolkit {
         'El historial de clientes (output\clients\) se puede copiar antes.',
         'ESTA ACCION ES IRREVERSIBLE.'
     ) -DefaultYes:$false)) {
-        Write-Host '  Desinstalacion cancelada.' -ForegroundColor DarkGray
+        Write-PctkHint '  Desinstalacion cancelada.'
         return $false
     }
 
     # Segunda confirmacion (ss 6.3): tipear BORRAR exacto.
     Write-Host ''
-    Write-Host '  Para confirmar, escribe exactamente: BORRAR' -ForegroundColor Yellow
+    Write-PctkWarn '  Para confirmar, escribe exactamente: BORRAR'
     [string] $gate2 = (Read-Host '  >').Trim().ToUpperInvariant()
     if ($gate2 -ne 'BORRAR') {
-        Write-Host '  Desinstalacion cancelada.' -ForegroundColor DarkGray
+        Write-PctkHint '  Desinstalacion cancelada.'
         return $false
     }
 
@@ -213,8 +213,8 @@ function Invoke-UninstallToolkit {
     try {
         [System.IO.File]::WriteAllText($deleterPath, $deleterText, [System.Text.Encoding]::UTF8)
     } catch {
-        Write-Host ('  [!] No se pudo crear el script de desinstalacion: {0}' -f $_.Exception.Message) -ForegroundColor Red
-        Write-Host '  Abortando sin borrar nada.' -ForegroundColor DarkGray
+        Write-PctkErr ('  [!] No se pudo crear el script de desinstalacion: {0}' -f $_.Exception.Message)
+        Write-PctkHint '  Abortando sin borrar nada.'
         return $false
     }
 
@@ -233,14 +233,14 @@ function Invoke-UninstallToolkit {
             '-NonInteractive', '-File', $deleterPath
         ) -WindowStyle Hidden -ErrorAction Stop
     } catch {
-        Write-Host ('  [!] No se pudo lanzar el desinstalador: {0}' -f $_.Exception.Message) -ForegroundColor Red
+        Write-PctkErr ('  [!] No se pudo lanzar el desinstalador: {0}' -f $_.Exception.Message)
         if (Test-Path $deleterPath) { Remove-Item $deleterPath -Force -ErrorAction SilentlyContinue }
         return $false
     }
 
     [string] $logHint = $deleterPath -replace '\.ps1$', '.log'
     Write-Host ''
-    Write-Host '  PCTk cerrara ahora. El borrado se realizara en segundo plano.' -ForegroundColor Yellow
-    Write-Host ('  Resultado en: {0}' -f $logHint) -ForegroundColor DarkGray
+    Write-PctkWarn '  PCTk cerrara ahora. El borrado se realizara en segundo plano.'
+    Write-PctkHint ('  Resultado en: {0}' -f $logHint)
     return $true
 }

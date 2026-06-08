@@ -183,7 +183,7 @@ function Invoke-ProfilePrivacyStep {
 
     # 1) Perfil no declara oosu10_cfg -> skip silencioso (sin privacy step)
     if ([string]::IsNullOrWhiteSpace($oosuCfg)) {
-        Write-Host '  Privacy: perfil sin oosu10_cfg, skip.' -ForegroundColor DarkGray
+        Write-PctkHint '  Privacy: perfil sin oosu10_cfg, skip.'
         Write-ActionAudit -Action 'Privacy.OOSU.Apply' -Status 'Skipped' `
             -Summary 'no oosu10_cfg in profile'
         return [PSCustomObject]@{ Path = 'skipped'; Success = $true; Detail = $null }
@@ -193,7 +193,7 @@ function Invoke-ProfilePrivacyStep {
 
     # 2) cfg declarado pero no existe en disco -> error de packaging
     if (-not (Test-Path -LiteralPath $cfgPath)) {
-        Write-Host ('  [!] Privacy: cfg no encontrado: {0}' -f $cfgPath) -ForegroundColor Red
+        Write-PctkErr ('  [!] Privacy: cfg no encontrado: {0}' -f $cfgPath)
         Write-ActionAudit -Action 'Privacy.OOSU.Apply' -Status 'Failed' `
             -Summary 'cfg not found' -Details @{ CfgPath = $cfgPath }
         return [PSCustomObject]@{ Path = 'oosu10'; Success = $false; Detail = @{ Reason = 'cfg_not_found'; CfgPath = $cfgPath } }
@@ -201,11 +201,11 @@ function Invoke-ProfilePrivacyStep {
 
     # 3) OOSU disponible? Si no, descargar
     if (-not (Test-ShutUp10Available)) {
-        Write-Host '  Privacy: OOSU10 no disponible, descargando...' -ForegroundColor Cyan
+        Write-PctkWork '  Privacy: OOSU10 no disponible, descargando...'
         Write-ActionAudit -Action 'Privacy.OOSU.Download' -Status 'Started'
         $dl = Invoke-OOSUDownload
         if (-not $dl.Success) {
-            Write-Host ('  [!] Privacy: descarga de OOSU fallo: {0}' -f $dl.Error) -ForegroundColor Red
+            Write-PctkErr ('  [!] Privacy: descarga de OOSU fallo: {0}' -f $dl.Error)
             Write-ActionAudit -Action 'Privacy.OOSU.Download' -Status 'Failed' `
                 -Summary $dl.Error
             return [PSCustomObject]@{ Path = 'oosu10'; Success = $false; Detail = @{ Reason = 'download_failed'; Error = $dl.Error } }
@@ -214,7 +214,7 @@ function Invoke-ProfilePrivacyStep {
     }
 
     # 4) Aplicar
-    Write-Host ('  Privacy via OOSU10 ({0})...' -f $oosuCfg) -ForegroundColor Cyan
+    Write-PctkWork ('  Privacy via OOSU10 ({0})...' -f $oosuCfg)
     $r = Invoke-OOSU10Profile -Path $cfgPath
     [string] $status = if ($r.Success -and -not $r.Skipped) { 'OK' }
                        elseif ($r.Skipped)                  { 'Skipped' }
@@ -316,9 +316,9 @@ function Invoke-AutoProfile {
     & $EmitProgress 5 'Restore Point...'
     if ($SkipRestorePoint) {
         $rpResult = [PSCustomObject]@{ Done = $false; Skipped = $true; CooldownActive = $false; Message = 'Omitido por operador (-SkipRestorePoint)' }
-        Write-Host '  [i] Restore Point omitido.' -ForegroundColor DarkGray
+        Write-PctkHint '  [i] Restore Point omitido.'
     } else {
-        Write-Host '  Creando Restore Point...' -ForegroundColor Cyan
+        Write-PctkWork '  Creando Restore Point...'
         $rpJob     = Start-RestorePointProcess
         $rpArr     = Wait-ToolkitJobs -Jobs @($rpJob) -TimeoutSeconds 120 `
                          -ShowProgress:$ShowProgress -ActivityLabel $barActivity -PercentHint (& $MapPct 5)
@@ -326,7 +326,7 @@ function Invoke-AutoProfile {
 
         if ($null -ne $rpRaw -and $rpRaw.PSObject.Properties['Success'] -and $rpRaw.Success) {
             $rpResult = [PSCustomObject]@{ Done = $true; Skipped = $false; CooldownActive = $false; Message = [string]$rpRaw.Message }
-            Write-Host '  [OK] Restore Point creado.' -ForegroundColor Green
+            Write-PctkOk '  [OK] Restore Point creado.'
         }
         elseif ($null -ne $rpRaw -and $rpRaw.PSObject.Properties['CooldownActive'] -and $rpRaw.CooldownActive) {
             $rpResult = [PSCustomObject]@{
@@ -336,14 +336,14 @@ function Invoke-AutoProfile {
                 LatestRp      = $rpRaw.LatestRp
                 Message       = [string]$rpRaw.Reason
             }
-            Write-Host ('  [i] RP cooldown activo — hay un RP reciente como ancla. {0}' -f $rpRaw.Reason) -ForegroundColor Yellow
+            Write-PctkHint ('  [i] RP cooldown activo — hay un RP reciente como ancla. {0}' -f $rpRaw.Reason)
         }
         else {
             # Falla dura: System Restore deshabilitado o error
             [string] $failMsg = if ($null -ne $rpRaw -and $rpRaw.PSObject.Properties['Message']) { [string]$rpRaw.Message } else { 'No se pudo crear el Restore Point.' }
-            Write-Host ("  [!] Restore Point fallo: $failMsg") -ForegroundColor Red
+            Write-PctkErr ("  [!] Restore Point fallo: $failMsg")
             [bool] $continuar = if ($Unattended) {
-                Write-Host '  [i] -Unattended: continuando sin Restore Point (sin prompt).' -ForegroundColor DarkYellow
+                Write-PctkHint '  [i] -Unattended: continuando sin Restore Point (sin prompt).'
                 $true
             } else {
                 Confirm-Action `
@@ -379,21 +379,21 @@ function Invoke-AutoProfile {
 
     # ── 2. Snapshot PRE ───────────────────────────────────────────────────────
     & $EmitProgress 15 'Snapshot PRE...'
-    Write-Host '  Capturando snapshot PRE...' -ForegroundColor Cyan
+    Write-PctkWork '  Capturando snapshot PRE...'
     $preJob  = Start-TelemetryJob -Phase Pre
     $preArr  = Wait-ToolkitJobs -Jobs @($preJob) -TimeoutSeconds 90 `
                    -ShowProgress:$ShowProgress -ActivityLabel $barActivity -PercentHint (& $MapPct 15)
     $preRaw  = if ($preArr.Count -gt 0) { $preArr[0] } else { $null }
     if ($null -ne $preRaw -and $preRaw.PSObject.Properties['FileName'] -and -not [string]::IsNullOrWhiteSpace([string]$preRaw.FileName)) {
         $preSnap = [PSCustomObject]@{ Ok = $true; FileName = [string]$preRaw.FileName; FilePath = [string]$preRaw.FilePath }
-        Write-Host ('  [OK] Snapshot PRE: {0}' -f $preRaw.FileName) -ForegroundColor Green
+        Write-PctkOk ('  [OK] Snapshot PRE: {0}' -f $preRaw.FileName)
     } else {
-        Write-Host '  [!] Snapshot PRE no disponible (timeout o error). Continuando sin el.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] Snapshot PRE no disponible (timeout o error). Continuando sin el.'
     }
 
     # ── 3. Batch de mutacion (Debloat + Cleanup + Performance en paralelo) ────
     & $EmitProgress 30 'Batch: Debloat / Limpieza / Performance...'
-    Write-Host '  Aplicando perfil: Debloat / Limpieza / Performance (en paralelo)...' -ForegroundColor Cyan
+    Write-PctkWork '  Aplicando perfil: Debloat / Limpieza / Performance (en paralelo)...'
     [string[]] $svcList = @($Profile.services.disable)
     $jobDebloat  = Start-DebloatProcess -ServicesList $svcList
     $jobCleanup  = Start-CleanupProcess
@@ -413,7 +413,7 @@ function Invoke-AutoProfile {
         $privResult = Invoke-ProfilePrivacyStep -Profile $Profile
     } catch {
         $privResult = [PSCustomObject]@{ Path = 'error'; Success = $false; Detail = $_.Exception.Message }
-        Write-Host ('  [!] Privacy fallo: {0}' -f $_.Exception.Message) -ForegroundColor Red
+        Write-PctkErr ('  [!] Privacy fallo: {0}' -f $_.Exception.Message)
     }
 
     # ── Determinar status (lo necesitamos antes del ClientFolder) ─────────────
@@ -430,16 +430,16 @@ function Invoke-AutoProfile {
 
     # ── 4. Snapshot POST ──────────────────────────────────────────────────────
     & $EmitProgress 70 'Snapshot POST...'
-    Write-Host '  Capturando snapshot POST...' -ForegroundColor Cyan
+    Write-PctkWork '  Capturando snapshot POST...'
     $postJob = Start-TelemetryJob -Phase Post
     $postArr = Wait-ToolkitJobs -Jobs @($postJob) -TimeoutSeconds 90 `
                    -ShowProgress:$ShowProgress -ActivityLabel $barActivity -PercentHint (& $MapPct 70)
     $postRaw = if ($postArr.Count -gt 0) { $postArr[0] } else { $null }
     if ($null -ne $postRaw -and $postRaw.PSObject.Properties['FileName'] -and -not [string]::IsNullOrWhiteSpace([string]$postRaw.FileName)) {
         $postSnap = [PSCustomObject]@{ Ok = $true; FileName = [string]$postRaw.FileName; FilePath = [string]$postRaw.FilePath }
-        Write-Host ('  [OK] Snapshot POST: {0}' -f $postRaw.FileName) -ForegroundColor Green
+        Write-PctkOk ('  [OK] Snapshot POST: {0}' -f $postRaw.FileName)
     } else {
-        Write-Host '  [!] Snapshot POST no disponible.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] Snapshot POST no disponible.'
     }
 
     # ── 5. Compare + Show ─────────────────────────────────────────────────────
@@ -449,10 +449,10 @@ function Invoke-AutoProfile {
             $compareR = Compare-Snapshot -PrePath $preSnap.FilePath -PostPath $postSnap.FilePath
             Show-SnapshotComparison -Diff $compareR
         } catch {
-            Write-Host ('  [!] Comparacion no disponible: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+            Write-PctkWarn ('  [!] Comparacion no disponible: {0}' -f $_.Exception.Message)
         }
     } else {
-        Write-Host '  [i] Compare omitido (snapshot PRE o POST no disponible).' -ForegroundColor DarkGray
+        Write-PctkHint '  [i] Compare omitido (snapshot PRE o POST no disponible).'
     }
 
     # ── 5b. Carpeta de run por cliente ────────────────────────────────────────
@@ -543,7 +543,7 @@ function Invoke-AutoProfile {
             MetaPath   = $metaPath
             WriteError = ''
         }
-        Write-Host ('  [OK] Carpeta de run: {0}' -f $runDir) -ForegroundColor Green
+        Write-PctkOk ('  [OK] Carpeta de run: {0}' -f $runDir)
     } catch {
         $clientRun = [PSCustomObject]@{
             Slug       = $ClientSlug
@@ -552,19 +552,19 @@ function Invoke-AutoProfile {
             MetaPath   = ''
             WriteError = $_.Exception.Message
         }
-        Write-Host ('  [!] No se pudo escribir la carpeta de run: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-PctkWarn ('  [!] No se pudo escribir la carpeta de run: {0}' -f $_.Exception.Message)
     }
 
     # ── 6. Startup Report (D3 — solo reporte, sin toggle) ────────────────────
     & $EmitProgress 93 'Startup report...'
-    Write-Host '  Entradas de inicio detectadas (solo reporte):' -ForegroundColor DarkCyan
+    Write-PctkSection '  Entradas de inicio detectadas (solo reporte):'
     try {
         [object[]] $startupEntries = @(Get-StartupEntries)
         $startupR = [PSCustomObject]@{ Count = $startupEntries.Count; ReportedOnly = $true }
-        Write-Host ('  [i] Programas de inicio: {0} entradas.' -f $startupEntries.Count) -ForegroundColor DarkGray
+        Write-PctkHint ('  [i] Programas de inicio: {0} entradas.' -f $startupEntries.Count)
     } catch {
         $startupR = [PSCustomObject]@{ Count = -1; ReportedOnly = $true; Error = $_.Exception.Message }
-        Write-Host ('  [!] No se pudo leer startup: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-PctkWarn ('  [!] No se pudo leer startup: {0}' -f $_.Exception.Message)
     }
 
     # ── 7. Audit (una sola entrada con el resultado completo) ─────────────────
@@ -804,7 +804,7 @@ function Invoke-NamedProfile {
             [object] $b = $MachineProfile.PSObject.Properties[$k]
             if ($null -ne $a -and $null -ne $b -and ([string]$a.Value) -ne ([string]$b.Value)) {
                 $hwChanged = $true
-                Write-Host ("  [AVISO] Hardware cambio ({0}): '{1}' -> '{2}'" -f $k, $a.Value, $b.Value) -ForegroundColor Yellow
+                Write-PctkWarn ("  [AVISO] Hardware cambio ({0}): '{1}' -> '{2}'" -f $k, $a.Value, $b.Value)
             }
         }
     }
@@ -823,7 +823,7 @@ function Invoke-NamedProfile {
         $script:PctkProgressEnabled = $true
         try { Write-Progress -Id 1 -Activity $namedBarAct -Status 'Gaming tweaks...' -PercentComplete 85 } catch { $script:PctkProgressOk = $false }
     }
-    Write-Host '  Aplicando gaming_tweaks...' -ForegroundColor Cyan
+    Write-PctkWork '  Aplicando gaming_tweaks...'
     [PSCustomObject] $gaming = Invoke-ProfileGamingTweaksStep -Profile $Profile -MachineProfile $MachineProfile -Unattended:$Unattended
     if ($ShowProgress -and -not $Unattended -and $script:PctkProgressOk) {
         try { Write-Progress -Id 1 -Activity $namedBarAct -Status 'Gaming tweaks aplicados.' -PercentComplete 98 } catch { $script:PctkProgressOk = $false }
@@ -841,7 +841,7 @@ function Invoke-NamedProfile {
             $laWrite = [PSCustomObject]@{ Done = $true; Path = $SourcePath; Reason = "_last_applied=$appliedAt" }
         } catch {
             $laWrite = [PSCustomObject]@{ Done = $false; Path = $SourcePath; Reason = $_.Exception.Message }
-            Write-Host ("  [!] No se pudo actualizar _last_applied: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+            Write-PctkWarn ("  [!] No se pudo actualizar _last_applied: {0}" -f $_.Exception.Message)
         }
     }
 
@@ -868,7 +868,7 @@ function Invoke-NamedProfile {
         -Details $result
 
     if ($gaming.RebootNeeded) {
-        Write-Host '  [i] HVCI/HAGS aplicados: requieren REINICIO para efecto pleno.' -ForegroundColor Yellow
+        Write-PctkHint '  [i] HVCI/HAGS aplicados: requieren REINICIO para efecto pleno.'
     }
 
     # R7: named es duenio del lifecycle de Write-Progress; emite -Completed UNA vez al final.

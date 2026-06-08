@@ -18,7 +18,7 @@ function Invoke-ExportClientLogs {
 
     # Paso 1: output\ ausente
     if (-not (Test-Path -LiteralPath $outputRoot -PathType Container)) {
-        Write-Host '  [!] No hay output\ -- nada que empaquetar.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] No hay output\ -- nada que empaquetar.'
         Write-ActionAudit -Action 'Logs.Export' -Status 'Empty' -Summary 'output dir missing'
         return [PSCustomObject]@{ Status = 'Empty'; ZipPath = '' }
     }
@@ -36,7 +36,7 @@ function Invoke-ExportClientLogs {
 
     # Paso 3: ninguno poblado
     if (-not $auditOk -and -not $snapshotsOk) {
-        Write-Host '  [!] output\ esta vacio -- nada que empaquetar.' -ForegroundColor Yellow
+        Write-PctkWarn '  [!] output\ esta vacio -- nada que empaquetar.'
         Write-ActionAudit -Action 'Logs.Export' -Status 'Empty' -Summary 'no populated subdirs'
         return [PSCustomObject]@{ Status = 'Empty'; ZipPath = '' }
     }
@@ -65,7 +65,7 @@ function Invoke-ExportClientLogs {
 
     if (-not $desktop -or -not (Test-Path -LiteralPath $desktop -PathType Container)) {
         $desktop = $env:TEMP
-        Write-Host ("  [!] Desktop no resoluble -- usando {0}" -f $desktop) -ForegroundColor Yellow
+        Write-PctkWarn ("  [!] Desktop no resoluble -- usando {0}" -f $desktop)
     }
 
     # Paso 7: manejar colision (cap a 10 intentos)
@@ -91,7 +91,7 @@ function Invoke-ExportClientLogs {
         Compress-Archive -LiteralPath $items -DestinationPath $zipPath -Force -ErrorAction Stop
     } catch {
         [string] $errMsg = $_.Exception.Message
-        Write-Host ('  [!] Error al comprimir: {0}' -f $errMsg) -ForegroundColor Red
+        Write-PctkErr ('  [!] Error al comprimir: {0}' -f $errMsg)
         Write-ActionAudit -Action 'Logs.Export' -Status 'Failed' -Summary $errMsg
         return [PSCustomObject]@{ Status = 'Failed'; ZipPath = ''; Error = $errMsg }
     }
@@ -99,7 +99,7 @@ function Invoke-ExportClientLogs {
     # Paso 9: verificar resultado
     if (-not (Test-Path -LiteralPath $zipPath) -or (Get-Item -LiteralPath $zipPath).Length -eq 0) {
         [string] $errMsg = 'Zip no fue creado o tiene tamanio cero'
-        Write-Host ('  [!] {0}' -f $errMsg) -ForegroundColor Red
+        Write-PctkErr ('  [!] {0}' -f $errMsg)
         Write-ActionAudit -Action 'Logs.Export' -Status 'Failed' -Summary $errMsg
         return [PSCustomObject]@{ Status = 'Failed'; ZipPath = ''; Error = $errMsg }
     }
@@ -119,11 +119,11 @@ function Invoke-ExportClientLogs {
     if ($snapshotsOk) { $includeLines += ('snapshots ({0} archivos)' -f $snapshotFiles.Count) }
 
     Write-Host ''
-    Write-Host '  [OK] Logs empaquetados:' -ForegroundColor Green
+    Write-PctkOk '  [OK] Logs empaquetados:'
     Write-Host ('       Archivo : {0}' -f $zipPath)
     Write-Host ('       Tamanio : {0} MB' -f $sizeMb)
     Write-Host ('       Incluye : {0}' -f ($includeLines -join ', '))
-    Write-Host '  Llevatelo en USB / AnyDesk / cloud.' -ForegroundColor Cyan
+    Write-PctkWork '  Llevatelo en USB / AnyDesk / cloud.'
 
     # Paso 11: audit final
     Write-ActionAudit -Action 'Logs.Export' -Status 'OK' -Summary ([System.IO.Path]::GetFileName($zipPath)) -Details @{

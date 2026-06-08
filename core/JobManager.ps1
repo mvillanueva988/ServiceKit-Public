@@ -102,7 +102,7 @@ function Wait-ToolkitJobs {
     [System.Management.Automation.Job[]] $unfinishedJobs = @($Jobs | Where-Object { $_.State -eq 'Running' -or $_.State -eq 'NotStarted' })
     if ($unfinishedJobs.Count -gt 0) {
         foreach ($job in $unfinishedJobs) {
-            Write-Host ("  [!] Trabajo '{0}' excedio el timeout ({1}s) y sera detenido." -f $job.Name, $TimeoutSeconds) -ForegroundColor Yellow
+            Write-PctkWarn ("  [!] Trabajo '{0}' excedio el timeout ({1}s) y sera detenido." -f $job.Name, $TimeoutSeconds)
             Stop-Job -Job $job -ErrorAction SilentlyContinue
         }
     }
@@ -117,7 +117,7 @@ function Wait-ToolkitJobs {
         [object] $r = if ($job.State -eq 'Failed') {
             [object[]] $childErrors = @($job.ChildJobs | ForEach-Object { $_.Error } | Where-Object { $_ })
             [string] $errMsg = if ($childErrors.Count -gt 0) { $childErrors[0].Exception.Message } else { 'Error desconocido' }
-            Write-Host ("  [!] Trabajo '{0}' fallo: {1}" -f $job.Name, $errMsg) -ForegroundColor Red
+            Write-PctkErr ("  [!] Trabajo '{0}' fallo: {1}" -f $job.Name, $errMsg)
             Receive-Job -Job $job -AutoRemoveJob -Wait -ErrorAction SilentlyContinue
         }
         elseif ($job.State -eq 'Stopped') {
