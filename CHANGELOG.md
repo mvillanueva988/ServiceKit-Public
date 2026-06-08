@@ -2,6 +2,23 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.2.0] - 2026-06-08
+
+Release: tema de consola PCTk (ANSI/VT truecolor con fallback a 16-color) aplicado a TODA la interfaz + agrupado y descripciones en el menu de Inicio `[10]`.
+
+### Added
+
+- **Tema de consola PCTk (`utils/ConsoleTheme.ps1` + adopcion en todo el codigo)**: paleta ambar/slate/teal con banner block, caja doble de info de la PC, firma del operador, headers de seccion, highlight de menu y badges. Usa ANSI/VT truecolor cuando se puede habilitar (`Enable-PctkVT`); si no (Windows viejo / output redirigido) **degrada solo** al estilo clasico de 16-color, sin emitir ANSI crudo. Cost-zero (estatico, sin animacion; pensado para AnyDesk). Capa de helpers de salida (`Write-Pctk*`) adoptada por todos los handlers del Router, el pipeline de perfil `[1]`, la receta nombrada `[2]` y los reportes (compare PRE/POST, BSOD, salud de disco, desinstalacion, export de logs).
+- **Menu de Inicio `[10]` agrupado + descripciones (`core/Router.ps1`, `modules/StartupManager.ps1`)**: las entradas se agrupan ACTIVAS (ON) primero y DESACTIVADAS (OFF) despues; las mas comunes muestran una descripcion corta con sugerencia (dejar / opcional / seguro apagar) via `Get-StartupDescription`. El indice para alternar entradas se mantiene consistente.
+
+### Fixed
+
+- **El menu crasheaba al lanzar con `& main.ps1` (`core/Router.ps1`)**: el `renderHeader` del banner usaba `.GetNewClosure()`, que ata el scriptblock a un modulo dinamico que solo ve funciones globales; con `& main.ps1` (vs `powershell -File`, que es como instala el one-liner real) `Show-MachineBanner` no se resolvia (`CommandNotFoundException`). Fix: scriptblock plano + variable `$script:` (el lookup dinamico encuentra la funcion). No afectaba la instalacion real (siempre via `-File`); es defensa en profundidad. Canary estructural en smoke para que no reincida.
+
+### Notes
+
+- Smoke baseline 138 -> 145 (helpers de tema + canary GetNewClosure + Get-StartupDescription). Pre-gate del ZIP (BOM + parse de los 38 `.ps1`) OK.
+
 ## [2.1.5] - 2026-06-02
 
 Release: fix de robustez en la lectura de disco (timeout honesto en HDD lento) + neutralizacion de EAP=Stop en el backup de drivers (`pnputil`).
