@@ -11,7 +11,8 @@
         "drivers":     "Limpieza y gestion de drivers",
         "limpieza":    "Limpieza profunda de archivos temporales y basura del sistema",
         "setup":       "Scripts de setup y configuracion inicial de Windows",
-        "diagnostico": "Diagnostico de latencia, drivers, timing y profiling GPU"
+        "diagnostico": "Diagnostico de latencia, drivers, timing y profiling GPU",
+        "antimalware": "Scanners antimalware on-demand de segunda opinion (no reemplazan a Defender)"
     },
     "tools": [
         {
@@ -256,6 +257,28 @@
             "url": "https://github.com/Orbmu2k/nvidiaProfileInspector/releases/latest/download/nvidiaProfileInspector.zip",
             "updatePolicy": "latest",
             "approxSizeMB": 2,
+            "sha256": ""
+        },
+        {
+            "name": "kvrt",
+            "category": "antimalware",
+            "description": "Kaspersky Virus Removal Tool - scanner antimalware on-demand de segunda opinion. Portable, no instala ni deja residente. Las firmas vienen embebidas en el binario al momento de la descarga: para un scan con firmas frescas, re-descargar con [F]orce antes de usar.",
+            "filename": "KVRT.exe",
+            "launchExe": "KVRT.exe",
+            "url": "https://devbuilds.s.kaspersky-labs.com/devbuilds/KVRT/latest/full/KVRT.exe",
+            "updatePolicy": "latest",
+            "approxSizeMB": 115,
+            "sha256": ""
+        },
+        {
+            "name": "adwcleaner",
+            "category": "antimalware",
+            "description": "Malwarebytes AdwCleaner - especialista en adware, PUPs, toolbars y hijackers de navegador (el caso tipico de 'la PC anda rara y llena de publicidad'). Portable, liviano, scan + cuarentena en minutos. Segunda opinion, no reemplaza a Defender.",
+            "filename": "adwcleaner.exe",
+            "launchExe": "adwcleaner.exe",
+            "url": "https://downloads.malwarebytes.com/file/adwcleaner",
+            "updatePolicy": "latest",
+            "approxSizeMB": 10,
             "sha256": ""
         }
     ]
