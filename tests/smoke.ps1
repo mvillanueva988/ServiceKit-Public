@@ -1363,10 +1363,10 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice fallback no bloquea (input
         throw ("fallback retorno '$result'; esperado '1'")
     }
 }
-Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 17 items en orden + 2 headers' {
+Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 18 items en orden + 3 headers' {
     [object[]] $rows  = Get-IndividualActionRows
     [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
-    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','B')
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','B')
     if ($items.Count -ne $expectedKeys.Count) {
         throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
     }
@@ -1376,8 +1376,8 @@ Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 17 items en orden + 
         }
     }
     [object[]] $headers = @($rows | Where-Object { $_.Kind -eq 'Header' })
-    if ($headers.Count -ne 2) {
-        throw ('Se esperaban 2 headers; encontrados {0}' -f $headers.Count)
+    if ($headers.Count -ne 3) {
+        throw ('Se esperaban 3 headers; encontrados {0}' -f $headers.Count)
     }
 }
 Test-SmokeFunction 'ConsoleMenu' 'Get-NamedProfileRows: 4 items en orden + 1 header' {
@@ -1482,6 +1482,134 @@ Test-SmokeFunction 'ConsoleTheme' 'Get-PctkKindSpec: shape + 16-color por kind' 
     if ((Get-PctkKindSpec 'err').C16  -ne 'Red')      { throw "kind 'err' C16 != Red" }
     if ((Get-PctkKindSpec 'hint').C16 -ne 'DarkGray') { throw "kind 'hint' C16 != DarkGray" }
     if ((Get-PctkKindSpec 'zzz').C16  -ne 'Gray')     { throw "kind desconocido C16 != Gray (default value)" }
+}
+
+# ─── DiskMaintenance: Resolve-VolumeMaintenanceOp (funcion pura) ─────────────
+Test-SmokeFunction 'DiskMaintenance' 'Resolve-VolumeMaintenanceOp: SSD->ReTrim' {
+    $ErrorActionPreference = 'Stop'
+    $r = Resolve-VolumeMaintenanceOp -MediaTypeLabel 'SSD'
+    if ($r.Op -ne 'ReTrim') { throw "SSD: Op esperado ReTrim; got $($r.Op)" }
+    if ([string]::IsNullOrWhiteSpace($r.Reason)) { throw 'SSD: Reason vacia' }
+}
+Test-SmokeFunction 'DiskMaintenance' 'Resolve-VolumeMaintenanceOp: HDD->Defrag' {
+    $ErrorActionPreference = 'Stop'
+    $r = Resolve-VolumeMaintenanceOp -MediaTypeLabel 'HDD'
+    if ($r.Op -ne 'Defrag') { throw "HDD: Op esperado Defrag; got $($r.Op)" }
+    if ([string]::IsNullOrWhiteSpace($r.Reason)) { throw 'HDD: Reason vacia' }
+}
+Test-SmokeFunction 'DiskMaintenance' 'Resolve-VolumeMaintenanceOp: SCM->Skip' {
+    $ErrorActionPreference = 'Stop'
+    $r = Resolve-VolumeMaintenanceOp -MediaTypeLabel 'SCM'
+    if ($r.Op -ne 'Skip') { throw "SCM: Op esperado Skip; got $($r.Op)" }
+    if ([string]::IsNullOrWhiteSpace($r.Reason)) { throw 'SCM: Reason vacia' }
+}
+Test-SmokeFunction 'DiskMaintenance' 'Resolve-VolumeMaintenanceOp: Desconocido->Skip' {
+    $ErrorActionPreference = 'Stop'
+    $r = Resolve-VolumeMaintenanceOp -MediaTypeLabel 'Desconocido'
+    if ($r.Op -ne 'Skip') { throw "Desconocido: Op esperado Skip; got $($r.Op)" }
+    if ([string]::IsNullOrWhiteSpace($r.Reason)) { throw 'Desconocido: Reason vacia' }
+}
+Test-SmokeFunction 'DiskMaintenance' 'Resolve-VolumeMaintenanceOp: vacio->Skip' {
+    $ErrorActionPreference = 'Stop'
+    $r = Resolve-VolumeMaintenanceOp -MediaTypeLabel ''
+    if ($r.Op -ne 'Skip') { throw "Vacio: Op esperado Skip; got $($r.Op)" }
+    if ([string]::IsNullOrWhiteSpace($r.Reason)) { throw 'Vacio: Reason vacia' }
+}
+Test-SmokeFunction 'DiskMaintenance' 'Resolve-VolumeMaintenanceOp: valor arbitrario->Skip' {
+    $ErrorActionPreference = 'Stop'
+    $r = Resolve-VolumeMaintenanceOp -MediaTypeLabel 'cualquiercosa'
+    if ($r.Op -ne 'Skip') { throw "Arbitrario: Op esperado Skip; got $($r.Op)" }
+    if ([string]::IsNullOrWhiteSpace($r.Reason)) { throw 'Arbitrario: Reason vacia' }
+}
+
+# ─── DiskMaintenance: Get-VolumeMaintenancePlan (read-only, live) ─────────────
+# Canario de trampa StrictMode: la dev-PC tipica tiene 1-2 volumenes. Con
+# @(...) forzamos array para el caso de exactamente 1 elemento.
+Test-SmokeFunction 'DiskMaintenance' 'Get-VolumeMaintenancePlan: no lanza + shape correcto' {
+    $ErrorActionPreference = 'Stop'
+    # Forzar @(...) para proteger contra trampa StrictMode de 1 elemento
+    [object[]] $plan = @(Get-VolumeMaintenancePlan)
+    # En Sandbox/VM puede ser vacio (todo Skip antes del filtro, o sin volumenes fijos)
+    foreach ($item in $plan) {
+        [string[]] $requiredProps = @('DriveLetter','Label','SizeGb','MediaType','Op','Reason')
+        foreach ($p in $requiredProps) {
+            if ($null -eq $item.PSObject.Properties[$p]) {
+                throw ("Volumen sin propiedad '$p'")
+            }
+        }
+        [string] $op = [string]$item.Op
+        if ($op -ne 'ReTrim' -and $op -ne 'Defrag' -and $op -ne 'Skip') {
+            throw ("Op inesperada: '$op'")
+        }
+    }
+}
+
+# ─── DiskMaintenance: Get-WindowsDefragTaskStatus (read-only) ─────────────────
+Test-SmokeFunction 'DiskMaintenance' 'Get-WindowsDefragTaskStatus: no lanza + shape o null' {
+    $ErrorActionPreference = 'Stop'
+    $r = Get-WindowsDefragTaskStatus
+    if ($null -ne $r) {
+        if ($null -eq $r.PSObject.Properties['Exists'])      { throw 'Get-WindowsDefragTaskStatus: falta propiedad Exists' }
+        if ($null -eq $r.PSObject.Properties['State'])       { throw 'Get-WindowsDefragTaskStatus: falta propiedad State' }
+        if ($null -eq $r.PSObject.Properties['LastRunTime']) { throw 'Get-WindowsDefragTaskStatus: falta propiedad LastRunTime' }
+    }
+}
+
+# ─── DiskMaintenance: canario estructural dispatch ────────────────────────────
+Test-SmokeFunction 'DiskMaintenance' 'handler [17] DiskMaintenance: dispatch rutea correctamente' {
+    $ErrorActionPreference = 'Stop'
+    $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'17'\s*\{\s*Invoke-ActionDiskMaintenance") {
+        throw 'dispatch no rutea [17] -> Invoke-ActionDiskMaintenance'
+    }
+}
+
+# ─── DiskMaintenance: canario de NO-mutacion del smoke ───────────────────────
+# El smoke NUNCA debe llamar Invoke-VolumeMaintenance ni Start-DiskMaintenanceProcess
+# (solo las funciones read-only y la pura). Buscamos lineas con llamadas directas:
+# la funcion aparece al inicio de la expresion (precedida por espacio o comienzo
+# de linea) sin estar dentro de un -match/-notmatch (que solo la referencia como string).
+Test-SmokeFunction 'DiskMaintenance' 'smoke no llama funciones mutantes de DiskMaintenance' {
+    $ErrorActionPreference = 'Stop'
+    [string] $smokePath = $PSCommandPath
+    [string[]] $smokeLines = @(Get-Content -LiteralPath $smokePath -Encoding UTF8)
+    foreach ($mutantFn in @('Invoke-VolumeMaintenance', 'Start-DiskMaintenanceProcess')) {
+        # Buscar lineas donde la funcion aparece como llamada real (no como literal de string en -match/-notmatch)
+        [object[]] $callLines = @($smokeLines | Where-Object {
+            $_ -match "\b$([regex]::Escape($mutantFn))\b" -and
+            $_.TrimStart() -notmatch '^#' -and
+            $_ -notmatch '-match\s' -and
+            $_ -notmatch '-notmatch\s' -and
+            $_ -notmatch "'\s*$([regex]::Escape($mutantFn))" -and
+            $_ -notmatch "@'\s*$([regex]::Escape($mutantFn))"
+        })
+        if ($callLines.Count -gt 0) {
+            throw "smoke.ps1 llama a $mutantFn (funcion mutante): $($callLines[0].Trim())"
+        }
+    }
+}
+
+# ─── ToolsManifest: antimalware ───────────────────────────────────────────────
+Test-SmokeFunction 'ToolsManifest' 'manifest: kvrt + adwcleaner con categoria antimalware' {
+    $ErrorActionPreference = 'Stop'
+    [string] $manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\manifest.json'
+    $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($toolName in @('kvrt', 'adwcleaner')) {
+        $tool = $m.tools | Where-Object { $_.name -eq $toolName } | Select-Object -First 1
+        if ($null -eq $tool)                                          { throw "Tool '$toolName' no encontrada en manifest" }
+        if ([string]$tool.category -ne 'antimalware')                 { throw "Tool '$toolName': category esperado 'antimalware'; got '$($tool.category)'" }
+        if ([string]::IsNullOrWhiteSpace([string]$tool.url))          { throw "Tool '$toolName': url vacia" }
+        if ([string]$tool.updatePolicy -ne 'latest')                  { throw "Tool '$toolName': updatePolicy esperado 'latest'; got '$($tool.updatePolicy)'" }
+        if (-not ($tool.PSObject.Properties['approxSizeMB']) -or [int]$tool.approxSizeMB -le 0) { throw "Tool '$toolName': approxSizeMB debe ser > 0" }
+    }
+}
+Test-SmokeFunction 'ToolsManifest' 'manifest: categoria antimalware existe' {
+    $ErrorActionPreference = 'Stop'
+    [string] $manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\manifest.json'
+    $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($null -eq $m.categories.PSObject.Properties['antimalware']) {
+        throw "categoria 'antimalware' no encontrada en manifest.categories"
+    }
 }
 
 # ─── Reporte ──────────────────────────────────────────────────────────────────
