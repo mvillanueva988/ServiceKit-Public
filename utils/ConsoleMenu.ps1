@@ -54,6 +54,9 @@ function Get-IndividualActionRows {
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '15';  Label = '  [15] Prioridad de proceso por .exe (IFEO)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '16';  Label = '  [16] USB Selective Suspend'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  DISCO'; Color = 'DarkCyan' }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '17';  Label = '  [17] Mantenimiento de discos (TRIM SSD / defrag HDD)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver al menu principal'; Color = 'DarkYellow' }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
     return $rows
@@ -158,7 +161,7 @@ function Read-PctkMenuChoice {
     [int[]] $itemY   = [int[]]::new($items.Count)   # Y de consola de cada Item
     [int]   $bottomY = 0
     [bool]   $full   = $true                        # true -> redibujo completo este frame
-    [string] $buffer = ''                           # acumulador de atajo multi-caracter (ej. 10-16)
+    [string] $buffer = ''                           # acumulador de atajo multi-caracter (ej. 10-17)
 
     while ($true) {
         if ($full) {
@@ -219,8 +222,8 @@ function Read-PctkMenuChoice {
         if ($key.Key -eq [ConsoleKey]::Enter -or $key.Key -eq [ConsoleKey]::RightArrow) {
             return [string]$items[$hiIdx].Key
         }
-        # Atajo por tecla. Soporta keys de varios caracteres (ej. 10-16): un
-        # digito ambiguo ('1') NO elige solo (es prefijo de 10-16); acumula y
+        # Atajo por tecla. Soporta keys de varios caracteres (ej. 10-17): un
+        # digito ambiguo ('1') NO elige solo (es prefijo de 10-17); acumula y
         # mueve el highlight, y se completa con el 2do digito ('12') o se
         # confirma con Enter. Los no ambiguos (2-9, B) eligen al toque.
         if ($key.KeyChar -ne [char]0) {

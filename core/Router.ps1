@@ -667,6 +667,7 @@ function Invoke-IndividualActionDispatch {
         '14' { Invoke-ActionTimerResolution -MachineProfile $MachineProfile; return }
         '15' { Invoke-ActionProcessPriority -MachineProfile $MachineProfile; return }
         '16' { Invoke-ActionUsbPower        -MachineProfile $MachineProfile; return }
+        '17' { Invoke-ActionDiskMaintenance -MachineProfile $MachineProfile; return }
         default {
             Write-PctkErr '  Opcion invalida.'
         }
@@ -1583,6 +1584,98 @@ function Invoke-ActionUsbPower {
     Write-PctkWork '  Aplicando USB Selective Suspend...'
     if ($disable) { $r = Disable-UsbSelectiveSuspend } else { $r = Enable-UsbSelectiveSuspend }
     Show-OrphanModuleResult -Action 'UsbPower' -Result $r
+}
+
+function Invoke-ActionDiskMaintenance {
+    <#
+    .SYNOPSIS
+        Handler [A][17]. Muestra plan de TRIM/defrag por volumen, pide confirmacion
+        y lanza el job. TRIM para SSD (segundos), defrag para HDD (minutos).
+        GUARDRAIL: nunca defragmenta un SSD.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    Write-PctkActionTitle 'MANTENIMIENTO DE DISCOS (TRIM / defrag)'
+
+    # 1. Plan por volumen
+    [object[]] $plan = @(Get-VolumeMaintenancePlan)
+
+    foreach ($item in $plan) {
+        [string] $sizeLabel = if ($item.SizeGb -gt 0) { ('{0:N1} GB' -f $item.SizeGb) } else { '? GB' }
+        [string] $lineLabel  = if (-not [string]::IsNullOrWhiteSpace($item.Label)) { " ($($item.Label))" } else { '' }
+        if ($item.Op -eq 'Skip') {
+            Write-PctkLine ("  {0}:{1}  {2}  [{3}]  -> SKIP: {4}" -f $item.DriveLetter, $lineLabel, $sizeLabel, $item.MediaType, $item.Reason) 'hint'
+        } else {
+            Write-PctkLine ("  {0}:{1}  {2}  [{3}]  -> {4}" -f $item.DriveLetter, $lineLabel, $sizeLabel, $item.MediaType, $item.Op) 'ok'
+        }
+    }
+
+    # 2. Informacion de la tarea programada de Windows
+    $defragTask = Get-WindowsDefragTaskStatus
+    if ($null -ne $defragTask -and $defragTask.Exists) {
+        [string] $lastRun = if ($null -ne $defragTask.LastRunTime) { [string]$defragTask.LastRunTime } else { 'desconocida' }
+        Write-PctkHint ("  [i] Windows ya optimiza automaticamente (tarea programada {0}, ultima corrida {1}). Esta corrida manual es para hacerlo AHORA y verificarlo." -f $defragTask.State, $lastRun)
+    }
+
+    # 3. Filtrar accionables
+    [object[]] $actionable = @($plan | Where-Object { $_.Op -eq 'ReTrim' -or $_.Op -eq 'Defrag' })
+
+    if ($actionable.Count -eq 0) {
+        Write-PctkWarn '  Sin volumenes accionables (tipo de disco no determinado). En hardware real esto no deberia pasar.'
+        Write-ActionAudit -Action 'DiskMaintenance' -Status 'Skipped' -Summary 'Sin volumenes accionables'
+        return
+    }
+
+    # 4. Confirmar
+    [string[]] $confirmLines = @($actionable | ForEach-Object {
+        [string] $sz = if ($_.SizeGb -gt 0) { ('{0:N1} GB' -f $_.SizeGb) } else { '? GB' }
+        ('{0}: [{1}] {2}' -f $_.DriveLetter, $_.MediaType, $_.Op)
+    })
+    $confirmLines += 'TRIM en SSD tarda segundos.'
+    $confirmLines += 'defrag en HDD puede tardar 10-60+ min segun tamano/fragmentacion; es interrumpible sin riesgo.'
+
+    if (-not (Confirm-Action -Title ('Optimizar {0} volumen(es)?' -f $actionable.Count) -Lines $confirmLines)) {
+        Write-PctkHint '  Cancelado.'
+        Write-ActionAudit -Action 'DiskMaintenance' -Status 'Cancelled'
+        return
+    }
+
+    # 5. Ejecutar en job
+    Write-ActionAudit -Action 'DiskMaintenance' -Status 'Started' -Summary ('Volumes={0}' -f $actionable.Count)
+    Write-PctkWork '  Ejecutando TRIM/defrag...'
+    $job = Start-DiskMaintenanceProcess -Plan $actionable
+    [object[]] $results = @((Invoke-JobWithProgress -Jobs @($job) -Activity 'TRIM/defrag' -TimeoutSeconds 3600)[0])
+
+    # 6. Resumen
+    [int] $okCount   = 0
+    [int] $failCount = 0
+    [int] $retrimCount = 0
+    [int] $defragCount = 0
+
+    if ($null -ne $results -and $results.Count -gt 0) {
+        foreach ($res in $results) {
+            if ($null -eq $res) { continue }
+            if ($res.PSObject.Properties['Success'] -and [bool]$res.Success) {
+                $okCount++
+                if ([string]$res.Op -eq 'ReTrim') { $retrimCount++ }
+                if ([string]$res.Op -eq 'Defrag')  { $defragCount++ }
+                Write-PctkOk ('  [OK] {0}: {1}' -f $res.DriveLetter, $res.Op)
+            } else {
+                $failCount++
+                [string] $errMsg = if ($res.PSObject.Properties['Error'] -and -not [string]::IsNullOrWhiteSpace([string]$res.Error)) { [string]$res.Error } else { 'error desconocido' }
+                Write-PctkWarn ('  [FAIL] {0}: {1} - {2}' -f $res.DriveLetter, $res.Op, $errMsg)
+            }
+        }
+    }
+
+    [string] $summary = ('ReTrim={0} Defrag={1} Fail={2}' -f $retrimCount, $defragCount, $failCount)
+    if ($failCount -eq 0) {
+        Write-ActionAudit -Action 'DiskMaintenance' -Status 'Success' -Summary $summary
+    } else {
+        Write-ActionAudit -Action 'DiskMaintenance' -Status 'Failed' -Summary $summary
+    }
 }
 
 # ─── Invoke-ApplyAutoProfile (handler [1] del menu principal) ────────────────
