@@ -1648,6 +1648,14 @@ function Invoke-ActionDiskMaintenance {
     $job = Start-DiskMaintenanceProcess -Plan $actionable
     [object[]] $results = @((Invoke-JobWithProgress -Jobs @($job) -Activity 'TRIM/defrag' -TimeoutSeconds 3600)[0])
 
+    # Guard sin-resultado (idiom de la casa, como Debloat): timeout/crash del
+    # job NO debe caer al resumen con 0 contadores y auditar Success.
+    if ($results.Count -eq 0 -or ($results.Count -eq 1 -and $null -eq $results[0])) {
+        Write-PctkWarn '  [!] Sin resultado del trabajo (timeout o fallo).'
+        Write-ActionAudit -Action 'DiskMaintenance' -Status 'Failed' -Summary 'No result'
+        return
+    }
+
     # 6. Resumen
     [int] $okCount   = 0
     [int] $failCount = 0
