@@ -536,21 +536,58 @@ function Invoke-AutoProfile {
             Copy-Item -LiteralPath $postSnap.FilePath -Destination (Join-Path $runDir 'post.json') -ErrorAction SilentlyContinue
         }
 
+        # Reporte HTML para el cliente (defensivo: fallo no rompe el run)
+        [string] $htmlReportPath = Join-Path $runDir 'reporte-cliente.html'
+        try {
+            # Construir un Result parcial con las piezas disponibles en este punto.
+            # $fullResult todavia no existe; se pasan las piezas directamente.
+            [PSCustomObject] $partialResult = [PSCustomObject]@{
+                RestorePoint = $rpResult
+                Debloat      = $debloatR
+                Cleanup      = $cleanupR
+                Performance  = $perfR
+                Privacy      = $privResult
+                PostSnapshot = $postSnap
+                Compare      = $compareR
+                Startup      = $null
+                ClientRun    = $null
+            }
+            # Resolver snapshot POST desde el archivo copiado si esta disponible
+            [PSCustomObject] $postSnapObj = $null
+            [string] $postJsonPath = Join-Path $runDir 'post.json'
+            if (Test-Path -LiteralPath $postJsonPath) {
+                try {
+                    $postSnapObj = Get-Content -LiteralPath $postJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                } catch { $postSnapObj = $null }
+            }
+            $null = New-ClientReport `
+                -Result       $partialResult `
+                -PostSnapshot $postSnapObj `
+                -Compare      $compareR `
+                -OutputPath   $htmlReportPath
+            Write-PctkOk ('  [OK] Reporte cliente: {0}' -f $htmlReportPath)
+        } catch {
+            Write-PctkWarn ('  [!] Reporte HTML no generado: {0}' -f $_.Exception.Message)
+            $htmlReportPath = ''
+        }
+
         $clientRun = [PSCustomObject]@{
-            Slug       = $runSlug
-            Dir        = $runDir
-            ReportPath = $reportPath
-            MetaPath   = $metaPath
-            WriteError = ''
+            Slug           = $runSlug
+            Dir            = $runDir
+            ReportPath     = $reportPath
+            MetaPath       = $metaPath
+            ReportHtmlPath = $htmlReportPath
+            WriteError     = ''
         }
         Write-PctkOk ('  [OK] Carpeta de run: {0}' -f $runDir)
     } catch {
         $clientRun = [PSCustomObject]@{
-            Slug       = $ClientSlug
-            Dir        = ''
-            ReportPath = ''
-            MetaPath   = ''
-            WriteError = $_.Exception.Message
+            Slug           = $ClientSlug
+            Dir            = ''
+            ReportPath     = ''
+            MetaPath       = ''
+            ReportHtmlPath = ''
+            WriteError     = $_.Exception.Message
         }
         Write-PctkWarn ('  [!] No se pudo escribir la carpeta de run: {0}' -f $_.Exception.Message)
     }

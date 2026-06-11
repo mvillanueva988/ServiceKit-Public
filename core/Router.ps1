@@ -223,6 +223,7 @@ function Invoke-MainMenuDispatch {
         '5' { Invoke-DiagnosticCompare  -MachineProfile $MachineProfile; return }
         '6' { Invoke-DiagnosticBsod     -MachineProfile $MachineProfile; return }
         '7' { Invoke-DiagnosticDiskHealth -MachineProfile $MachineProfile; return }
+        '8' { Invoke-ClientReport -MachineProfile $MachineProfile; return }
         'R' { Invoke-ResearchPrompt -MachineProfile $MachineProfile; return }
         'A' {
             Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
@@ -317,6 +318,67 @@ function Invoke-DiagnosticDiskHealth {
     catch {
         Write-PctkWarn ('  [!] {0}' -f $_.Exception.Message)
         Write-ActionAudit -Action 'Diagnostics.DiskHealth' -Status 'Failed' -Summary $_.Exception.Message
+    }
+}
+
+# ─── Reporte cliente handler (menu [8]) ──────────────────────────────────────
+
+function Invoke-ClientReport {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    Write-ActionAudit -Action 'Report.Client' -Status 'Started'
+    Write-PctkWork '  Preparando reporte para el cliente...'
+
+    # Directorio de salida
+    [string] $reportsDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'output\reports'
+    if (-not (Test-Path -LiteralPath $reportsDir)) {
+        $null = New-Item -ItemType Directory -Path $reportsDir -Force
+    }
+    [string] $stamp    = (Get-Date -Format 'yyyy-MM-dd_HHmmss')
+    [string] $outPath  = Join-Path $reportsDir ('reporte-cliente_{0}.html' -f $stamp)
+
+    # Intentar Compare desde ultimos PRE/POST
+    [PSCustomObject] $compareResult = $null
+    try {
+        $compareResult = Compare-Snapshot
+    } catch {
+        Write-PctkHint ('  [i] Compare no disponible: {0}' -f $_.Exception.Message)
+    }
+
+    # Leer POST mas reciente para la ficha del equipo
+    [PSCustomObject] $postSnap = $null
+    try {
+        [string] $snapshotsDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'output\snapshots'
+        if (Test-Path -LiteralPath $snapshotsDir) {
+            [object[]] $postFiles = @(Get-ChildItem -Path $snapshotsDir -Filter '*_post.json' -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending)
+            if ($postFiles.Count -gt 0) {
+                $postSnap = Get-Content -LiteralPath $postFiles[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            }
+        }
+    } catch {
+        Write-PctkHint ('  [i] Snapshot POST no encontrado: {0}' -f $_.Exception.Message)
+    }
+
+    try {
+        $r = New-ClientReport `
+            -PostSnapshot $postSnap `
+            -Compare      $compareResult `
+            -OutputPath   $outPath `
+            -OpenAfter
+
+        if ($r.Success) {
+            Write-PctkOk ('  [OK] Reporte generado: {0}' -f $r.FilePath)
+            Write-ActionAudit -Action 'Report.Client' -Status 'Success' -Summary $r.FilePath
+        } else {
+            Write-PctkWarn '  [!] El reporte no pudo generarse.'
+            Write-ActionAudit -Action 'Report.Client' -Status 'Failed' -Summary 'New-ClientReport retorno Success=false'
+        }
+    } catch {
+        Write-PctkWarn ('  [!] Error al generar reporte: {0}' -f $_.Exception.Message)
+        Write-ActionAudit -Action 'Report.Client' -Status 'Failed' -Summary $_.Exception.Message
     }
 }
 

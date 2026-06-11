@@ -15,6 +15,7 @@ function Get-MainMenuRows {
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '5';   Label = '  [5]  Comparar PRE vs POST';             Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '6';   Label = '  [6]  Historial de BSOD / Crashes';      Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '7';   Label = '  [7]  Salud de discos (SMART / wear)';   Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '8';   Label = '  [8]  Reporte para el cliente           (HTML para mostrar/imprimir)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'R';   Label = '  [R]  Generar prompt de research        (para LLM con web search)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = '';                    Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  ACCIONES MANUALES';  Color = 'DarkCyan' }

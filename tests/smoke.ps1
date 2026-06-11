@@ -1344,10 +1344,10 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice presente' {
         throw 'Read-PctkMenuChoice no encontrado'
     }
 }
-Test-SmokeFunction 'ConsoleMenu' 'Get-MainMenuRows: 13 items en orden + 4 headers' {
+Test-SmokeFunction 'ConsoleMenu' 'Get-MainMenuRows: 14 items en orden + 4 headers' {
     [object[]] $rows  = Get-MainMenuRows
     [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
-    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','R','A','T','L','X','U')
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','R','A','T','L','X','U')
     if ($items.Count -ne $expectedKeys.Count) {
         throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
     }
@@ -1779,6 +1779,145 @@ Test-SmokeFunction 'HwAdvisories' 'Get-MachineProfile expone Advisories como [st
     if ($null -eq $mp.PSObject.Properties['Advisories']) { throw 'falta propiedad Advisories' }
     [object[]] $a = @($mp.Advisories)
     foreach ($x in $a) { if ($x -isnot [string]) { throw 'Advisories debe contener solo strings' } }
+}
+
+# ─── ClientReport: New-ClientReport + Invoke-ClientReport ────────────────────
+Test-SmokeFunction 'ClientReport' 'New-ClientReport e Invoke-ClientReport definidas' {
+    foreach ($fn in @('New-ClientReport', 'Invoke-ClientReport')) {
+        if ($null -eq (Get-Command $fn -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw "$fn no encontrado"
+        }
+    }
+}
+
+Test-SmokeFunction 'ClientReport' 'New-ClientReport: HTML valido desde fixture completo' {
+    $ErrorActionPreference = 'Stop'
+
+    # Fixture POST snapshot (1 disco, 1 GPU -- canario 1-elemento StrictMode)
+    [PSCustomObject] $postSnap = [PSCustomObject]@{
+        ComputerName = 'PC-SMOKE'
+        CPU          = [PSCustomObject]@{ Name = 'Intel Core i5-12400'; Cores = 6; Threads = 12 }
+        RamTotalGb   = 16
+        RamSlots     = @([PSCustomObject]@{ Slot = 'DIMM1'; CapacityGb = 16; SpeedMhz = 3200; Manufacturer = 'Kingston' })
+        GPU          = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060'; Type = 'Dedicated'; DriverVersion = '555.0' })
+        Disks        = @([PSCustomObject]@{ Name = 'Samsung 870 EVO'; MediaType = 'SSD'; SizeGb = 500; HealthStatus = 'Healthy'; TempC = 38; WearPct = 12 })
+        Volumes      = @([PSCustomObject]@{ Letter = 'C'; Label = 'Sistema'; SizeGb = 500; FreeGb = 280; UsedPct = 44 })
+        Battery      = $null
+        PowerPlan    = $null
+    }
+
+    # Fixture Compare
+    [PSCustomObject] $cmp = [PSCustomObject]@{
+        PreRunningCount  = 120
+        PostRunningCount = 95
+        ServicesDelta    = -25
+        VolumeDiff       = @([PSCustomObject]@{ Letter = 'C'; SpaceFreedGb = 8.5; PreFreeGb = 271.5; PostFreeGb = 280.0; PreUsedPct = 46; PostUsedPct = 44 })
+        TotalFreedGb     = 8.5
+        BloatFixed       = @()
+        StartupDelta     = 0
+        PreStartupCount  = 12
+        PostStartupCount = 12
+        AvFixed          = $false
+        Rebooted         = $true
+        Score            = 5
+        ScoreMax         = 6
+        Improvements     = @()
+    }
+
+    # Fixture Result parcial
+    [PSCustomObject] $result = [PSCustomObject]@{
+        RestorePoint = [PSCustomObject]@{ Done = $true }
+        Debloat      = [PSCustomObject]@{ Disabled = 18; TotalTargeted = 30 }
+        Cleanup      = [PSCustomObject]@{ FreedGB = 8.5 }
+        Performance  = [PSCustomObject]@{ Done = $true }
+        Privacy      = [PSCustomObject]@{ Success = $true; Path = 'oosu' }
+        PostSnapshot = [PSCustomObject]@{ Ok = $false }
+        Compare      = $cmp
+        Startup      = [PSCustomObject]@{ Count = 12; ReportedOnly = $true }
+        ClientRun    = $null
+    }
+
+    [string] $tmp = Join-Path $env:TEMP ('pctk-cr-smoke-' + [System.IO.Path]::GetRandomFileName() + '.html')
+    try {
+        $r = New-ClientReport -Result $result -PostSnapshot $postSnap -Compare $cmp -OutputPath $tmp
+        if (-not $r.Success)               { throw 'New-ClientReport retorno Success=false' }
+        if (-not (Test-Path -LiteralPath $tmp)) { throw 'Archivo HTML no creado' }
+        [string] $body = Get-Content -LiteralPath $tmp -Raw -Encoding UTF8
+        # Titulos de seccion
+        foreach ($expected in @('Tu equipo','Que hicimos','Antes y despues')) {
+            if ($body -notmatch [regex]::Escape($expected)) {
+                throw ("HTML no contiene seccion '{0}'" -f $expected)
+            }
+        }
+        # Datos del fixture visibles
+        if ($body -notmatch 'Intel Core i5') { throw 'CPU no aparece en el HTML' }
+        if ($body -notmatch '8.5')           { throw 'GB liberados no aparece en el HTML' }
+        if ($body -notmatch 'PC-SMOKE')      { throw 'ComputerName no aparece en el HTML' }
+        # Sin placeholders sin sustituir
+        if ($body -match '\$\{') { throw 'HTML contiene placeholders sin sustituir' }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+Test-SmokeFunction 'ClientReport' 'New-ClientReport: honestidad - sin PRE/POST no hay panel Antes/Despues' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmp = Join-Path $env:TEMP ('pctk-cr-nopre-' + [System.IO.Path]::GetRandomFileName() + '.html')
+    try {
+        # Solo un result minimo, sin Compare
+        [PSCustomObject] $result = [PSCustomObject]@{
+            RestorePoint = [PSCustomObject]@{ Done = $false }
+            Debloat      = $null
+            Cleanup      = $null
+            Performance  = $null
+            Privacy      = [PSCustomObject]@{ Success = $false }
+            PostSnapshot = [PSCustomObject]@{ Ok = $false }
+            Compare      = $null
+            Startup      = $null
+            ClientRun    = $null
+        }
+        $r = New-ClientReport -Result $result -Compare $null -OutputPath $tmp
+        if (-not $r.Success)               { throw 'New-ClientReport retorno Success=false' }
+        if (-not (Test-Path -LiteralPath $tmp)) { throw 'Archivo HTML no creado' }
+        [string] $body = Get-Content -LiteralPath $tmp -Raw -Encoding UTF8
+        # El panel Antes y Despues aparece con nota suave (no desaparece, se rinde con mensaje)
+        if ($body -notmatch 'Antes y despues') { throw 'Seccion Antes y Despues ausente del HTML' }
+        if ($body -notmatch 'no disponible')   { throw 'Nota suave de compare ausente' }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+Test-SmokeFunction 'ClientReport' 'New-ClientReport: fixture 1 disco + 1 GPU no lanza bajo StrictMode' {
+    # Canario trampa @() en if con 1-elemento: GPU[0] y Disks[0] bajo EAP=Stop + StrictMode
+    $ErrorActionPreference = 'Stop'
+    [PSCustomObject] $postSnap = [PSCustomObject]@{
+        ComputerName = 'PC-1SLOT'
+        CPU          = [PSCustomObject]@{ Name = 'AMD Ryzen 5 5600'; Cores = 6; Threads = 12 }
+        RamTotalGb   = 8
+        RamSlots     = @([PSCustomObject]@{ Slot = 'DIMM0'; CapacityGb = 8; SpeedMhz = 3200; Manufacturer = 'Unknown' })
+        GPU          = @([PSCustomObject]@{ Name = 'AMD Radeon RX 6600'; Type = 'Dedicated'; DriverVersion = '24.0' })
+        Disks        = @([PSCustomObject]@{ Name = 'WD Blue 1TB'; MediaType = 'HDD'; SizeGb = 1000; HealthStatus = 'Healthy'; TempC = 32; WearPct = 0 })
+        Volumes      = @([PSCustomObject]@{ Letter = 'C'; Label = ''; SizeGb = 1000; FreeGb = 400; UsedPct = 60 })
+        Battery      = $null
+        PowerPlan    = $null
+    }
+    [string] $tmp = Join-Path $env:TEMP ('pctk-cr-1slot-' + [System.IO.Path]::GetRandomFileName() + '.html')
+    try {
+        $r = New-ClientReport -PostSnapshot $postSnap -OutputPath $tmp
+        if (-not $r.Success) { throw 'fallo con fixture de 1 elemento' }
+        if (-not (Test-Path -LiteralPath $tmp)) { throw 'Archivo HTML no creado' }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+Test-SmokeFunction 'ClientReport' 'Router [8] rutea a Invoke-ClientReport' {
+    $ErrorActionPreference = 'Stop'
+    [string] $dispDef = (Get-Command Invoke-MainMenuDispatch -CommandType Function).Definition
+    if ($dispDef -notmatch "'8'\s*\{\s*Invoke-ClientReport") {
+        throw 'dispatch [8] no rutea a Invoke-ClientReport'
+    }
 }
 
 # ─── Reporte ──────────────────────────────────────────────────────────────────
