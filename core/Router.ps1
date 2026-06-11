@@ -668,6 +668,7 @@ function Invoke-IndividualActionDispatch {
         '15' { Invoke-ActionProcessPriority -MachineProfile $MachineProfile; return }
         '16' { Invoke-ActionUsbPower        -MachineProfile $MachineProfile; return }
         '17' { Invoke-ActionDiskMaintenance -MachineProfile $MachineProfile; return }
+        '18' { Invoke-ActionEncryption      -MachineProfile $MachineProfile; return }
         default {
             Write-PctkErr '  Opcion invalida.'
         }
@@ -1409,6 +1410,11 @@ function Invoke-ActionCoreIsolation {
             Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled'
             return
         }
+        if (-not (Invoke-EncryptionGate)) {
+            Write-PctkHint '  Cancelado por gate de encriptacion.'
+            Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled' -Summary 'encryption gate abort'
+            return
+        }
         Write-ActionAudit -Action 'CoreIsolation' -Status 'Started' -Summary ('Disable HVCI VbsToo={0}' -f $vbsToo)
         Write-PctkWork '  Deshabilitando HVCI...'
         if ($vbsToo) { $r = Disable-Hvci -DisableVbsToo } else { $r = Disable-Hvci }
@@ -1424,12 +1430,147 @@ function Invoke-ActionCoreIsolation {
             Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled'
             return
         }
+        if (-not (Invoke-EncryptionGate)) {
+            Write-PctkHint '  Cancelado por gate de encriptacion.'
+            Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled' -Summary 'encryption gate abort'
+            return
+        }
         Write-ActionAudit -Action 'CoreIsolation' -Status 'Started' -Summary 'Enable HVCI+VBS'
         Write-PctkWork '  Habilitando HVCI + VBS...'
         $r = Enable-Hvci
         Show-OrphanModuleResult -Action 'CoreIsolation' -Result $r
         return
     }
+    Write-PctkHint '  Cancelado.'
+}
+
+# ─── Encriptacion ([A][18]) + gate pre-HVCI ───────────────────────────────────
+function Show-RecoveryKeysOnScreen {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [object[]] $Keys)
+    Write-Host ''
+    Write-PctkSection '  CLAVE(S) DE RECUPERACION - FOTOGRAFIALA / ANOTALA AHORA'
+    foreach ($k in $Keys) {
+        Write-Host ('  Key ID : {0}' -f $k.KeyId8) -ForegroundColor Yellow
+        Write-Host ('  Clave  : {0}' -f $k.RecoveryPassword) -ForegroundColor Yellow
+        Write-Host ''
+    }
+    Write-PctkHint '  Matchea por Key ID en account.microsoft.com/devices/recoverykey.'
+}
+
+function Invoke-EncryptionGate {
+    <#
+    .SYNOPSIS
+        Gate read-only ANTES de tocar HVCI. Si el disco esta cifrado, captura la
+        clave (la muestra + la guarda) y deja pasar. Si no se puede capturar
+        (sin recovery protector), frena con confirmar (default No). Devuelve
+        $true para proseguir, $false para abortar.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter()] [string] $DriveLetter = 'C:')
+
+    $st = Get-DiskEncryptionStatus -DriveLetter $DriveLetter
+    if (-not $st.IsEncrypted) { return $true }   # sin cifrar -> seguir, silencioso
+
+    Write-PctkWarn '  [!] Disco cifrado (BitLocker/Device Encryption). Tocar HVCI puede'
+    Write-PctkWarn '      disparar la pantalla de recuperacion en el proximo reinicio.'
+
+    [object[]] $keys = @(Get-BitLockerRecoveryKey -DriveLetter $DriveLetter)
+    if ($keys.Count -gt 0) {
+        Show-RecoveryKeysOnScreen -Keys $keys
+        [string] $path = Save-BitLockerRecoveryKey -Keys $keys
+        if ($path) { Write-PctkOk ('  [OK] Clave capturada y guardada: {0}' -f $path) }
+        Write-PctkHint '  Fotografiala/anotala ANTES de reiniciar. Hecho eso, es seguro tocar HVCI.'
+        return $true
+    }
+
+    Write-PctkWarn '  [!] No pude capturar una clave de recuperacion (solo protector TPM).'
+    Write-PctkHint '      Lo seguro: suspender 1 reinicio -> manage-bde -protectors -disable C: -RebootCount 1'
+    return (Confirm-Action -Title 'No hay clave asegurada. Tocar HVCI igual?' -Lines @(
+        'Si BitLocker pide recovery en el reboot y no hay clave, el cliente queda afuera.',
+        'Cancela y suspende BitLocker, o consegui la clave primero.'
+    ) -DefaultYes $false)
+}
+
+function Invoke-ActionEncryption {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+
+    $st = Get-DiskEncryptionStatus
+    Write-PctkSection '  ENCRIPTACION DE DISCO (BitLocker / Device Encryption)'
+
+    if (-not $st.Encryptable) {
+        Write-Host '  Estado: sin provider de cifrado (no soportado / VM / sin permisos).'
+        Write-PctkHint '  Nada que hacer.'
+        Write-ActionAudit -Action 'Encryption' -Status 'Info' -Summary 'not encryptable'
+        return
+    }
+
+    [string] $edition = if ($MachineProfile.IsHome) { 'Home' } else { 'Pro/otra' }
+    Write-Host ('  Cifrado  : {0}   ({1}, {2}%)' -f $(if ($st.IsEncrypted) { 'SI' } else { 'NO' }), $st.ConversionLabel, $st.EncryptionPct)
+    Write-Host ('  Metodo   : {0}   Proteccion activa: {1}' -f $st.EncryptionMethod, $st.ProtectionOn)
+    Write-Host ('  Recovery : protector presente={0}   Edicion: {1}' -f $st.HasRecoveryProtector, $edition)
+    Write-Host ''
+
+    if (-not $st.IsEncrypted) {
+        Write-PctkHint '  Disco sin cifrar. Nada que hacer.'
+        Write-ActionAudit -Action 'Encryption' -Status 'Info' -Summary 'not encrypted'
+        return
+    }
+
+    Write-Host '  [C]apturar clave de recuperacion  /  [D]esactivar BitLocker  /  [B]volver'
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+
+    if ($sub -eq 'C') {
+        [object[]] $keys = @(Get-BitLockerRecoveryKey)
+        if ($keys.Count -eq 0) {
+            Write-PctkWarn '  [!] Sin clave de recuperacion legible (solo protector TPM).'
+            Write-PctkHint '      Lo seguro: suspender 1 reinicio (manage-bde -protectors -disable C: -RebootCount 1)'
+            Write-PctkHint '      o que el cliente cree+respalde una recovery key primero.'
+            Write-ActionAudit -Action 'Encryption' -Status 'Info' -Summary 'capture: no recovery protector'
+            return
+        }
+        Show-RecoveryKeysOnScreen -Keys $keys
+        [string] $path = Save-BitLockerRecoveryKey -Keys $keys
+        if ($path) { Write-PctkOk ('  [OK] Respaldo guardado: {0}' -f $path) }
+        Write-ActionAudit -Action 'Encryption' -Status 'Success' -Summary ('captured {0} protector(s)' -f $keys.Count)
+        return
+    }
+
+    if ($sub -eq 'D') {
+        # Captura-primero (red de seguridad) antes de descifrar.
+        [object[]] $keys = @(Get-BitLockerRecoveryKey)
+        if ($keys.Count -gt 0) {
+            Show-RecoveryKeysOnScreen -Keys $keys
+            [string] $path = Save-BitLockerRecoveryKey -Keys $keys
+            if ($path) { Write-PctkOk ('  [OK] Clave capturada y guardada: {0}' -f $path) }
+        } else {
+            Write-PctkHint '  (Sin clave de recovery legible; el descifrado igual no la necesita.)'
+        }
+        if (-not (Confirm-Action -Title 'Desactivar BitLocker (descifra TODO el disco)?' -Lines @(
+            'Descifra todo C:. Tarda (lee/reescribe cada bloque); en discos grandes/lentos, bastante.',
+            'El cliente PIERDE la proteccion ante robo fisico del disco.',
+            'Corre en segundo plano; segui el progreso con: manage-bde -status'
+        ) -DefaultYes $false)) {
+            Write-PctkHint '  Cancelado.'
+            Write-ActionAudit -Action 'Encryption' -Status 'Cancelled' -Summary 'disable cancelled'
+            return
+        }
+        Write-ActionAudit -Action 'Encryption' -Status 'Started' -Summary 'disable (decrypt)'
+        Write-PctkWork '  Iniciando descifrado...'
+        $r = Start-BitLockerDecrypt
+        if ($r.Started) {
+            Write-PctkOk ('  [OK] {0}' -f $r.Message)
+            Write-PctkHint '  Progreso: manage-bde -status   (la PC se sigue usando mientras descifra)'
+            Write-ActionAudit -Action 'Encryption' -Status 'Success' -Summary 'decrypt started'
+        } else {
+            Write-PctkWarn ('  [!] {0}' -f $r.Message)
+            Write-ActionAudit -Action 'Encryption' -Status 'Failed' -Summary $r.Message
+        }
+        return
+    }
+
     Write-PctkHint '  Cancelado.'
 }
 

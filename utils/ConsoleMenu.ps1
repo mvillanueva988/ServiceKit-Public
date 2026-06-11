@@ -57,6 +57,9 @@ function Get-IndividualActionRows {
     $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  DISCO'; Color = 'DarkCyan' }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '17';  Label = '  [17] Mantenimiento de discos (TRIM SSD / defrag HDD)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  SEGURIDAD'; Color = 'DarkCyan' }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '18';  Label = '  [18] Encriptacion de disco (BitLocker)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver al menu principal'; Color = 'DarkYellow' }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
     return $rows
@@ -161,7 +164,7 @@ function Read-PctkMenuChoice {
     [int[]] $itemY   = [int[]]::new($items.Count)   # Y de consola de cada Item
     [int]   $bottomY = 0
     [bool]   $full   = $true                        # true -> redibujo completo este frame
-    [string] $buffer = ''                           # acumulador de atajo multi-caracter (ej. 10-17)
+    [string] $buffer = ''                           # acumulador de atajo multi-caracter (ej. 10-18)
 
     while ($true) {
         if ($full) {

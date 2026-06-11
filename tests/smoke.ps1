@@ -1363,10 +1363,10 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice fallback no bloquea (input
         throw ("fallback retorno '$result'; esperado '1'")
     }
 }
-Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 18 items en orden + 3 headers' {
+Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 19 items en orden + 4 headers' {
     [object[]] $rows  = Get-IndividualActionRows
     [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
-    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','B')
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','B')
     if ($items.Count -ne $expectedKeys.Count) {
         throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
     }
@@ -1376,8 +1376,8 @@ Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 18 items en orden + 
         }
     }
     [object[]] $headers = @($rows | Where-Object { $_.Kind -eq 'Header' })
-    if ($headers.Count -ne 3) {
-        throw ('Se esperaban 3 headers; encontrados {0}' -f $headers.Count)
+    if ($headers.Count -ne 4) {
+        throw ('Se esperaban 4 headers; encontrados {0}' -f $headers.Count)
     }
 }
 Test-SmokeFunction 'ConsoleMenu' 'Get-NamedProfileRows: 4 items en orden + 1 header' {
@@ -1609,6 +1609,89 @@ Test-SmokeFunction 'ToolsManifest' 'manifest: categoria antimalware existe' {
     $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($null -eq $m.categories.PSObject.Properties['antimalware']) {
         throw "categoria 'antimalware' no encontrada en manifest.categories"
+    }
+}
+
+# ─── Encryption: label maps (funciones puras) ─────────────────────────────────
+Test-SmokeFunction 'Encryption' 'ConvertTo-Enc*Label: enums conocidos y default' {
+    $ErrorActionPreference = 'Stop'
+    if ((ConvertTo-EncConversionLabel -Status 1)  -ne 'FullyEncrypted') { throw 'conv 1 != FullyEncrypted' }
+    if ((ConvertTo-EncConversionLabel -Status 0)  -ne 'FullyDecrypted') { throw 'conv 0 != FullyDecrypted' }
+    if ((ConvertTo-EncConversionLabel -Status 99) -ne 'Unknown')        { throw 'conv 99 != Unknown' }
+    if ((ConvertTo-EncMethodLabel     -Method 4)  -ne 'AES256')         { throw 'method 4 != AES256' }
+    if ((ConvertTo-EncMethodLabel     -Method 7)  -ne 'XTS_AES256')     { throw 'method 7 != XTS_AES256' }
+    if ((ConvertTo-EncMethodLabel     -Method 99) -ne 'Unknown')        { throw 'method 99 != Unknown' }
+}
+
+# ─── Encryption: detector read-only ───────────────────────────────────────────
+# Degrada limpio en VM/Sandbox/sin-permisos: Encryptable=$false, sin throw.
+Test-SmokeFunction 'Encryption' 'Get-DiskEncryptionStatus: no lanza + shape completo' {
+    $ErrorActionPreference = 'Stop'
+    $st = Get-DiskEncryptionStatus
+    if ($null -eq $st) { throw 'Get-DiskEncryptionStatus devolvio $null' }
+    foreach ($p in @('DriveLetter','Encryptable','ProtectionOn','ConversionStatus',
+                     'ConversionLabel','EncryptionPct','EncryptionMethod','IsEncrypted',
+                     'HasRecoveryProtector','Error')) {
+        if ($null -eq $st.PSObject.Properties[$p]) { throw ("falta propiedad {0}" -f $p) }
+    }
+}
+
+# Read-only y SENSIBLE: devuelve [object[]] (vacio en dev sin cifrar/sin permisos).
+Test-SmokeFunction 'Encryption' 'Get-BitLockerRecoveryKey: no lanza + devuelve array' {
+    $ErrorActionPreference = 'Stop'
+    [object[]] $keys = @(Get-BitLockerRecoveryKey)
+    if ($keys -isnot [object[]]) { throw 'no devolvio [object[]]' }
+}
+
+# ─── Encryption: Save con coleccion de EXACTAMENTE 1 (canario StrictMode) ──────
+Test-SmokeFunction 'Encryption' 'Save-BitLockerRecoveryKey: 1 protector + vacio->""' {
+    $ErrorActionPreference = 'Stop'
+    if ((Save-BitLockerRecoveryKey -Keys @()) -ne '') { throw 'coleccion vacia debe dar ""' }
+    [object[]] $one = @([PSCustomObject]@{
+        KeyProtectorId   = '{12345678-AAAA-BBBB-CCCC-DDDDDDDDDDDD}'
+        KeyId8           = '12345678'
+        RecoveryPassword = '111111-222222-333333-444444-555555-666666-777777-888888'
+    })
+    [string] $tmp = Join-Path $env:TEMP ('pctk-enc-smoke-' + [System.IO.Path]::GetRandomFileName())
+    try {
+        [string] $path = Save-BitLockerRecoveryKey -Keys $one -OutputRootOverride $tmp -TimestampOverride '20260101-000000'
+        if ([string]::IsNullOrEmpty($path)) { throw 'no devolvio path' }
+        if (-not (Test-Path -LiteralPath $path)) { throw 'archivo no creado' }
+        [string] $body = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+        if ($body -notmatch '12345678')            { throw 'no contiene Key ID' }
+        if ($body -notmatch '111111-222222')       { throw 'no contiene la clave' }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# ─── Encryption: canario estructural dispatch ─────────────────────────────────
+Test-SmokeFunction 'Encryption' 'handler [18] Encryption: dispatch rutea correctamente' {
+    $ErrorActionPreference = 'Stop'
+    $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'18'\s*\{\s*Invoke-ActionEncryption") {
+        throw 'dispatch no rutea [18] -> Invoke-ActionEncryption'
+    }
+}
+
+# ─── Encryption: canario de NO-mutacion del smoke ─────────────────────────────
+# El smoke NUNCA debe llamar Start-BitLockerDecrypt (descifra el disco real).
+Test-SmokeFunction 'Encryption' 'smoke no llama funciones mutantes de Encryption' {
+    $ErrorActionPreference = 'Stop'
+    [string] $smokePath = $PSCommandPath
+    [string[]] $smokeLines = @(Get-Content -LiteralPath $smokePath -Encoding UTF8)
+    foreach ($mutantFn in @('Start-BitLockerDecrypt')) {
+        [object[]] $callLines = @($smokeLines | Where-Object {
+            $_ -match "\b$([regex]::Escape($mutantFn))\b" -and
+            $_.TrimStart() -notmatch '^#' -and
+            $_ -notmatch '-match\s' -and
+            $_ -notmatch '-notmatch\s' -and
+            $_ -notmatch "'\s*$([regex]::Escape($mutantFn))" -and
+            $_ -notmatch "@'\s*$([regex]::Escape($mutantFn))"
+        })
+        if ($callLines.Count -gt 0) {
+            throw "smoke.ps1 llama a $mutantFn (funcion mutante): $($callLines[0].Trim())"
+        }
     }
 }
 
