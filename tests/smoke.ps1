@@ -1695,6 +1695,65 @@ Test-SmokeFunction 'Encryption' 'smoke no llama funciones mutantes de Encryption
     }
 }
 
+# ─── #23a: Test-IsX3dDualCcdCpu (funcion pura) ────────────────────────────────
+Test-SmokeFunction 'PowerPlan' 'Test-IsX3dDualCcdCpu: dual-CCD true / single-CCD false' {
+    $ErrorActionPreference = 'Stop'
+    if (-not (Test-IsX3dDualCcdCpu -CpuName 'AMD Ryzen 9 7950X3D 16-Core Processor' -Cores 16)) { throw '7950X3D/16 debe ser true' }
+    if (-not (Test-IsX3dDualCcdCpu -CpuName 'AMD Ryzen 9 9900X3D 12-Core Processor' -Cores 12)) { throw '9900X3D/12 debe ser true' }
+    if (Test-IsX3dDualCcdCpu -CpuName 'AMD Ryzen 7 9800X3D 8-Core Processor' -Cores 8)  { throw '9800X3D/8 debe ser false (single-CCD)' }
+    if (Test-IsX3dDualCcdCpu -CpuName 'AMD Ryzen 7 7800X3D 8-Core Processor' -Cores 8)  { throw '7800X3D/8 debe ser false (single-CCD)' }
+    if (Test-IsX3dDualCcdCpu -CpuName 'AMD Ryzen 5 5600X 6-Core Processor' -Cores 6)    { throw '5600X debe ser false (no X3D)' }
+    if (Test-IsX3dDualCcdCpu -CpuName '' -Cores 0)                                       { throw 'vacio debe ser false' }
+}
+
+# ─── #23b: Get-RamAdvisories (funcion pura; canario StrictMode de 1 elemento) ──
+Test-SmokeFunction 'HwAdvisories' 'Get-RamAdvisories: 1 modulo -> single-channel' {
+    $ErrorActionPreference = 'Stop'
+    [object[]] $one = @([PSCustomObject]@{ CapacityGb = 8; SpeedMhz = 3200; ConfiguredMhz = 3200 })
+    [object[]] $adv = @(Get-RamAdvisories -Modules $one)
+    if ($adv.Count -ne 1)                          { throw ("1 modulo debe dar 1 aviso; got {0}" -f $adv.Count) }
+    if ($adv[0] -notmatch 'single-channel')        { throw ("aviso esperado single-channel; got '{0}'" -f $adv[0]) }
+}
+Test-SmokeFunction 'HwAdvisories' 'Get-RamAdvisories: XMP off detectado / dual ok sin avisos' {
+    $ErrorActionPreference = 'Stop'
+    [object[]] $xmpOff = @(
+        [PSCustomObject]@{ CapacityGb = 8; SpeedMhz = 3200; ConfiguredMhz = 2133 }
+        [PSCustomObject]@{ CapacityGb = 8; SpeedMhz = 3200; ConfiguredMhz = 2133 }
+    )
+    [object[]] $adv = @(Get-RamAdvisories -Modules $xmpOff)
+    if (@($adv | Where-Object { $_ -match 'XMP' }).Count -ne 1) { throw 'dual a 2133/3200 debe avisar XMP' }
+    [object[]] $ok = @(
+        [PSCustomObject]@{ CapacityGb = 8; SpeedMhz = 3200; ConfiguredMhz = 3200 }
+        [PSCustomObject]@{ CapacityGb = 8; SpeedMhz = 3200; ConfiguredMhz = 3200 }
+    )
+    if (@(Get-RamAdvisories -Modules $ok).Count -ne 0) { throw 'dual a rated no debe avisar' }
+    if (@(Get-RamAdvisories -Modules @()).Count -ne 0) { throw 'vacio no debe avisar' }
+}
+Test-SmokeFunction 'HwAdvisories' 'Test-IsIntegratedGpuName: APU moderna (TM) = iGPU, dGPU sigue dGPU' {
+    $ErrorActionPreference = 'Stop'
+    # Regresion #23b: "(TM)" rompia el match y clasificaba la APU como dGPU
+    if (-not (Test-IsIntegratedGpuName -GpuName 'AMD Radeon(TM) Graphics'))      { throw 'Radeon(TM) Graphics debe ser iGPU' }
+    if (-not (Test-IsIntegratedGpuName -GpuName 'AMD Radeon(TM) 780M Graphics')) { throw 'Radeon(TM) 780M debe ser iGPU' }
+    if (-not (Test-IsIntegratedGpuName -GpuName 'Radeon RX Vega 11 Graphics'))   { throw 'Vega 11 debe ser iGPU' }
+    if (Test-IsIntegratedGpuName -GpuName 'AMD Radeon RX 6600')                  { throw 'RX 6600 debe ser dGPU' }
+    if (Test-IsIntegratedGpuName -GpuName 'NVIDIA GeForce RTX 3060')             { throw 'RTX 3060 debe ser dGPU' }
+}
+Test-SmokeFunction 'HwAdvisories' 'Get-UmaAdvisory: APU UMA chico avisa / dGPU e Intel no' {
+    $ErrorActionPreference = 'Stop'
+    [string] $a = Get-UmaAdvisory -HasIGpuOnly $true -GpuName 'AMD Radeon(TM) Graphics' -AdapterRamBytes (2GB)
+    if ([string]::IsNullOrEmpty($a) -or $a -notmatch 'UMA') { throw ("APU 2GB debe avisar UMA; got '{0}'" -f $a) }
+    if ((Get-UmaAdvisory -HasIGpuOnly $false -GpuName 'AMD Radeon(TM) Graphics' -AdapterRamBytes (2GB)) -ne '') { throw 'con dGPU no debe avisar' }
+    if ((Get-UmaAdvisory -HasIGpuOnly $true -GpuName 'Intel(R) UHD Graphics 630' -AdapterRamBytes (1GB)) -ne '') { throw 'Intel iGPU no debe avisar (UMA es de APU AMD)' }
+    if ((Get-UmaAdvisory -HasIGpuOnly $true -GpuName 'AMD Radeon(TM) Graphics' -AdapterRamBytes 0) -ne '') { throw 'AdapterRAM 0 (desconocido/overflow) no debe avisar' }
+}
+Test-SmokeFunction 'HwAdvisories' 'Get-MachineProfile expone Advisories como [string[]]' {
+    $ErrorActionPreference = 'Stop'
+    $mp = Get-MachineProfile
+    if ($null -eq $mp.PSObject.Properties['Advisories']) { throw 'falta propiedad Advisories' }
+    [object[]] $a = @($mp.Advisories)
+    foreach ($x in $a) { if ($x -isnot [string]) { throw 'Advisories debe contener solo strings' } }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

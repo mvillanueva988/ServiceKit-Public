@@ -44,8 +44,13 @@ function Test-IsIntegratedGpuName {
     )
 
     [string] $n = $GpuName.ToUpperInvariant()
+    # Normalizar marcas registradas: "AMD Radeon(TM) Graphics" (nombre tipico de
+    # APU Ryzen 4000G+) no matcheaba 'RADEON\s+GRAPHICS' por el (TM) en el medio
+    # -> se clasificaba como dGPU (bug cazado por smoke de #23b, 2026-06-11).
+    $n = ($n -replace '\((TM|R|C)\)', ' ') -replace '\s{2,}', ' '
     if ($n -match 'INTEL') { return $true }
     if ($n -match 'RADEON\s+GRAPHICS') { return $true }
+    if ($n -match 'RADEON\s+\d{3}M\b') { return $true }   # 680M/780M/880M (iGPU RDNA)
     if ($n -match 'VEGA\s+\d|VEGA\s+GRAPHICS') { return $true }
     if ($n -match 'IRIS|UHD|HD\s+GRAPHICS') { return $true }
     return $false
@@ -266,6 +271,77 @@ function Get-MachineVmInfo {
     }
 }
 
+function Get-RamAdvisories {
+    <#
+    .SYNOPSIS
+        Avisos [REPORTAR] de RAM para el operador (#23b, research gaming
+        2026-06-11). PCTk NO toca BIOS: detecta y reporta (rol extractor/guia).
+        - 1 solo modulo = single-channel garantizado (palanca #1 de gama baja:
+          +20-40% en iGPU al sumar el segundo modulo). Upsell directo.
+        - ConfiguredClockSpeed < Speed (rated) = XMP/DOCP/EXPO sin activar.
+        Funcion pura: recibe los modulos ya consultados (testeable con fixtures;
+        OJO trampa StrictMode de 1 elemento -> [object[]] tipado).
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter()] [AllowEmptyCollection()] [object[]] $Modules = @()
+    )
+
+    [object[]] $advisories = @()
+    [object[]] $mods = @($Modules | Where-Object { $null -ne $_ })
+    if ($mods.Count -eq 0) { return $advisories }
+
+    if ($mods.Count -eq 1) {
+        $advisories += ('RAM single-channel (1 modulo de {0} GB): un segundo modulo da +20-40% en iGPU/gama baja. Upsell directo.' -f $mods[0].CapacityGb)
+    }
+
+    # XMP/EXPO off: corre por debajo del perfil rated. Solo si ambos datos > 0.
+    [int] $maxRated = 0
+    [int] $maxConf  = 0
+    foreach ($m in $mods) {
+        if ($null -ne $m.PSObject.Properties['SpeedMhz']      -and [int]$m.SpeedMhz      -gt $maxRated) { $maxRated = [int]$m.SpeedMhz }
+        if ($null -ne $m.PSObject.Properties['ConfiguredMhz'] -and [int]$m.ConfiguredMhz -gt $maxConf)  { $maxConf  = [int]$m.ConfiguredMhz }
+    }
+    if ($maxRated -gt 0 -and $maxConf -gt 0 -and $maxConf -lt $maxRated) {
+        $advisories += ('RAM corriendo a {0} MT/s con perfil de {1}: activar XMP/DOCP/EXPO en BIOS.' -f $maxConf, $maxRated)
+    }
+
+    return $advisories
+}
+
+function Get-UmaAdvisory {
+    <#
+    .SYNOPSIS
+        Aviso [REPORTAR] de UMA Frame Buffer chico en APU AMD (#23b). Si la
+        unica GPU es una iGPU AMD (Radeon/Vega) y el carve-out reportado es
+        < ~3.5 GB, avisar "subir UMA en BIOS" (research: diferencia gigante en
+        APUs; el caso Ana quedo en 2G). PCTk no toca BIOS: solo reporta.
+        AdapterRAM es uint32 (>=4GB desborda) -> solo confiamos en el rango
+        128MB..3.5GB; fuera de eso, sin aviso (honesto, no adivinar).
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()] [bool] $HasIGpuOnly = $false,
+        [Parameter()] [AllowEmptyString()] [string] $GpuName = '',
+        [Parameter()] [long] $AdapterRamBytes = 0
+    )
+
+    if (-not $HasIGpuOnly) { return '' }
+    if ([string]::IsNullOrWhiteSpace($GpuName)) { return '' }
+    [string] $n = $GpuName.ToUpperInvariant()
+    [bool] $isAmdIGpu = ($n -match 'RADEON|VEGA') -and (Test-IsIntegratedGpuName -GpuName $GpuName)
+    if (-not $isAmdIGpu) { return '' }
+
+    [long] $minB = 128MB
+    [long] $maxB = [long](3.5 * 1GB)
+    if ($AdapterRamBytes -lt $minB -or $AdapterRamBytes -gt $maxB) { return '' }
+
+    [double] $gb = [math]::Round($AdapterRamBytes / 1GB, 1)
+    return ('APU AMD con UMA Frame Buffer ~{0} GB: subirlo en BIOS (4 GB si la RAM da) mejora mucho los juegos.' -f $gb)
+}
+
 function Get-MachineProfile {
     [CmdletBinding()]
     param()
@@ -334,6 +410,41 @@ function Get-MachineProfile {
     # (no puede llamar a Test-IsVirtualMachine de Telemetry.ps1 por el límite de job).
     $vmInfo = Get-MachineVmInfo -ComputerSystem $cs -Bios $bios
 
+    # ── Avisos de HW al operador (#23b: detectar y REPORTAR, no tocar) ────────
+    # Una sola vez acá (el banner se redibuja por loop de menú: no puede pagar
+    # CIM por redibujo). Defensivo: cualquier fallo -> sin avisos, nunca tira.
+    [object[]] $advisories = @()
+    try {
+        [object[]] $ramModules = @(
+            Get-CimInstance -ClassName Win32_PhysicalMemory -OperationTimeoutSec 2 -ErrorAction SilentlyContinue |
+                Where-Object { $_.Capacity -gt 0 } |
+                ForEach-Object {
+                    [int] $confMhz = 0
+                    if ($null -ne $_.PSObject.Properties['ConfiguredClockSpeed'] -and $null -ne $_.ConfiguredClockSpeed) {
+                        $confMhz = [int]$_.ConfiguredClockSpeed
+                    }
+                    [PSCustomObject]@{
+                        CapacityGb    = [double] [math]::Round($_.Capacity / 1GB, 2)
+                        SpeedMhz      = [int] $_.Speed
+                        ConfiguredMhz = $confMhz
+                    }
+                }
+        )
+        $advisories += @(Get-RamAdvisories -Modules $ramModules)
+    } catch { }
+    try {
+        if ($hasIGpuOnly) {
+            foreach ($g in $gpus) {
+                [string] $gn = [string]$g.Name
+                if ([string]::IsNullOrWhiteSpace($gn)) { continue }
+                [long] $aRam = 0
+                if ($null -ne $g.PSObject.Properties['AdapterRAM'] -and $null -ne $g.AdapterRAM) { $aRam = [long]$g.AdapterRAM }
+                [string] $uma = Get-UmaAdvisory -HasIGpuOnly $hasIGpuOnly -GpuName $gn -AdapterRamBytes $aRam
+                if (-not [string]::IsNullOrEmpty($uma)) { $advisories += $uma; break }
+            }
+        }
+    } catch { }
+
     return [PSCustomObject]@{
         IsLaptop         = $isLaptop
         RamMB            = $ramMB
@@ -353,5 +464,7 @@ function Get-MachineProfile {
         # ── Campos nuevos snapshot-vm-plan §5 ─────────────────────────────────
         IsVirtualMachine = [bool]   $vmInfo.IsVirtual
         VmVendor         = [string] $vmInfo.Vendor
+        # ── #23b: avisos de HW al operador (single-channel / XMP off / UMA) ───
+        Advisories       = [string[]] @($advisories | ForEach-Object { [string]$_ })
     }
 }

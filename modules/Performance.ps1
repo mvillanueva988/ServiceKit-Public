@@ -275,11 +275,33 @@ function Set-SystemTweaks {
     }
 }
 
+function Test-IsX3dDualCcdCpu {
+    <#
+    .SYNOPSIS
+        True si el CPU es un Ryzen X3D de DOS chiplets (7900X3D/7950X3D/
+        9900X3D/9950X3D y futuros >8 cores). En esos, el scheduler de Windows
+        necesita PARKEAR el CCD sin V-Cache para que los juegos caigan en el
+        CCD con cache; Ultimate/High Performance desactivan el core parking y
+        CUESTAN fps. Los X3D single-CCD (5800X3D/7800X3D/9800X3D, 8 cores) no
+        sufren esto. Funcion pura (testeable); el caller pasa nombre + cores.
+        (Research gaming 2026-06-11, consenso multi-informe; backlog #23a.)
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter()] [AllowEmptyString()] [string] $CpuName = '',
+        [Parameter()] [int] $Cores = 0
+    )
+    if ([string]::IsNullOrWhiteSpace($CpuName)) { return $false }
+    return ($CpuName -match '(?i)X3D' -and $Cores -gt 8)
+}
+
 function Set-UltimatePowerPlan {
     <#
     .SYNOPSIS
         Aplica un plan de energia segun el form factor:
         - Desktop: Ultimate Performance (con fallback a High Performance).
+        - Desktop con X3D dual-CCD: Balanced SIEMPRE (ver Test-IsX3dDualCcdCpu).
         - Laptop:  Balanced. Ultimate/High en laptops con TDP locked via EC
                    (HP/Lenovo/Dell U-series, etc.) eleva el Min processor state,
                    mantiene C0/C1 mas tiempo, sube temperatura, y dispara throttle
@@ -344,6 +366,27 @@ function Set-UltimatePowerPlan {
             Skipped      = $false
         }
     }
+
+    # -- Desktop X3D dual-CCD: Balanced SIEMPRE (guarda #23a) -------------------
+    # Ultimate a un 7950X3D le CUESTA fps (impide parkear el CCD sin V-Cache).
+    try {
+        $cpuX = Get-CimInstance -ClassName Win32_Processor -OperationTimeoutSec 5 -ErrorAction SilentlyContinue | Select-Object -First 1
+        [string] $cpuXName  = if ($null -ne $cpuX -and $null -ne $cpuX.Name) { [string]$cpuX.Name } else { '' }
+        [int]    $cpuXCores = if ($null -ne $cpuX -and $null -ne $cpuX.NumberOfCores) { [int]$cpuX.NumberOfCores } else { 0 }
+        if (Test-IsX3dDualCcdCpu -CpuName $cpuXName -Cores $cpuXCores) {
+            & powercfg /setactive $balancedGuid 2>&1 | Out-Null
+            [bool] $okX = ($LASTEXITCODE -eq 0)
+            return [PSCustomObject]@{
+                Success      = $okX
+                PlanName     = if ($okX) { 'Balanced (X3D dual-CCD)' } else { 'Balanced (intento fallido)' }
+                PlanGuid     = $balancedGuid
+                PreviousGuid = $previousGuid
+                PreviousName = $previousName
+                Reason       = ('CPU X3D de dos chiplets ({0}): Balanced obligatorio. El scheduler parkea el CCD sin V-Cache para que los juegos usen el CCD con cache; Ultimate lo impide y cuesta fps.' -f $cpuXName.Trim())
+                Skipped      = $false
+            }
+        }
+    } catch { }
 
     # -- Desktop: intentar Ultimate, fallback a High Performance ---------------
     try {
@@ -519,6 +562,7 @@ function Start-PerformanceProcess {
     [string] $fnFull       = ${Function:Set-FullOptimizedVisuals}.ToString()
     [string] $fnRestore    = ${Function:Restore-DefaultVisuals}.ToString()
     [string] $fnPowerPlan  = ${Function:Set-UltimatePowerPlan}.ToString()
+    [string] $fnX3d        = ${Function:Test-IsX3dDualCcdCpu}.ToString()
     [string] $fnTweaks     = ${Function:Set-SystemTweaks}.ToString()
 
     [scriptblock] $jobBlock = [scriptblock]::Create(@"
@@ -531,6 +575,7 @@ function Set-BalancedVisuals      { $fnBalanced  }
 function Set-FullOptimizedVisuals { $fnFull      }
 function Restore-DefaultVisuals   { $fnRestore   }
 function Set-UltimatePowerPlan    { $fnPowerPlan }
+function Test-IsX3dDualCcdCpu     { $fnX3d       }
 function Set-SystemTweaks         { $fnTweaks    }
 `$v = switch ('$VisualProfile') {
     'Balanced'   { Set-BalancedVisuals      }

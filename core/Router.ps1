@@ -135,6 +135,16 @@ function Show-MachineBanner {
     }
 
     Write-PctkMachineBanner -Rows $rows -Tier $tierLabel -VmLine $vmLine
+
+    # #23b: avisos de HW (single-channel / XMP off / UMA chico). Cacheados en el
+    # profile (cero costo por redibujo); solo aparecen cuando hay hallazgo.
+    if ($MachineProfile.PSObject.Properties['Advisories']) {
+        foreach ($adv in @($MachineProfile.Advisories)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$adv)) {
+                Write-PctkWarn ('  [HW] {0}' -f [string]$adv)
+            }
+        }
+    }
 }
 
 # ─── Show-MainMenu ────────────────────────────────────────────────────────────
