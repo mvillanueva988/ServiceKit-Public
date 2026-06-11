@@ -167,6 +167,15 @@ Test-SmokeFunction 'Network' 'Get-NetworkDiagnostics' { Get-NetworkDiagnostics }
 Test-SmokeFunction 'Privacy' 'Test-ShutUp10Available' { Test-ShutUp10Available }
 Test-SmokeFunction 'Privacy' 'Get-ShutUp10Path'       { Get-ShutUp10Path }
 
+Test-SmokeFunction 'StartupManager' 'Test-StartupSafeToDisable: updaters true; opcional/dejar/desconocido false' {
+    $ErrorActionPreference = 'Stop'
+    foreach ($n in @('GoogleUpdateTaskMachineCore','AdobeAAMUpdater','EqualizerAPO_Update','iTunesHelper','Apple Bonjour Service')) {
+        if (-not (Test-StartupSafeToDisable -Name $n)) { throw ("'$n' deberia ser seguro-apagar (true)") }
+    }
+    foreach ($n in @('Discord','Steam','SecurityHealth','RtkAudUService','AnyDesk','ZxQ_nada_123','')) {
+        if (Test-StartupSafeToDisable -Name $n) { throw ("'$n' NO deberia ser seguro-apagar (false)") }
+    }
+}
 Test-SmokeFunction 'StartupManager' 'Get-StartupEntries' { Get-StartupEntries }
 
 # §6.3: Set-StartupEntry early-return paths — entradas SINTETICAS, cero mutacion

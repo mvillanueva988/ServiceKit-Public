@@ -333,3 +333,19 @@ function Get-StartupDescription {
     }
     return ''
 }
+
+# ─── Test-StartupSafeToDisable ────────────────────────────────────────────────
+# Deriva la clasificacion "seguro apagar" del mapa curado (Get-StartupDescription
+# = fuente unica). Una entrada es candidata a auto-disable SOLO si su descripcion
+# CONOCIDA la tagea "(seguro apagar)" -> updaters / relanzadores de fondo. Las
+# "(opcional)" (las puede querer el cliente), las "(dejar)" y las DESCONOCIDAS
+# ('' sin match) NO se tocan. Read-only, smoke-safe.
+function Test-StartupSafeToDisable {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Name
+    )
+    [string] $d = Get-StartupDescription -Name $Name
+    return ($d -like '*(seguro apagar)*')
+}

@@ -1334,10 +1334,43 @@ function Invoke-ActionStartup {
             $listed = $true
         }
         Write-Host ''
-        Write-PctkHint '  Indice/s (ej: 3  o  1,4  o  2-5), V para volver:'
+        Write-PctkHint "  Indice/s (ej: 3  o  1,4  o  2-5)  |  S = desactivar las 'seguro apagar'  |  V para volver:"
         [string] $raw = (Read-Host '  >').Trim().ToUpperInvariant()
 
         if ($raw -eq 'V' -or [string]::IsNullOrEmpty($raw)) { break }
+
+        # S: bulk auto-disable de las entradas ACTIVAS marcadas "seguro apagar"
+        # (updaters/relanzadores de fondo). Conservador: solo lo tagged, con lista
+        # + confirm. Reusa Set-StartupEntry (reversible). No toca opcional/dejar/desconocido.
+        if ($raw -eq 'S') {
+            [object[]] $safe = @($on | Where-Object { $_.CanToggle -and (Test-StartupSafeToDisable -Name ([string]$_.Name)) })
+            if ($safe.Count -eq 0) {
+                Write-PctkHint '  No hay entradas activas marcadas "seguro apagar".'
+                continue
+            }
+            [string[]] $safeLines = @($safe | ForEach-Object {
+                ('OFF  [{0}]  {1}  - {2}' -f $_.Location, $_.Name, (Get-StartupDescription -Name ([string]$_.Name)))
+            })
+            if (-not (Confirm-Action -Title ('Desactivar {0} actualizador(es)/relanzador(es) seguros?' -f $safe.Count) `
+                                     -Lines $safeLines -DefaultYes $false)) {
+                Write-PctkHint '  Cancelado.'
+                continue
+            }
+            foreach ($entry in $safe) {
+                [PSCustomObject] $r = Set-StartupEntry -Entry $entry -Enabled $false
+                if ($r.Success) {
+                    Write-PctkOk ('  [OK] {0} {1} -> OFF' -f $entry.Location, $entry.Name)
+                    $toggleCount++
+                    Write-ActionAudit -Action 'Startup.AutoDisable' -Status 'Success' `
+                        -Summary ('{0} {1}' -f $entry.Location, $entry.Name) -Details $r
+                } else {
+                    Write-PctkErr ('  [!] {0}: {1}' -f $entry.Name, $r.Error)
+                    Write-ActionAudit -Action 'Startup.AutoDisable' -Status 'Failed' `
+                        -Summary ('{0} {1}' -f $entry.Location, $entry.Name) -Details $r
+                }
+            }
+            continue
+        }
 
         # Parsear seleccion: individual, lista o rango
         [int[]] $selRaw = @()
