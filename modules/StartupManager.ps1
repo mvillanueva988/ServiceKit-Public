@@ -283,21 +283,38 @@ function Get-StartupDescription {
         @{ K = 'logitech';            D = 'Logitech G HUB / Options (opcional)' }
         @{ K = 'lghub';               D = 'Logitech G HUB (opcional)' }
         @{ K = 'logioptions';         D = 'Logitech Options (opcional)' }
+        @{ K = 'razer';               D = 'Razer Synapse (opcional)' }
+        @{ K = 'icue';                D = 'Corsair iCUE (opcional)' }
+        @{ K = 'afterburner';         D = 'MSI Afterburner OC/monitor (opcional)' }
+        @{ K = 'supportassist';       D = 'Dell SupportAssist (opcional)' }
+        @{ K = 'vantage';             D = 'Lenovo Vantage (opcional)' }
+        # --- Remoto / soporte ---
+        @{ K = 'anydesk';             D = 'AnyDesk acceso remoto (dejar)' }
+        @{ K = 'teamviewer';          D = 'TeamViewer acceso remoto (dejar)' }
         # --- Tuning de CPU (terceros) ---
         @{ K = 'process lasso';       D = 'Process Lasso gestion de CPU (opcional)' }
         @{ K = 'parkcontrol';         D = 'ParkControl parking de nucleos (opcional)' }
         # --- Apps comunes ---
         @{ K = 'discord';             D = 'Discord chat/voz (opcional)' }
+        @{ K = 'whatsapp';            D = 'WhatsApp (opcional)' }
+        @{ K = 'telegram';            D = 'Telegram (opcional)' }
         @{ K = 'steam';               D = 'Steam (opcional)' }
         @{ K = 'epicgames';           D = 'Epic Games Launcher (opcional)' }
         @{ K = 'spotify';             D = 'Spotify (opcional)' }
         @{ K = 'onedrive';            D = 'OneDrive sincronizacion (opcional)' }
+        @{ K = 'googledrive';         D = 'Google Drive sincronizacion (opcional)' }
+        @{ K = 'dropbox';             D = 'Dropbox sincronizacion (opcional)' }
+        @{ K = 'megasync';            D = 'MEGAsync sincronizacion (opcional)' }
         @{ K = 'notion';              D = 'Notion notas (opcional)' }
         @{ K = 'teams';               D = 'Microsoft Teams (opcional)' }
         # --- Actualizadores (normalmente seguro apagar) ---
         @{ K = 'bravesoftware';       D = 'Actualizador Brave (seguro apagar)' }
-        @{ K = 'googleupdat';         D = 'Actualizador Google/Chrome (dejar o apagar)' }
-        @{ K = 'edgeupdate';          D = 'Actualizador Edge (dejar o apagar)' }
+        @{ K = 'googleupdat';         D = 'Actualizador Google/Chrome (seguro apagar)' }
+        @{ K = 'edgeupdate';          D = 'Actualizador Edge (seguro apagar)' }
+        @{ K = 'edgeautolaunch';      D = 'Edge se reabre solo al inicio (seguro apagar)' }
+        @{ K = 'javaupdate';          D = 'Java updater (seguro apagar)' }
+        @{ K = 'itunes';              D = 'iTunes helper (seguro apagar)' }
+        @{ K = 'bonjour';             D = 'Apple Bonjour (seguro apagar)' }
         @{ K = 'adobe';               D = 'Adobe updater (seguro apagar)' }
         # --- Microsoft / Office / Windows (normalmente dejar) ---
         @{ K = 'office';              D = 'Microsoft Office mantenimiento/updates (dejar)' }
