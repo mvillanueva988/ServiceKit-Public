@@ -679,6 +679,7 @@ function Invoke-IndividualActionDispatch {
         '16' { Invoke-ActionUsbPower        -MachineProfile $MachineProfile; return }
         '17' { Invoke-ActionDiskMaintenance -MachineProfile $MachineProfile; return }
         '18' { Invoke-ActionEncryption      -MachineProfile $MachineProfile; return }
+        '19' { Invoke-ActionDefenderScan    -MachineProfile $MachineProfile; return }
         default {
             Write-PctkErr '  Opcion invalida.'
         }
@@ -1582,6 +1583,51 @@ function Invoke-ActionEncryption {
     }
 
     Write-PctkHint '  Cancelado.'
+}
+
+function Invoke-ActionDefenderScan {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    Write-PctkSection '  REAGENDAR ESCANEO DE DEFENDER (anti-stutter)'
+    $st = Get-DefenderScanSchedule
+    if (-not $st.Available) {
+        Write-PctkHint '  Defender no disponible (AV de terceros o administrado por politica). Nada que hacer.'
+        Write-ActionAudit -Action 'Defender.ScanSchedule' -Status 'Info' -Summary 'not available'
+        return
+    }
+
+    Write-Host ('  Dia programado    : {0}' -f $st.DayLabel)
+    Write-Host ('  Hora de escaneo   : {0}' -f $st.QuickScanLabel)
+    Write-Host ('  Solo si inactiva  : {0}' -f $(if ($st.OnlyIfIdle) { 'SI' } else { 'NO' }))
+    Write-Host ('  Tope de CPU       : {0}%' -f $st.AvgCpuLoad)
+    Write-Host ''
+    Write-PctkHint '  Un escaneo que cae mientras se juega cuesta 1-6% de FPS. Esto lo'
+    Write-PctkHint '  reagenda (nocturno + solo con la PC inactiva). NO desactiva Defender.'
+
+    if (-not (Confirm-Action -Title 'Reagendar el escaneo de Defender?' -Lines @(
+        'Mueve el escaneo a las 03:00 y solo corre con la PC inactiva.',
+        'Limita el uso de CPU del escaneo al 20%. Todo reversible.',
+        'NO se desactiva Defender: proteccion en tiempo real y Tamper Protection siguen ON.'
+    ) -DefaultYes $true)) {
+        Write-PctkHint '  Cancelado.'
+        Write-ActionAudit -Action 'Defender.ScanSchedule' -Status 'Cancelled' -Summary 'user cancelled'
+        return
+    }
+
+    $r = Set-DefenderScanSchedule
+    if ($r.Skipped) {
+        Write-PctkHint ('  {0}' -f $r.Reason)
+        Write-ActionAudit -Action 'Defender.ScanSchedule' -Status 'Info' -Summary 'skipped (no defender)'
+        return
+    }
+    foreach ($a in $r.Applied) { Write-PctkOk ('  [OK] {0}' -f $a) }
+    foreach ($e in $r.Errors)  { Write-PctkWarn ('  [!] {0}' -f $e) }
+    Write-PctkHint ('  {0}' -f $r.Reason)
+    [string] $status = if ($r.Success) { 'Success' } else { 'Partial' }
+    Write-ActionAudit -Action 'Defender.ScanSchedule' -Status $status `
+        -Summary ('applied={0} errors={1}' -f $r.Applied.Count, $r.Errors.Count) -Details $r
 }
 
 function Invoke-ActionHags {

@@ -60,6 +60,9 @@ function Get-IndividualActionRows {
     $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  SEGURIDAD'; Color = 'DarkCyan' }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '18';  Label = '  [18] Encriptacion de disco (BitLocker)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  RENDIMIENTO'; Color = 'DarkCyan' }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '19';  Label = '  [19] Reagendar escaneo de Defender (anti-stutter, sin reinicio)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver al menu principal'; Color = 'DarkYellow' }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
     return $rows

@@ -490,6 +490,101 @@ function Get-CustomDefenderExclusions {
     }
 }
 
+# --- Get-DefenderScanSchedule ------------------------------------------------
+function Get-DefenderScanSchedule {
+    <#
+    .SYNOPSIS
+        Lee la configuracion del escaneo programado de Defender (dia, hora,
+        solo-si-inactiva, tope de CPU). Read-only. Smoke-safe.
+        Si Defender no esta disponible (AV de terceros / administrado) -> Available=$false.
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        $pref = Get-MpPreference -ErrorAction Stop
+        [int]  $day  = [int]  $pref.ScanScheduleDay
+        [int]  $qmin = [int]  $pref.ScanScheduleQuickScanTime
+        [bool] $idle = [bool] $pref.ScanOnlyIfIdleEnabled
+        [int]  $cpu  = [int]  $pref.ScanAvgCPULoadFactor
+        [string[]] $dayNames = @('Todos los dias', 'Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Nunca')
+        [string] $dayLabel = if ($day -ge 0 -and $day -le 8) { $dayNames[$day] } else { "($day)" }
+        [string] $qLabel   = ('{0:00}:{1:00}' -f [math]::Floor($qmin / 60), ($qmin % 60))
+        return [PSCustomObject]@{
+            Available      = $true
+            ScanDay        = $day
+            DayLabel       = $dayLabel
+            QuickScanMin   = $qmin
+            QuickScanLabel = $qLabel
+            OnlyIfIdle     = $idle
+            AvgCpuLoad     = $cpu
+        }
+    }
+    catch {
+        return [PSCustomObject]@{ Available = $false; Reason = $_.Exception.Message }
+    }
+}
+
+# --- Set-DefenderScanSchedule ------------------------------------------------
+function Set-DefenderScanSchedule {
+    <#
+    .SYNOPSIS
+        Reagenda el escaneo de Defender para que NO compita con el uso (gaming):
+        solo-si-inactiva + horario nocturno + tope de CPU. NO desactiva Defender
+        (proteccion en tiempo real + Tamper Protection intactas). Reversible.
+        Research gaming 2026-06-11: el scan cuesta 1-6% de FPS si cae mientras se
+        juega; la respuesta correcta es REAGENDAR, no desactivar.
+
+        Defensivo: si Get-MpPreference falla (AV de terceros / Defender
+        administrado por politica) -> Skipped, no toca nada. Set-MpPreference es
+        cmdlet (no exe nativo): no aplica la trampa EAP=Stop; cada lever en su
+        propio try.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [int] $QuickScanTimeMin = 180,   # minutos despues de medianoche (180 = 03:00)
+        [Parameter()] [int] $AvgCpuLoadFactor = 20      # tope de CPU del escaneo (%)
+    )
+
+    try { $null = Get-MpPreference -ErrorAction Stop }
+    catch {
+        return [PSCustomObject]@{
+            Success = $true
+            Skipped = $true
+            Reason  = 'Get-MpPreference no disponible (AV de terceros o Defender administrado). No se reagenda.'
+            Applied = @()
+            Errors  = @()
+        }
+    }
+
+    [System.Collections.Generic.List[string]] $applied = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $errors  = [System.Collections.Generic.List[string]]::new()
+    [string] $qLabel = ('{0:00}:{1:00}' -f [math]::Floor($QuickScanTimeMin / 60), ($QuickScanTimeMin % 60))
+
+    try {
+        Set-MpPreference -ScanOnlyIfIdleEnabled $true -ErrorAction Stop
+        $applied.Add('Escanear solo con la PC inactiva (no compite con juegos)')
+    } catch { $errors.Add("ScanOnlyIfIdle: $($_.Exception.Message)") }
+
+    try {
+        Set-MpPreference -ScanScheduleQuickScanTime $QuickScanTimeMin -ErrorAction Stop
+        $applied.Add("Escaneo programado movido a las $qLabel")
+    } catch { $errors.Add("QuickScanTime: $($_.Exception.Message)") }
+
+    try {
+        Set-MpPreference -ScanAvgCPULoadFactor $AvgCpuLoadFactor -ErrorAction Stop
+        $applied.Add("Uso de CPU del escaneo limitado al $AvgCpuLoadFactor%")
+    } catch { $errors.Add("AvgCPULoad: $($_.Exception.Message)") }
+
+    return [PSCustomObject]@{
+        Success = ($errors.Count -eq 0)
+        Skipped = $false
+        Applied = $applied.ToArray()
+        Errors  = $errors.ToArray()
+        Reason  = 'Escaneo de Defender reagendado. NO se desactivo: proteccion en tiempo real y Tamper Protection siguen ON.'
+    }
+}
+
 # --- Remove-WslDefenderExclusions --------------------------------------------
 function Remove-WslDefenderExclusions {
     <#

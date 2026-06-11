@@ -260,6 +260,20 @@
             "sha256": ""
         },
         {
+            "name": "presentmon",
+            "category": "diagnostico",
+            "description": "Intel PresentMon - captura de frame timing / FPS, frametime, percentiles (1% low) y stutter por proceso. Mide el rendimiento real PRE/POST de un service (la prueba de venta del trabajo gaming) y exporta CSV para comparar. Portable, un solo .exe (CLI + overlay en vivo).",
+            "filename": "PresentMon.exe",
+            "launchExe": "PresentMon.exe",
+            "url": "https://github.com/GameTechDev/PresentMon/releases/download/v2.4.1/PresentMon-2.4.1-x64.exe",
+            "updatePolicy": "pinned",
+            "version": "2.4.1",
+            "checkUpdate": "https://api.github.com/repos/GameTechDev/PresentMon/releases/latest",
+            "versionPattern": "PresentMon-(\\d+\\.\\d+\\.\\d+)-x64\\.exe",
+            "approxSizeMB": 1,
+            "sha256": ""
+        },
+        {
             "name": "kvrt",
             "category": "antimalware",
             "description": "Kaspersky Virus Removal Tool - scanner antimalware on-demand de segunda opinion. Portable, no instala ni deja residente. Las firmas vienen embebidas en el binario al momento de la descarga: para un scan con firmas frescas, re-descargar con [F]orce antes de usar.",

@@ -266,6 +266,13 @@ Test-SmokeFunction 'NamedProfileEditor' 'New-NamedProfileInteractive escribe gam
 }
 Test-SmokeFunction 'Performance' 'Get-GameModeStatus' { Get-GameModeStatus }
 Test-SmokeFunction 'Privacy' 'Get-CustomDefenderExclusions' { Get-CustomDefenderExclusions }
+Test-SmokeFunction 'Privacy' 'Get-DefenderScanSchedule (read-only)' { $null = Get-DefenderScanSchedule }
+Test-SmokeFunction 'Privacy' 'Set-DefenderScanSchedule definida (no se ejecuta: muta Defender)' {
+    if (-not (Get-Command Set-DefenderScanSchedule -ErrorAction SilentlyContinue)) { throw 'Set-DefenderScanSchedule no definida' }
+}
+Test-SmokeFunction 'Router' 'Invoke-ActionDefenderScan definida ([A][19])' {
+    if (-not (Get-Command Invoke-ActionDefenderScan -ErrorAction SilentlyContinue)) { throw 'Invoke-ActionDefenderScan no definida' }
+}
 
 # ─── ITEM C: Test-StepSucceeded (D-SD2 adapters, structural-debt-plan.md) ────
 # Entradas read-only: solo ejercitan el helper con fixtures en memoria, sin mutar.
@@ -1363,10 +1370,10 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice fallback no bloquea (input
         throw ("fallback retorno '$result'; esperado '1'")
     }
 }
-Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 19 items en orden + 4 headers' {
+Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 20 items en orden + 5 headers' {
     [object[]] $rows  = Get-IndividualActionRows
     [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
-    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','B')
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','B')
     if ($items.Count -ne $expectedKeys.Count) {
         throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
     }
@@ -1376,8 +1383,8 @@ Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 19 items en orden + 
         }
     }
     [object[]] $headers = @($rows | Where-Object { $_.Kind -eq 'Header' })
-    if ($headers.Count -ne 4) {
-        throw ('Se esperaban 4 headers; encontrados {0}' -f $headers.Count)
+    if ($headers.Count -ne 5) {
+        throw ('Se esperaban 5 headers; encontrados {0}' -f $headers.Count)
     }
 }
 Test-SmokeFunction 'ConsoleMenu' 'Get-NamedProfileRows: 4 items en orden + 1 header' {
@@ -1610,6 +1617,26 @@ Test-SmokeFunction 'ToolsManifest' 'manifest: categoria antimalware existe' {
     if ($null -eq $m.categories.PSObject.Properties['antimalware']) {
         throw "categoria 'antimalware' no encontrada en manifest.categories"
     }
+}
+
+# ─── ToolsManifest: #23d medicion fps + ddu ───────────────────────────────────
+Test-SmokeFunction 'ToolsManifest' 'manifest: presentmon (diagnostico + url release x64)' {
+    $ErrorActionPreference = 'Stop'
+    [string] $manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\manifest.json'
+    $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $tool = $m.tools | Where-Object { $_.name -eq 'presentmon' } | Select-Object -First 1
+    if ($null -eq $tool)                                    { throw "Tool 'presentmon' no encontrada en manifest" }
+    if ([string]$tool.category -ne 'diagnostico')           { throw "presentmon: category esperado 'diagnostico'; got '$($tool.category)'" }
+    if ([string]::IsNullOrWhiteSpace([string]$tool.url))    { throw 'presentmon: url vacia' }
+    if ([string]$tool.url -notmatch 'PresentMon.*x64\.exe') { throw "presentmon: url no apunta al exe x64: $($tool.url)" }
+}
+Test-SmokeFunction 'ToolsManifest' 'manifest: ddu ya presente (drivers) - no re-agregar' {
+    $ErrorActionPreference = 'Stop'
+    [string] $manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\manifest.json'
+    $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $tool = $m.tools | Where-Object { $_.name -eq 'ddu' } | Select-Object -First 1
+    if ($null -eq $tool)                      { throw "Tool 'ddu' no encontrada en manifest" }
+    if ([string]$tool.category -ne 'drivers') { throw "ddu: category esperado 'drivers'; got '$($tool.category)'" }
 }
 
 # ─── Encryption: label maps (funciones puras) ─────────────────────────────────
