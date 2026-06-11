@@ -710,7 +710,7 @@ Test-SmokeFunction 'ConsoleIcon' 'Set-PctkConsoleIcon presente + asset valido' {
 
 # ConsoleSetup: QuickEdit off (utils read-only; NO muta la consola en smoke)
 Test-SmokeFunction 'ConsoleSetup' 'Disable-PctkQuickEdit + Restore-PctkConsoleMode presentes' {
-    foreach ($fn in @('Disable-PctkQuickEdit','Restore-PctkConsoleMode')) {
+    foreach ($fn in @('Disable-PctkQuickEdit','Restore-PctkConsoleMode','Set-PctkConsoleSize')) {
         if ($null -eq (Get-Command $fn -ErrorAction SilentlyContinue)) { throw "$fn no encontrado" }
     }
 }

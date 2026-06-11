@@ -64,6 +64,7 @@ try {
     $origConsoleMode = $null
     try { $origConsoleMode = Disable-PctkQuickEdit } catch { }
     try { [void] (Enable-PctkVT) } catch { }
+    try { Set-PctkConsoleSize } catch { }
     Show-MainMenu -MachineProfile $machineProfile
 }
 finally {

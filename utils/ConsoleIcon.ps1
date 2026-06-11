@@ -95,3 +95,36 @@ function Restore-PctkConsoleMode {
     }
     catch { }
 }
+
+# --- Set-PctkConsoleSize -----------------------------------------------------
+function Set-PctkConsoleSize {
+    <#
+    .SYNOPSIS
+        Crece el ALTO de la ventana de consola para que el menu entre sin
+        desbordar (sintoma "se abre mas abajo / tope cortado"). SOLO crece, nunca
+        achica; clampa a MaxWindowSize -> respeta AnyDesk / pantallas chicas (nunca
+        excede la pantalla actual). No-throw: si algo falla, no toca nada (cero
+        regresion). Nota de diseno: con QuickEdit off (anti-footgun AnyDesk) el
+        conhost no scrollea con la rueda; por eso el fix es que el menu ENTRE, no
+        que se pueda scrollear.
+    #>
+    [CmdletBinding()]
+    param([int] $MinHeight = 44)
+    try {
+        $rui = $Host.UI.RawUI
+        if ($null -eq $rui) { return }
+        $max = $rui.MaxWindowSize
+        $win = $rui.WindowSize
+        $buf = $rui.BufferSize
+        [int] $wantH = [Math]::Min($MinHeight, [int] $max.Height)
+        if ([int] $win.Height -ge $wantH) { return }   # ya entra -> nada que hacer
+        # La ventana no puede superar el buffer: crecer el buffer primero si hace falta.
+        if ([int] $buf.Height -lt $wantH) {
+            $rui.BufferSize = New-Object System.Management.Automation.Host.Size([int] $buf.Width, $wantH)
+        }
+        $newWin = $rui.WindowSize
+        $newWin.Height = $wantH
+        $rui.WindowSize = $newWin
+    }
+    catch { }
+}

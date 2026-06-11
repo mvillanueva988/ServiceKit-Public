@@ -169,6 +169,9 @@ function Read-PctkMenuChoice {
     [int]   $bottomY = 0
     [bool]   $full   = $true                        # true -> redibujo completo este frame
     [string] $buffer = ''                           # acumulador de atajo multi-caracter (ej. 10-18)
+    [int]    $lastW  = -1                            # tamanio de ventana/buffer en el ultimo redibujo
+    [int]    $lastH  = -1                            #   completo -> detectar resize (ej. maximizar) y
+    [int]    $lastBW = -1                            #   re-dibujar (las Y cacheadas quedan obsoletas)
 
     while ($true) {
         if ($full) {
@@ -188,6 +191,7 @@ function Read-PctkMenuChoice {
             if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $hintLine + (Pe)) }
             else             { Write-Host $hintLine -ForegroundColor DarkGray }
             $bottomY = [Console]::CursorTop
+            try { $lastW = [Console]::WindowWidth; $lastH = [Console]::WindowHeight; $lastBW = [Console]::BufferWidth } catch { }
             $full = $false
         }
 
@@ -202,6 +206,16 @@ function Read-PctkMenuChoice {
             return (Read-Host $Prompt).Trim().ToUpperInvariant()
         }
         if ($null -eq $key) { continue }
+
+        # Resize detectado (ej. el operador maximizo a mitad de menu): las posiciones
+        # Y cacheadas en $itemY quedaron obsoletas -> redibujo completo este frame en
+        # vez de pintar el highlight en coordenadas viejas (bug del highlight "mal cargado").
+        try {
+            if ([Console]::WindowWidth -ne $lastW -or [Console]::WindowHeight -ne $lastH -or [Console]::BufferWidth -ne $lastBW) {
+                $full = $true
+                continue
+            }
+        } catch { }
 
         if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
             $buffer = ''
@@ -337,6 +351,7 @@ function Read-PctkMultiChoice {
     [int]    $legendY = 0
     [bool]   $full    = $true
     [string] $buffer  = ''    # acumulador para marcar por numero multi-digito (10-19)
+    [int]    $lastW = -1; [int] $lastH = -1; [int] $lastBW = -1   # detectar resize -> redibujo
 
     while ($true) {
         if ($full) {
@@ -349,6 +364,7 @@ function Read-PctkMultiChoice {
             $legendY = [Console]::CursorTop
             if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $LegendLine + (Pe)) }
             else             { Write-Host $LegendLine -ForegroundColor DarkGray }
+            try { $lastW = [Console]::WindowWidth; $lastH = [Console]::WindowHeight; $lastBW = [Console]::BufferWidth } catch { }
             $full = $false
         }
 
@@ -356,6 +372,14 @@ function Read-PctkMultiChoice {
         try { $key = [Console]::ReadKey($true) }
         catch { return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx } }
         if ($null -eq $key) { continue }
+
+        # Resize (ej. maximizar a mitad de menu) -> Y cacheadas obsoletas -> redibujo completo.
+        try {
+            if ([Console]::WindowWidth -ne $lastW -or [Console]::WindowHeight -ne $lastH -or [Console]::BufferWidth -ne $lastBW) {
+                $full = $true
+                continue
+            }
+        } catch { }
 
         if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
             $buffer = ''
