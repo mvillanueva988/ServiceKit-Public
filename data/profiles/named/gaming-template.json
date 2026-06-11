@@ -14,7 +14,7 @@
 
   "_use_case": "named",
   "_description": "Plantilla gaming: privacidad conservadora (gaming.cfg: sin Xbox/Store/Update), tweaks HW-smart. Completar _name y ajustar gaming_tweaks segun la PC antes de aplicar.",
-  "_rationale": "Base gaming lista para personalizar. Servicios keep-Xbox; visual Balanced; privacy gaming.cfg (preserva Store/Xbox/Update, bloquea telemetria/Cortana/OneDrive). HAGS=on como default conservador: ajustar segun GPU (off si VRAM<8GB; validar en HW).",
+  "_rationale": "Base gaming lista para personalizar. Servicios keep-Xbox; visual Balanced; privacy gaming.cfg (preserva Store/Xbox/Update, bloquea telemetria/Cortana/OneDrive). HAGS=on como default conservador: ajustar segun GPU (off si VRAM<8GB; validar en HW). HVCI: AUSENTE a proposito = no tocar; apagarlo es decision POR CLIENTE (solo PC 100% gaming, con aviso) - agregar \"hvci\": \"off\" a mano si corresponde.",
 
   "services": {
     "disable": ["Fax", "WMPNetworkSvc", "RemoteRegistry", "DiagTrack", "dmwappushservice"]
@@ -27,7 +27,6 @@
   "startup": { "report_only": true },
 
   "gaming_tweaks": {
-    "hvci": "off",
     "hags": "on",
     "game_mode": "on",
     "usb_selective_suspend": "off",
