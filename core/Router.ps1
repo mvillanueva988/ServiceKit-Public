@@ -904,7 +904,7 @@ function Invoke-ActionNetwork {
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
 
-    Write-Host '  [D]iagnostico (read-only)  /  [O]ptimizar  /  [B]volver'
+    Write-Host '  [D]iagnostico (read-only)  /  [O]ptimizar  /  [T]est de latencia (bufferbloat)  /  [B]volver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
 
     if ($sub -eq 'D') {
@@ -980,6 +980,47 @@ function Invoke-ActionNetwork {
             foreach ($i in $r.NetshIssues) { Write-PctkWarn ('  [!] {0}' -f $i) }
         }
         Write-ActionAudit -Action 'Network.Optimize' -Status 'Success' -Summary ('{0} adapters' -f $r.AdaptersOptimized.Count) -Details $r
+        return
+    }
+    if ($sub -eq 'T') {
+        # Bufferbloat: PCTk mide el ping idle al gateway y DELEGA la medicion bajo
+        # carga a waveform.com (el operador lee el grado). El bufferbloat vive en el
+        # modem/router, no en la PC -> no se puede arreglar desde aca, solo medir/guiar.
+        Write-ActionAudit -Action 'Network.Bufferbloat' -Status 'Started'
+        Write-PctkWork '  Midiendo ping en reposo al gateway (~10s)...'
+        $bb = Get-NetworkBufferbloat
+        Write-Host ('  Gateway        : {0}' -f $bb.Gateway)
+        Write-Host ('  Ping idle      : avg {0} ms / max {1} ms' -f $bb.IdleAvgMs, $bb.IdleMaxMs)
+        Write-Host ''
+        Write-PctkHint '  El bufferbloat (latencia que sube cuando la red se satura) vive en el'
+        Write-PctkHint '  modem/router, no en la PC. Lo mide bien waveform.com:'
+        Write-Host ('    1) Abri {0}' -f $bb.WaveformUrl)
+        Write-Host '    2) Apreta "Start Test", espera ~30s, y anota el GRADO (A a F).'
+        Write-Host ''
+        [string] $open = (Read-Host '  Abrir waveform en el navegador ahora? [S/n]').Trim().ToUpperInvariant()
+        if ($open -ne 'N') {
+            try { Start-Process $bb.WaveformUrl | Out-Null }
+            catch { Write-PctkWarn ('  [!] No pude abrir el navegador: {0}. Abrilo a mano.' -f $_.Exception.Message) }
+        }
+        [string] $grade = (Read-Host '  Grado que leiste (A/B/C/D/F, Enter para saltar)').Trim().ToUpperInvariant()
+        [string] $gradeFinal = if ($grade -match '^[ABCDF]$') { $grade } else { 'sin dato' }
+        $bbResult = [PSCustomObject]@{
+            Gateway   = $bb.Gateway
+            IdleAvgMs = $bb.IdleAvgMs
+            IdleMaxMs = $bb.IdleMaxMs
+            Grade     = $gradeFinal
+        }
+        if ($gradeFinal -ne 'sin dato') {
+            Write-Host ('  Bufferbloat    : grado {0} (medido en waveform)' -f $gradeFinal)
+            if ($gradeFinal -eq 'C' -or $gradeFinal -eq 'D' -or $gradeFinal -eq 'F') {
+                Write-PctkWarn '  [!] Bufferbloat alto -> conviene QoS/SQM en el modem (capa guia de modems).'
+            } else {
+                Write-PctkOk '  [OK] Bufferbloat bajo control.'
+            }
+        } else {
+            Write-PctkHint '  Sin grado registrado (lo podes correr despues).'
+        }
+        Write-ActionAudit -Action 'Network.Bufferbloat' -Status 'Success' -Summary ('Idle avg {0}ms, grado {1}' -f $bb.IdleAvgMs, $gradeFinal) -Details $bbResult
         return
     }
 }

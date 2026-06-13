@@ -249,6 +249,29 @@ Test-SmokeFunction 'Network' 'ConvertTo-Mbps + Test-LinkSuspect + ConvertTo-Powe
     if ((ConvertTo-PowerPropState -RegistryValue 'Enabled')  -ne 'on')  { throw 'Enabled -> on' }
 }
 
+# §24 3.B bufferbloat (delegado a waveform): grado PURO + baseline read-only.
+Test-SmokeFunction 'Network' 'Get-BufferbloatGrade: umbrales A/B/C/F (puro)' {
+    $ErrorActionPreference = 'Stop'
+    if ((Get-BufferbloatGrade -DeltaMs -1)  -ne '?') { throw 'negativo -> ?' }
+    if ((Get-BufferbloatGrade -DeltaMs 0)   -ne 'A') { throw '0 -> A' }
+    if ((Get-BufferbloatGrade -DeltaMs 29)  -ne 'A') { throw '29 -> A' }
+    if ((Get-BufferbloatGrade -DeltaMs 30)  -ne 'B') { throw '30 -> B' }
+    if ((Get-BufferbloatGrade -DeltaMs 59)  -ne 'B') { throw '59 -> B' }
+    if ((Get-BufferbloatGrade -DeltaMs 60)  -ne 'C') { throw '60 -> C' }
+    if ((Get-BufferbloatGrade -DeltaMs 119) -ne 'C') { throw '119 -> C' }
+    if ((Get-BufferbloatGrade -DeltaMs 120) -ne 'F') { throw '120 -> F' }
+    if ((Get-BufferbloatGrade -DeltaMs 500) -ne 'F') { throw '500 -> F' }
+}
+Test-SmokeFunction 'Network' 'Get-NetworkBufferbloat: shape read-only (1 ping, StrictMode)' {
+    $ErrorActionPreference = 'Stop'
+    $bb = Get-NetworkBufferbloat -Count 1
+    foreach ($p in @('Gateway','IdleAvgMs','IdleMaxMs','WaveformUrl')) {
+        if ($null -eq $bb.PSObject.Properties[$p]) { throw ("falta campo {0}" -f $p) }
+    }
+    if ([string]::IsNullOrWhiteSpace($bb.Gateway)) { throw 'Gateway vacío' }
+    if ($bb.WaveformUrl -notmatch 'waveform') { throw 'WaveformUrl roto' }
+}
+
 Test-SmokeFunction 'Privacy' 'Test-ShutUp10Available' { Test-ShutUp10Available }
 Test-SmokeFunction 'Privacy' 'Get-ShutUp10Path'       { Get-ShutUp10Path }
 

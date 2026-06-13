@@ -401,6 +401,64 @@ function Get-NetworkDiagnostics {
     }
 }
 
+function Get-BufferbloatGrade {
+    <#
+    .SYNOPSIS
+        PURO: clasifica el aumento de latencia bajo carga (ms) en un grado estilo
+        waveform/DSLReports. A (<30) / B (30-60) / C (60-120) / F (>=120). '?' si <0.
+    #>
+    [CmdletBinding()]
+    param([int] $DeltaMs)
+    if ($DeltaMs -lt 0)   { return '?' }
+    if ($DeltaMs -lt 30)  { return 'A' }
+    if ($DeltaMs -lt 60)  { return 'B' }
+    if ($DeltaMs -lt 120) { return 'C' }
+    return 'F'
+}
+
+function Get-NetworkBufferbloat {
+    <#
+    .SYNOPSIS
+        Read-only: resuelve el gateway por defecto y mide el ping en REPOSO (idle).
+        NO satura la red — la medición bajo carga se delega a waveform.com (el
+        operador lee el grado; ver el flujo [T] del Router). Devuelve gateway +
+        idle avg/max + la URL de waveform. StrictMode-safe, sin exe nativo
+        (Test-Connection / Get-NetRoute son cmdlets -> EAP-safe).
+    .DESCRIPTION
+        El bufferbloat vive en el modem/router, no en la PC: PCTk solo aporta el
+        ping idle (baseline) y abre la herramienta que lo mide bien. El auto-
+        saturador a CDN se descartó (bot-protection + single-stream no llena fibra,
+        ver network-optim-plan §6). Decisión de Mateo 2026-06-13: delegar a waveform.
+    #>
+    [CmdletBinding()]
+    param([int] $Count = 10)
+
+    [string] $gateway = ''
+    $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Sort-Object -Property RouteMetric |
+        Select-Object -First 1
+    if ($null -ne $route -and $null -ne $route.PSObject.Properties['NextHop']) {
+        $gateway = [string] $route.NextHop
+    }
+    if ([string]::IsNullOrWhiteSpace($gateway) -or $gateway -eq '0.0.0.0') { $gateway = '8.8.8.8' }
+
+    [int] $avg = -1
+    [int] $max = -1
+    [object[]] $pings = @(Test-Connection -ComputerName $gateway -Count $Count -ErrorAction SilentlyContinue)
+    if ($pings.Count -gt 0) {
+        [int[]] $rt = @($pings | ForEach-Object { [int] $_.ResponseTime })
+        $avg = [int] (($rt | Measure-Object -Average).Average)
+        $max = [int] (($rt | Measure-Object -Maximum).Maximum)
+    }
+
+    return [PSCustomObject]@{
+        Gateway     = [string] $gateway
+        IdleAvgMs   = [int]    $avg
+        IdleMaxMs   = [int]    $max
+        WaveformUrl = 'https://www.waveform.com/tools/bufferbloat'
+    }
+}
+
 function Start-NetworkDiagnosticsProcess {
     <#
     .SYNOPSIS
