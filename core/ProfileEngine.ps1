@@ -471,13 +471,18 @@ function Invoke-AutoProfile {
         [string] $runDir      = Join-Path $clientsBase ('{0}_{1}' -f $runSlug, $ts)
         New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 
+        # AnyDesk ID (read-only desde system.conf; $null si AnyDesk no está instalado).
+        # Guard propia: la captura NUNCA debe abortar la escritura del run-dir.
+        [string] $anydeskId = $null
+        try { $anydeskId = Get-AnyDeskId } catch { $anydeskId = $null }
+
         # meta.json
         [string] $metaPath = Join-Path $runDir 'meta.json'
         $metaObj = [ordered]@{
             client             = $runSlug
             date               = $startedAt.ToString('yyyy-MM-ddTHH:mm:sszzz')
             computer_name      = $env:COMPUTERNAME
-            anydesk_id         = $null
+            anydesk_id         = $anydeskId
             tier               = $tier
             use_case           = $useCase
             schema_version     = $schemaVer

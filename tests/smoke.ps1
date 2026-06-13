@@ -164,6 +164,35 @@ Test-SmokeFunction 'Diagnostics' 'Get-BsodHistory' { Get-BsodHistory -Days 7 }
 
 Test-SmokeFunction 'Network' 'Get-NetworkDiagnostics' { Get-NetworkDiagnostics }
 
+# §9 captura AnyDesk ID — helpers read-only (PUROS + StrictMode-safe).
+# Herméticos: usan fixtures en TEMP + override de rutas; NO requieren AnyDesk instalado.
+Test-SmokeFunction 'AnyDesk' 'ConvertFrom-AnyDeskConf: presente/ausente/espacios/1-linea (StrictMode)' {
+    $ErrorActionPreference = 'Stop'
+    if ($null -ne (ConvertFrom-AnyDeskConf -Lines @()))                          { throw 'vacío -> $null' }
+    if ($null -ne (ConvertFrom-AnyDeskConf -Lines @('foo=bar', '# comentario'))) { throw 'sin clave -> $null' }
+    $lines = @('ad.anynet.relay=x', 'ad.anynet.id=123456789', 'ad.roster.items=y')
+    if ((ConvertFrom-AnyDeskConf -Lines $lines) -ne '123456789')                 { throw 'ID 123456789 esperado' }
+    if ((ConvertFrom-AnyDeskConf -Lines @('ad.anynet.id = 987654321 ')) -ne '987654321') { throw 'tolerar espacios' }
+    # 1 sola línea = trampa exactamente-1 (se desenrolla a escalar bajo StrictMode).
+    if ((ConvertFrom-AnyDeskConf -Lines @('ad.anynet.id=555')) -ne '555')        { throw '1-línea exacta' }
+    if ($null -ne (ConvertFrom-AnyDeskConf -Lines @('ad.anynet.id=abc')))        { throw 'no-numérico -> $null' }
+}
+
+Test-SmokeFunction 'AnyDesk' 'Get-AnyDeskId: sin conf -> $null; con fixture -> ID' {
+    $ErrorActionPreference = 'Stop'
+    # rutas inexistentes -> $null (caso "AnyDesk no instalado", el de la PC de smoke).
+    if ($null -ne (Get-AnyDeskId -ConfPaths @((Join-Path $env:TEMP 'pctk-no-existe\system.conf')))) { throw 'sin conf -> $null' }
+    # fixture real: archivo temp con la clave.
+    $tmp = Join-Path $env:TEMP ('pctk_ad_{0}.conf' -f ([guid]::NewGuid().ToString('N')))
+    try {
+        Set-Content -LiteralPath $tmp -Value @('ad.anynet.id=246813579', 'otra=cosa') -Encoding ASCII
+        if ((Get-AnyDeskIdFromConf -ConfPath $tmp) -ne '246813579') { throw 'Get-AnyDeskIdFromConf roto' }
+        if ((Get-AnyDeskId -ConfPaths @($tmp)) -ne '246813579')     { throw 'Get-AnyDeskId override roto' }
+    } finally {
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+    }
+}
+
 Test-SmokeFunction 'Privacy' 'Test-ShutUp10Available' { Test-ShutUp10Available }
 Test-SmokeFunction 'Privacy' 'Get-ShutUp10Path'       { Get-ShutUp10Path }
 
