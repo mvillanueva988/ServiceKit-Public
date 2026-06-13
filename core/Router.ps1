@@ -913,18 +913,41 @@ function Invoke-ActionNetwork {
         $job = Start-NetworkDiagnosticsProcess
         $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Diagnostico de red' -TimeoutSeconds 60)[0]
         if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Failed'; return }
-        Write-Host ('  TCP AutoTuning : {0}' -f $r.TcpAutoTuning)
-        Write-Host ('  Ping 8.8.8.8   : {0} ms' -f $r.PingMs)
-        foreach ($a in $r.Adapters) { Write-Host ('  Adapter        : {0,-25} {1,-15} [{2}]' -f $a.Name, $a.LinkSpeed, $a.MediaType) }
+        Write-Host ('  TCP AutoTuning : {0}{1}' -f $r.TcpAutoTuning, $(if ($r.TcpAutoTuning -ieq 'normal') { '   (default correcto)' } else { '' }))
+        Write-Host ('  Ping idle      : {0} ms (8.8.8.8)' -f $r.PingMs)
+        if ($r.PSObject.Properties['NetworkThrottlingIndex']) {
+            Write-Host ('  NetThrottlIdx  : {0}   (cambiarlo NO mejora gaming - mito)' -f $r.NetworkThrottlingIndex)
+        }
+        foreach ($a in $r.Adapters) {
+            [string] $drv = ''
+            if ($a.PSObject.Properties['DriverVersion'] -and $a.DriverVersion) {
+                $drv = '  driver ' + $a.DriverVersion + $(if ($a.PSObject.Properties['DriverDate'] -and $a.DriverDate) { ' (' + $a.DriverDate + ')' } else { '' })
+            }
+            Write-Host ('  Adapter        : {0,-22} {1,-12} [{2}]{3}' -f $a.Name, $a.LinkSpeed, $a.MediaType, $drv)
+            if ($a.PSObject.Properties['LinkSuspect'] -and $a.LinkSuspect) {
+                Write-PctkWarn '    [!] link bajo (<=100 Mbps en Ethernet) - revisar cable/puerto'
+            }
+            if ($a.PSObject.Properties['Eee'] -and $a.Eee -ne 'n/d') {
+                Write-Host ('    EEE/ahorro   : {0}{1}' -f $a.Eee, $(if ($a.Eee -eq 'on') { '  (apagable con [O])' } else { '' }))
+            }
+            if ($a.PSObject.Properties['InterruptModeration'] -and $a.InterruptModeration -ne 'n/d') {
+                Write-Host ('    Int.Moderat. : {0}  (dejar asi; deshabilitar puede empeorar el DPC)' -f $a.InterruptModeration)
+            }
+            if ($a.PSObject.Properties['SpeedDuplex'] -and $a.SpeedDuplex) {
+                Write-Host ('    Duplex       : {0}' -f $a.SpeedDuplex)
+            }
+        }
         foreach ($k in $r.DnsServers.Keys) { Write-Host ('  DNS {0,-15}: {1}' -f $k, ($r.DnsServers[$k] -join ', ')) }
         Write-ActionAudit -Action 'Network.Diagnostics' -Status 'Success' -Summary ('Tuning={0} Ping={1}ms' -f $r.TcpAutoTuning, $r.PingMs) -Details $r
         return
     }
     if ($sub -eq 'O') {
         # Listar adapters fisicos detectados para preview
+        # Filtrar por HardwareInterface (NIC real), no por PhysicalMediaType:
+        # excluye VBox/ZeroTier que reportan 802.3 (hallazgo HW 2026-06-11).
         [string[]] $eligible = @(
             Get-NetAdapter -ErrorAction SilentlyContinue |
-                Where-Object { $_.Status -eq 'Up' -and $_.PhysicalMediaType -in @('802.3', 'Native 802.11') } |
+                Where-Object { $_.Status -eq 'Up' -and $_.HardwareInterface } |
                 ForEach-Object { ('{0} ({1})' -f $_.Name, $_.PhysicalMediaType) }
         )
         [string[]] $previewLines = @(
@@ -932,6 +955,7 @@ function Invoke-ActionNetwork {
             'Va a deshabilitar en cada adapter (si aplica): EEE, Green Ethernet, PowerSavingMode, EnablePME, ULPMode',
             'TCP global: autotuninglevel=normal (skip si ya es normal), fastopen=enabled (best-effort)',
             'ipconfig /flushdns',
+            'NO se tocan: NetworkThrottlingIndex ni Interrupt Moderation (mitos / pueden empeorar).',
             'Reversible manual: Device Manager > adapter > Advanced/Power Management.'
         )
         if (-not (Confirm-Action -Title 'Aplicar Network Optimize?' -Lines $previewLines)) {

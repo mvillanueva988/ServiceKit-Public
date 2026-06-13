@@ -193,6 +193,62 @@ Test-SmokeFunction 'AnyDesk' 'Get-AnyDeskId: sin conf -> $null; con fixture -> I
     }
 }
 
+# §24 capa de red — helpers de diagnóstico PUROS con fixtures 0/1/N adapters.
+# La trampa StrictMode vive en EXACTAMENTE-1 (se desenrolla a escalar). El smoke
+# corre con Set-StrictMode -Version Latest, así que ejercita el path real.
+Test-SmokeFunction 'Network' 'Get-NetworkAdapterReport: 0/1/N + virtual excluido (StrictMode)' {
+    $ErrorActionPreference = 'Stop'
+    # 0 adapters -> vacío, sin tirar.
+    if (@(Get-NetworkAdapterReport -Adapters @() -AdvByName @{}).Count -ne 0) { throw '0 adapters debe dar vacío' }
+
+    # EXACTAMENTE 1 físico (Wi-Fi, sin EEE).
+    $one = [PSCustomObject]@{ Name='Wi-Fi'; LinkSpeed='300 Mbps'; PhysicalMediaType='Native 802.11'; HardwareInterface=$true; DriverVersion='10.45'; DriverDate='2023-08-01' }
+    $r1 = @(Get-NetworkAdapterReport -Adapters $one -AdvByName @{ 'Wi-Fi' = [PSCustomObject]@{ Eee=$null; InterruptModeration='1'; SpeedDuplex=$null } })
+    if ($r1.Count -ne 1)                     { throw ("1 físico esperado; got {0}" -f $r1.Count) }
+    if ($r1[0].Eee -ne 'n/d')                { throw ("Wi-Fi sin EEE -> n/d; got {0}" -f $r1[0].Eee) }
+    if ($r1[0].InterruptModeration -ne 'on') { throw ("IM '1' -> on; got {0}" -f $r1[0].InterruptModeration) }
+    if ($r1[0].LinkSuspect)                  { throw 'Wi-Fi 300Mbps no debe ser LinkSuspect' }
+
+    # 1 físico + 1 virtual 802.3 (VBox/ZeroTier): el virtual NO entra (fix HW).
+    $mix = @(
+        [PSCustomObject]@{ Name='Ethernet';   LinkSpeed='100 Mbps'; PhysicalMediaType='802.3'; HardwareInterface=$true;  DriverVersion='9.1'; DriverDate='' },
+        [PSCustomObject]@{ Name='Ethernet 3'; LinkSpeed='1 Gbps';   PhysicalMediaType='802.3'; HardwareInterface=$false; DriverVersion='';    DriverDate='' }
+    )
+    $rm = @(Get-NetworkAdapterReport -Adapters $mix -AdvByName @{ 'Ethernet' = [PSCustomObject]@{ Eee='1'; InterruptModeration='0'; SpeedDuplex='100 Mbps Full Duplex' } })
+    if ($rm.Count -ne 1)                          { throw ("virtual debe excluirse; esperado 1, got {0}" -f $rm.Count) }
+    if ($rm[0].Name -ne 'Ethernet')               { throw ("el físico es Ethernet; got {0}" -f $rm[0].Name) }
+    if ($rm[0].Eee -ne 'on')                      { throw ("EEE '1' -> on; got {0}" -f $rm[0].Eee) }
+    if (-not $rm[0].LinkSuspect)                  { throw 'Ethernet 100Mbps debe ser LinkSuspect' }
+    if ($rm[0].SpeedDuplex -ne '100 Mbps Full Duplex') { throw 'SpeedDuplex passthrough roto' }
+
+    # N físicos sin AdvByName -> EEE n/d, shape consistente.
+    $many = @(
+        [PSCustomObject]@{ Name='A'; LinkSpeed='1 Gbps';   PhysicalMediaType='802.3'; HardwareInterface=$true },
+        [PSCustomObject]@{ Name='B'; LinkSpeed='1 Gbps';   PhysicalMediaType='802.3'; HardwareInterface=$true },
+        [PSCustomObject]@{ Name='C'; LinkSpeed='2.5 Gbps'; PhysicalMediaType='802.3'; HardwareInterface=$true }
+    )
+    $rn = @(Get-NetworkAdapterReport -Adapters $many -AdvByName @{})
+    if ($rn.Count -ne 3)        { throw ("3 físicos esperados; got {0}" -f $rn.Count) }
+    foreach ($e in $rn) { if ($e.Eee -ne 'n/d') { throw 'sin AdvByName -> EEE n/d' } }
+    if ($rn[2].LinkSuspect)     { throw '2.5 Gbps no es LinkSuspect' }
+}
+
+Test-SmokeFunction 'Network' 'ConvertTo-Mbps + Test-LinkSuspect + ConvertTo-PowerPropState' {
+    $ErrorActionPreference = 'Stop'
+    if ((ConvertTo-Mbps -LinkSpeed '1 Gbps')   -ne 1000) { throw '1 Gbps -> 1000' }
+    if ((ConvertTo-Mbps -LinkSpeed '100 Mbps') -ne 100)  { throw '100 Mbps -> 100' }
+    if ((ConvertTo-Mbps -LinkSpeed '2.5 Gbps') -ne 2500) { throw '2.5 Gbps -> 2500' }
+    if ((ConvertTo-Mbps -LinkSpeed '')         -ne -1)   { throw 'vacío -> -1' }
+    if ((ConvertTo-Mbps -LinkSpeed 'nonsense') -ne -1)   { throw 'basura -> -1' }
+    if (-not (Test-LinkSuspect -MediaType '802.3' -LinkSpeed '100 Mbps')) { throw 'Eth 100 = suspect' }
+    if (Test-LinkSuspect -MediaType '802.3' -LinkSpeed '1 Gbps')          { throw 'Eth 1Gbps no suspect' }
+    if (Test-LinkSuspect -MediaType 'Native 802.11' -LinkSpeed '54 Mbps') { throw 'Wi-Fi no aplica heurística de cable' }
+    if ((ConvertTo-PowerPropState -RegistryValue $null)      -ne 'n/d') { throw 'null -> n/d' }
+    if ((ConvertTo-PowerPropState -RegistryValue '1')        -ne 'on')  { throw '1 -> on' }
+    if ((ConvertTo-PowerPropState -RegistryValue '0')        -ne 'off') { throw '0 -> off' }
+    if ((ConvertTo-PowerPropState -RegistryValue 'Enabled')  -ne 'on')  { throw 'Enabled -> on' }
+}
+
 Test-SmokeFunction 'Privacy' 'Test-ShutUp10Available' { Test-ShutUp10Available }
 Test-SmokeFunction 'Privacy' 'Get-ShutUp10Path'       { Get-ShutUp10Path }
 

@@ -19,12 +19,19 @@ function Optimize-Network {
 
     [object[]] $allAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
 
+    # HALLAZGO HW 2026-06-11: filtrar por HardwareInterface (NIC real), NO por
+    # PhysicalMediaType. En la PC de Mateo, "Ethernet 3" (VirtualBox) y ZeroTier
+    # (VPN) reportan PhysicalMediaType=802.3 y se colaban en el target; la unica
+    # NIC fisica real era el Wi-Fi MediaTek (HardwareInterface=True). EEE/Green
+    # Ethernet son props de Ethernet: en una NIC Wi-Fi no existen -> ChangesMade=0
+    # (no-op seguro). HardwareInterface excluye virtuales/loopback.
     [object[]] $targets = if ($PSBoundParameters.ContainsKey('AdapterNames') -and $AdapterNames.Count -gt 0) {
         @($allAdapters | Where-Object { $_.Name -in $AdapterNames })
     } else {
         @($allAdapters | Where-Object {
             $_.Status -eq 'Up' -and
-            $_.PhysicalMediaType -in @('802.3', 'Native 802.11')
+            $null -ne $_.PSObject.Properties['HardwareInterface'] -and
+            $_.HardwareInterface -eq $true
         })
     }
 
@@ -153,11 +160,112 @@ Optimize-Network -AdapterNames `$AdapterNames
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'NetworkOptimization' -ArgumentList $argList
 }
 
+# =========================================================================
+# Helpers de diagnóstico de red (PUROS + StrictMode-safe, testeables con fixtures)
+# =========================================================================
+
+function ConvertTo-Mbps {
+    <# Convierte un LinkSpeed string ("1 Gbps", "100 Mbps") a Mbps (int) o -1 si no parsea. #>
+    [CmdletBinding()]
+    param([string] $LinkSpeed)
+    if ([string]::IsNullOrWhiteSpace($LinkSpeed)) { return -1 }
+    if ($LinkSpeed -match '(?i)([\d.,]+)\s*([gmk]?)bps') {
+        [string] $numRaw = $Matches[1] -replace ',', '.'
+        [double] $num = 0
+        if (-not [double]::TryParse($numRaw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref] $num)) { return -1 }
+        switch -regex ($Matches[2].ToLower()) {
+            'g'     { return [int] ($num * 1000) }
+            'm'     { return [int] $num }
+            'k'     { return [int] ($num / 1000) }
+            default { return [int] ($num / 1000000) }   # bps -> Mbps
+        }
+    }
+    return -1
+}
+
+function Test-LinkSuspect {
+    <# Ethernet (802.3) negociando <=100 Mbps = probable cable/puerto degradado. #>
+    [CmdletBinding()]
+    param([string] $MediaType, [string] $LinkSpeed)
+    if ($MediaType -ne '802.3') { return $false }
+    [int] $mbps = ConvertTo-Mbps -LinkSpeed $LinkSpeed
+    return ($mbps -gt 0 -and $mbps -le 100)
+}
+
+function ConvertTo-PowerPropState {
+    <# Mapea el RegistryValue de una advanced property a on/off/n/d ($null = no expuesta). #>
+    [CmdletBinding()]
+    param($RegistryValue)
+    if ($null -eq $RegistryValue) { return 'n/d' }
+    [string] $v = ([string] $RegistryValue).Trim()
+    if ([string]::IsNullOrWhiteSpace($v)) { return 'n/d' }
+    if ($v -eq '1' -or $v -ieq 'enabled')  { return 'on' }
+    if ($v -eq '0' -or $v -ieq 'disabled') { return 'off' }
+    return $v
+}
+
+function Get-NetworkAdapterReport {
+    <#
+    .SYNOPSIS
+        PURO + StrictMode-safe: filtra adapters físicos (HardwareInterface) y arma el
+        shape de diagnóstico por adapter. Recibe datos ya adquiridos (sin cmdlets) para
+        ser testeable con fixtures de 0/1/N adapters + virtual-excluido.
+    .PARAMETER Adapters
+        Array de objetos con: Name, LinkSpeed, PhysicalMediaType, HardwareInterface,
+        DriverVersion, DriverDate. Lectura StrictMode-safe vía PSObject.Properties[].
+    .PARAMETER AdvByName
+        Hashtable name -> objeto con .Eee / .InterruptModeration / .SpeedDuplex (raw;
+        cualquiera puede faltar -> 'n/d'). Todo report-only.
+    #>
+    [CmdletBinding()]
+    param(
+        [object[]] $Adapters = @(),
+        [hashtable] $AdvByName = @{}
+    )
+
+    [System.Collections.Generic.List[PSCustomObject]] $out = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($a in $Adapters) {
+        if ($null -eq $a) { continue }
+        # Solo NIC física real (excluye VBox/ZeroTier/loopback que reportan 802.3).
+        if ($null -eq $a.PSObject.Properties['HardwareInterface'] -or $a.HardwareInterface -ne $true) { continue }
+
+        [string] $name      = if ($null -ne $a.PSObject.Properties['Name'])              { [string] $a.Name } else { '' }
+        [string] $linkSpeed = if ($null -ne $a.PSObject.Properties['LinkSpeed'])         { [string] $a.LinkSpeed } else { '' }
+        [string] $mediaType = if ($null -ne $a.PSObject.Properties['PhysicalMediaType']) { [string] $a.PhysicalMediaType } else { '' }
+        [string] $drvVer    = if ($null -ne $a.PSObject.Properties['DriverVersion'])     { [string] $a.DriverVersion } else { '' }
+        [string] $drvDate   = if ($null -ne $a.PSObject.Properties['DriverDate'])        { [string] $a.DriverDate } else { '' }
+
+        $adv = $null
+        if ($AdvByName.ContainsKey($name)) { $adv = $AdvByName[$name] }
+        $eeeRaw = $null; $imRaw = $null; $sdRaw = $null
+        if ($null -ne $adv) {
+            if ($null -ne $adv.PSObject.Properties['Eee'])                 { $eeeRaw = $adv.Eee }
+            if ($null -ne $adv.PSObject.Properties['InterruptModeration']) { $imRaw  = $adv.InterruptModeration }
+            if ($null -ne $adv.PSObject.Properties['SpeedDuplex'])         { $sdRaw  = $adv.SpeedDuplex }
+        }
+
+        $out.Add([PSCustomObject]@{
+            Name                = $name
+            LinkSpeed           = $linkSpeed
+            MediaType           = $mediaType
+            DriverVersion       = $drvVer
+            DriverDate          = $drvDate
+            Eee                 = ConvertTo-PowerPropState -RegistryValue $eeeRaw
+            InterruptModeration = ConvertTo-PowerPropState -RegistryValue $imRaw
+            SpeedDuplex         = if ($null -ne $sdRaw) { [string] $sdRaw } else { '' }
+            LinkSuspect         = Test-LinkSuspect -MediaType $mediaType -LinkSpeed $linkSpeed
+        })
+    }
+    return [PSCustomObject[]] $out.ToArray()
+}
+
 function Get-NetworkDiagnostics {
     <#
     .SYNOPSIS
-        Recopila diagnóstico de red: TCP AutoTuning, adaptadores activos, DNS IPv4, latencia.
-        Retorna PSCustomObject con TcpAutoTuning, Adapters, DnsServers, PingMs.
+        Recopila diagnóstico de red (read-only): TCP AutoTuning, adaptadores físicos con
+        driver/EEE/Interrupt-Moderation/duplex/link-suspect, DNS IPv4, latencia y
+        NetworkThrottlingIndex (mito, report-only). Conserva los campos previos
+        (TcpAutoTuning, Adapters[Name/LinkSpeed/MediaType], DnsServers, PingMs).
     #>
     [CmdletBinding()]
     param()
@@ -193,18 +301,69 @@ function Get-NetworkDiagnostics {
         }
     }
 
-    # -- Adaptadores activos --
-    [object[]] $adapters = @(
+    # -- Adaptadores FÍSICOS (HardwareInterface) + props avanzadas (report-only) --
+    # HALLAZGO HW 2026-06-11: filtrar por HardwareInterface (excluye VBox/ZeroTier
+    # que reportan 802.3). Props avanzadas matcheadas por RegistryKeyword (locale-
+    # stable: en es-AR el DisplayName vuelve en español).
+    [object[]] $rawAdapters = @(
         Get-NetAdapter -ErrorAction SilentlyContinue |
-            Where-Object { $_.Status -eq 'Up' } |
-            ForEach-Object {
-                [PSCustomObject]@{
-                    Name      = [string] $_.Name
-                    LinkSpeed = [string] $_.LinkSpeed
-                    MediaType = [string] $_.PhysicalMediaType
-                }
-            }
+            Where-Object { $_.Status -eq 'Up' -and $_.HardwareInterface }
     )
+    [hashtable] $advByName = @{}
+    [object[]] $adapterInputs = @()
+    foreach ($na in $rawAdapters) {
+        [string] $nm = [string] $na.Name
+
+        # EEE / ahorro de energía: probar varias keywords estables; 1ra que exista.
+        $eeeVal = $null
+        foreach ($kw in @('*EEE', '*GreenEthernet', 'LowPowerEnable', 'EnableGreenEthernet', 'EnablePME')) {
+            # Select-Object -First 1 (NO @(...)[0]): bajo StrictMode Latest indexar
+            # un array vacío tira IndexOutOfRange; Select -First 1 da $null si no hay.
+            $p1 = Get-NetAdapterAdvancedProperty -Name $nm -RegistryKeyword $kw -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $p1 -and $null -ne $p1.PSObject.Properties['RegistryValue']) {
+                $rv = $p1.RegistryValue
+                if ($rv -is [array]) { $rv = if ($rv.Count -gt 0) { $rv[0] } else { $null } }
+                if ($null -ne $rv) { $eeeVal = [string] $rv; break }
+            }
+        }
+
+        # Interrupt Moderation (REPORT-ONLY, nunca aplicar)
+        $imVal = $null
+        $imp1 = Get-NetAdapterAdvancedProperty -Name $nm -RegistryKeyword '*InterruptModeration' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $imp1 -and $null -ne $imp1.PSObject.Properties['RegistryValue']) {
+            $rv = $imp1.RegistryValue
+            if ($rv -is [array]) { $rv = if ($rv.Count -gt 0) { $rv[0] } else { $null } }
+            if ($null -ne $rv) { $imVal = [string] $rv }
+        }
+
+        # Speed/Duplex (DisplayValue humano, si está disponible)
+        $sdVal = $null
+        $sdp1 = Get-NetAdapterAdvancedProperty -Name $nm -RegistryKeyword '*SpeedDuplex' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $sdp1 -and $null -ne $sdp1.PSObject.Properties['DisplayValue']) {
+            $sdVal = [string] $sdp1.DisplayValue
+        }
+
+        $advByName[$nm] = [PSCustomObject]@{ Eee = $eeeVal; InterruptModeration = $imVal; SpeedDuplex = $sdVal }
+
+        # Driver (del propio objeto NetAdapter): version + fecha.
+        [string] $dv = ''
+        if ($null -ne $na.PSObject.Properties['DriverVersionString'] -and $na.DriverVersionString) { $dv = [string] $na.DriverVersionString }
+        elseif ($null -ne $na.PSObject.Properties['DriverVersion'] -and $na.DriverVersion)          { $dv = [string] $na.DriverVersion }
+        [string] $dd = ''
+        if ($null -ne $na.PSObject.Properties['DriverDate'] -and $null -ne $na.DriverDate) {
+            try { $dd = ([datetime] $na.DriverDate).ToString('yyyy-MM-dd') } catch { $dd = [string] $na.DriverDate }
+        }
+
+        $adapterInputs += [PSCustomObject]@{
+            Name              = $nm
+            LinkSpeed         = [string] $na.LinkSpeed
+            PhysicalMediaType = [string] $na.PhysicalMediaType
+            HardwareInterface = $true
+            DriverVersion     = $dv
+            DriverDate        = $dd
+        }
+    }
+    [object[]] $adapters = @(Get-NetworkAdapterReport -Adapters $adapterInputs -AdvByName $advByName)
 
     # -- DNS IPv4 por adaptador --
     [hashtable] $dnsServers = @{}
@@ -223,11 +382,22 @@ function Get-NetworkDiagnostics {
         $pingMs = [int] ($pingResult | Measure-Object -Property ResponseTime -Average).Average
     }
 
+    # -- NetworkThrottlingIndex (mito de gaming, REPORT-ONLY, nunca tocar) --
+    [string] $throttlingIdx = 'default/ausente'
+    $nti = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name 'NetworkThrottlingIndex' -ErrorAction SilentlyContinue
+    if ($null -ne $nti -and $null -ne $nti.PSObject.Properties['NetworkThrottlingIndex'] -and $null -ne $nti.NetworkThrottlingIndex) {
+        $ntiVal = $nti.NetworkThrottlingIndex
+        # 0xffffffff (4294967295) = deshabilitado (equivale al default funcional).
+        if ([string] $ntiVal -eq '4294967295') { $throttlingIdx = 'deshabilitado (0xffffffff)' }
+        else { $throttlingIdx = [string] $ntiVal }
+    }
+
     return [PSCustomObject]@{
-        TcpAutoTuning = [string]    $tcpTuning
-        Adapters      = [object[]]  $adapters
-        DnsServers    = [hashtable] $dnsServers
-        PingMs        = [int]       $pingMs
+        TcpAutoTuning          = [string]    $tcpTuning
+        Adapters               = [object[]]  $adapters
+        DnsServers             = [hashtable] $dnsServers
+        PingMs                 = [int]       $pingMs
+        NetworkThrottlingIndex = [string]    $throttlingIdx
     }
 }
 
