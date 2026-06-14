@@ -199,9 +199,11 @@ function Get-BitLockerRecoveryKey {
 function Save-BitLockerRecoveryKey {
     <#
     .SYNOPSIS
-        Guarda las claves capturadas en output\clients\<HOST>_<ts>\ (FUERA del
-        ZIP [L], que solo zipea audit\ + snapshots\). Respaldo secundario; el
-        primario es mostrarla en pantalla. Devuelve el path o '' si no hay claves.
+        Guarda las claves en output\recovery\<HOST>_<ts>\ -- un dir DEDICADO que el
+        bundle [L] NUNCA incluye (defensa en profundidad: la clave de recuperacion no
+        debe viajar en el ZIP del cliente; el recolector zipea clients\ y ahi NO debe
+        haber secretos). Respaldo secundario; el primario es mostrarla en pantalla.
+        Devuelve el path o '' si no hay claves.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -219,7 +221,7 @@ function Save-BitLockerRecoveryKey {
 
     [string] $host_ = $env:COMPUTERNAME
     [string] $ts    = if ($TimestampOverride) { $TimestampOverride } else { Get-Date -Format 'yyyyMMdd-HHmmss' }
-    [string] $dir   = Join-Path $outputRoot ('clients\{0}_{1}' -f $host_, $ts)
+    [string] $dir   = Join-Path $outputRoot ('recovery\{0}_{1}' -f $host_, $ts)
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
 
     [string] $file = Join-Path $dir ('bitlocker-recovery-{0}.txt' -f $host_)

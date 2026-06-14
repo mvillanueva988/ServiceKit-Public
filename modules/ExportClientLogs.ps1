@@ -363,12 +363,18 @@ function Invoke-CloseService {
     $result = Invoke-ExportClientLogs @exportParams
 
     # ── Paso 7: cerrar el service state (D3: borrar current-run.json) ────────
-    if (Get-Command -Name 'Close-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
+    # SOLO si el bundle se armo OK. Si fallo/vacio, NO cerramos el service: el
+    # operador puede reintentar el [L] sin perder el estado (evita "service cerrado
+    # sin ZIP", que dejaria sin forma de re-empaquetar).
+    if ($null -ne $result -and $null -ne $result.PSObject.Properties['Status'] -and $result.Status -eq 'OK' -and
+        (Get-Command -Name 'Close-ServiceState' -CommandType Function -ErrorAction SilentlyContinue)) {
         try {
             Close-ServiceState -OutputRootOverride $OutputRootOverride
         } catch {
             Write-PctkWarn ('  [!] No se pudo cerrar el state: {0}' -f $_.Exception.Message)
         }
+    } elseif ($null -ne $result -and $result.Status -ne 'OK') {
+        Write-PctkWarn ('  [!] El bundle no se creo (estado {0}); el service queda ABIERTO para reintentar [L].' -f $result.Status)
     }
 
     # ── Paso 8: limpiar meta temporal (ya esta en el ZIP) ────────────────────
