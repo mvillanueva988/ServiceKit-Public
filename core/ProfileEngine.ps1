@@ -387,6 +387,19 @@ function Invoke-AutoProfile {
     if ($null -ne $preRaw -and $preRaw.PSObject.Properties['FileName'] -and -not [string]::IsNullOrWhiteSpace([string]$preRaw.FileName)) {
         $preSnap = [PSCustomObject]@{ Ok = $true; FileName = [string]$preRaw.FileName; FilePath = [string]$preRaw.FilePath }
         Write-PctkOk ('  [OK] Snapshot PRE: {0}' -f $preRaw.FileName)
+
+        # Pieza B (recolector): el PRE de [1]/[2] tambien abre el service y sella
+        # pre_taken_at, igual que el PRE manual [3]. Asi el flujo principal (aplicar
+        # perfil) registra el inicio del service para el [L] Cerrar service. Defensivo:
+        # nunca tira (el snapshot ya se guardo; el service no es critico).
+        if (Get-Command -Name 'Open-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
+            try {
+                $null = Open-ServiceState
+                $null = Set-ServiceStatePreTaken
+            } catch {
+                Write-PctkHint ('  [i] Service state no actualizado: {0}' -f $_.Exception.Message)
+            }
+        }
     } else {
         Write-PctkWarn '  [!] Snapshot PRE no disponible (timeout o error). Continuando sin el.'
     }
