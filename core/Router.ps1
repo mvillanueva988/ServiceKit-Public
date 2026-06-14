@@ -126,6 +126,23 @@ function Show-MachineBanner {
     $rows += [PSCustomObject]@{ Label = 'GPU'; Value = [string]$gpuLabel }
     $rows += [PSCustomObject]@{ Label = 'OEM'; Value = ('{0}{1}' -f $manufacturer, $oemSuffix) }
 
+    # Indicador "ultimo PRE" (D2 recolector-plan): siempre visible en el banner.
+    # Permite saber de un vistazo si ya se tomo el PRE en esta visita.
+    # Get-ServiceState nunca tira (devuelve $null si no hay state o está roto).
+    [string] $preLabel = 'sin PRE'
+    if (Get-Command -Name 'Get-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
+        $svcState = Get-ServiceState
+        if ($null -ne $svcState -and $null -ne $svcState.PSObject.Properties['pre_taken_at'] -and
+            -not [string]::IsNullOrEmpty([string]$svcState.pre_taken_at) -and
+            [string]$svcState.pre_taken_at -ne 'null') {
+            # Mostrar solo fecha+hora (sin timezone) para que quepa en el banner
+            [string] $rawPre = [string]$svcState.pre_taken_at
+            # Formato ISO: "2026-06-14T10:05:00-03:00" -> tomar solo los primeros 16 chars
+            [string] $preLabel = if ($rawPre.Length -ge 16) { $rawPre.Substring(0, 16).Replace('T', ' ') } else { $rawPre }
+        }
+    }
+    $rows += [PSCustomObject]@{ Label = 'PRE'; Value = $preLabel }
+
     [string] $vmLine = ''
     if ($MachineProfile.PSObject.Properties['IsVirtualMachine'] -and [bool]$MachineProfile.IsVirtualMachine) {
         [string] $vmVendorLabel = if ($MachineProfile.PSObject.Properties['VmVendor'] -and -not [string]::IsNullOrWhiteSpace([string]$MachineProfile.VmVendor)) {
@@ -168,7 +185,39 @@ function Show-MainMenu {
     # Show-MachineBanner (CommandNotFound). Scriptblock plano + $script:var: el lookup
     # dinamico camina la pila y encuentra la funcion; la var resuelve por script-scope.
     $script:PctkBannerProfile = $MachineProfile
-    [scriptblock] $renderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $script:PctkBannerProfile }
+    [scriptblock] $renderHeader = {
+        Clear-Host
+        Show-MachineBanner -MachineProfile $script:PctkBannerProfile
+
+        # Pieza B (recolector): evaluacion del estado del service al redibujar el menu.
+        # Muestra UNA linea debajo del banner con el estado actual, sin bloquear el flujo.
+        if (Get-Command -Name 'Get-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
+            $pctkSvcState = Get-ServiceState
+            if ($null -eq $pctkSvcState) {
+                # Sin state: recomendar tomar PRE antes de trabajar
+                Write-PctkWarn '  Sin PRE para esta PC. Recomendado: tomar PRE [3] antes de trabajar.'
+            } elseif (Get-Command -Name 'Test-ServiceStateStale' -CommandType Function -ErrorAction SilentlyContinue) {
+                if (Test-ServiceStateStale) {
+                    # State de otra PC: cerrar el stale y avisar
+                    Write-PctkWarn '  Service de otra PC detectado; se cierra para empezar limpio. Recomendado PRE nuevo [3].'
+                    if (Get-Command -Name 'Close-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
+                        try { Close-ServiceState -WriteClosedLog $false } catch { }
+                    }
+                } else {
+                    # Service abierto para esta PC: mostrar desde cuando
+                    [string] $pctkOpenedAt = if ($null -ne $pctkSvcState.PSObject.Properties['opened_at']) {
+                        $pctkSvcState.opened_at
+                    } else { '?' }
+                    [string] $pctkPreAt = if ($null -ne $pctkSvcState.PSObject.Properties['pre_taken_at'] -and
+                                                -not [string]::IsNullOrEmpty([string]$pctkSvcState.pre_taken_at) -and
+                                                [string]$pctkSvcState.pre_taken_at -ne 'null') {
+                        [string]$pctkSvcState.pre_taken_at
+                    } else { 'sin PRE' }
+                    Write-PctkHint ('  Service en curso desde {0}  (PRE: {1}).' -f $pctkOpenedAt, $pctkPreAt)
+                }
+            }
+        }
+    }
 
     do {
         [string] $choice = Read-PctkMenuChoice -Rows $rows -RenderHeader $renderHeader
@@ -229,7 +278,16 @@ function Invoke-MainMenuDispatch {
             Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
             return
         }
-        'L' { Invoke-ExportClientLogs; return }
+        'L' {
+            # Pieza C (recolector): [L] = Cerrar service. Incluye POST auto + meta.json.
+            # Si Invoke-CloseService no esta disponible (fallo de carga), cae al export directo.
+            if (Get-Command -Name 'Invoke-CloseService' -CommandType Function -ErrorAction SilentlyContinue) {
+                Invoke-CloseService
+            } else {
+                Invoke-ExportClientLogs
+            }
+            return
+        }
         'T' { Show-ToolsMenu -MachineProfile $MachineProfile; return }
         'U' {
             $null = Invoke-UninstallToolkit
@@ -265,6 +323,20 @@ function Invoke-DiagnosticSnapshot {
         Write-PctkOk ('  [OK] Snapshot guardado: {0}' -f $r.FileName)
         Write-PctkHint ('       {0}' -f $r.FilePath)
         Write-ActionAudit -Action $action -Status 'Success' -Summary $r.FileName -Details $r
+
+        # Pieza B (recolector): al tomar el PRE, abrir el service y sellar pre_taken_at.
+        # Esto registra el inicio del service para el flujo [L] Cerrar service.
+        # Get-ServiceState/Open-ServiceState nunca tiran (defensivas).
+        if ($Phase -eq 'Pre' -and
+            (Get-Command -Name 'Open-ServiceState' -CommandType Function -ErrorAction SilentlyContinue)) {
+            try {
+                $null = Open-ServiceState
+                $null = Set-ServiceStatePreTaken
+            } catch {
+                # El service no es critico: si falla el registro, el snapshot ya se guardo
+                Write-PctkHint ('  [i] Service state no actualizado: {0}' -f $_.Exception.Message)
+            }
+        }
     } else {
         Write-PctkWarn '  [!] No se obtuvo resultado del snapshot.'
         Write-ActionAudit -Action $action -Status 'Failed' -Summary 'No result'

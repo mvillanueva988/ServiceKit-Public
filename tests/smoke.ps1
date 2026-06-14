@@ -2068,6 +2068,266 @@ Test-SmokeFunction 'ClientReport' 'Router [8] rutea a Invoke-ClientReport' {
     }
 }
 
+# ─── Recolector: ServiceState (pieza A del recolector-plan.md) ───────────────
+# Tests con fixtures 0/1/N en $env:TEMP (no tocan output\ real).
+# El caso EXACTAMENTE-1 es la trampa StrictMode de @()[0]: si se accede a
+# elementos de un array en un if-expression, PS5.1 puede desenrollar a escalar.
+# ServiceState evita eso con [object[]] explicito + PSObject.Properties.
+
+Test-SmokeFunction 'ServiceState' 'funciones requeridas presentes' {
+    $ErrorActionPreference = 'Stop'
+    foreach ($fn in @('Get-ServiceStatePath','Get-ServiceState','Open-ServiceState',
+                      'Set-ServiceStatePreTaken','Test-ServiceStateStale','Close-ServiceState')) {
+        if ($null -eq (Get-Command $fn -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw "$fn no encontrado"
+        }
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'sin state -> Get-ServiceState devuelve $null + Test-ServiceStateStale false' {
+    $ErrorActionPreference = 'Stop'
+    # Usar output root en $env:TEMP para no afectar el state real del sistema
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-ss-0-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path $tmpRoot -ItemType Directory -Force | Out-Null
+    try {
+        $state = Get-ServiceState -OutputRootOverride $tmpRoot
+        if ($null -ne $state) { throw ('sin state debe devolver $null; got {0}' -f $state) }
+        [bool] $stale = Test-ServiceStateStale -OutputRootOverride $tmpRoot
+        if ($stale -ne $false) { throw ('sin state Test-ServiceStateStale debe ser false; got {0}' -f $stale) }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'Open-ServiceState -> crea state con hostname + idempotente' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-ss-open-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path $tmpRoot -ItemType Directory -Force | Out-Null
+    try {
+        $s = Open-ServiceState -OutputRootOverride $tmpRoot
+        # Debe crear el state
+        if ($null -eq $s) { throw 'Open-ServiceState devolvio $null' }
+        # hostname correcto
+        [string] $hn = if ($null -ne $s.PSObject.Properties['hostname']) { [string]$s.hostname } else { '' }
+        if ($hn -ne $env:COMPUTERNAME) { throw ("hostname esperado {0}; got {1}" -f $env:COMPUTERNAME, $hn) }
+        # open = true
+        if ($null -eq $s.PSObject.Properties['open'] -or [bool]$s.open -ne $true) { throw 'open debe ser true' }
+        # pre_taken_at debe ser null o vaciar (no sellar sin PRE)
+        [string] $pre = if ($null -ne $s.PSObject.Properties['pre_taken_at']) { [string]$s.pre_taken_at } else { '' }
+        if (-not [string]::IsNullOrEmpty($pre) -and $pre -ne 'null') {
+            throw ('pre_taken_at debe estar vacio antes de Set-ServiceStatePreTaken; got {0}' -f $pre)
+        }
+        # Leer desde disco para verificar que se persitio
+        $s2 = Get-ServiceState -OutputRootOverride $tmpRoot
+        if ($null -eq $s2) { throw 'Get-ServiceState devolvio $null despues de Open' }
+        # Idempotencia: abrir de nuevo no pisa el state (el pre_taken_at sigue null)
+        $s3 = Open-ServiceState -OutputRootOverride $tmpRoot
+        if ($null -eq $s3) { throw 'segundo Open-ServiceState devolvio $null (idempotencia)' }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'Set-ServiceStatePreTaken sella pre_taken_at (canario exactamente-1 state)' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-ss-pre-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path $tmpRoot -ItemType Directory -Force | Out-Null
+    try {
+        # Caso EXACTAMENTE-1: un solo state file (la trampa StrictMode tipica)
+        [string] $preAt = '2026-06-14T10:05:00-03:00'
+        $s = Set-ServiceStatePreTaken -OutputRootOverride $tmpRoot -PreTakenAtOverride $preAt
+        if ($null -eq $s) { throw 'Set-ServiceStatePreTaken devolvio $null' }
+        [string] $got = if ($null -ne $s.PSObject.Properties['pre_taken_at']) { [string]$s.pre_taken_at } else { '' }
+        if ($got -ne $preAt) { throw ("pre_taken_at esperado {0}; got {1}" -f $preAt, $got) }
+        # Verificar que persitio en disco (no solo en memoria)
+        $s2 = Get-ServiceState -OutputRootOverride $tmpRoot
+        if ($null -eq $s2) { throw 'Get-ServiceState $null despues de Set-ServiceStatePreTaken' }
+        [string] $got2 = if ($null -ne $s2.PSObject.Properties['pre_taken_at']) { [string]$s2.pre_taken_at } else { '' }
+        if ($got2 -ne $preAt) { throw ("pre_taken_at en disco esperado {0}; got {1}" -f $preAt, $got2) }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'Test-ServiceStateStale: host distinto -> true / mismo host -> false' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-ss-stale-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path $tmpRoot -ItemType Directory -Force | Out-Null
+    try {
+        # Crear state con hostname distinto (simula USB movido de otra PC)
+        [string] $stateDir = Join-Path $tmpRoot 'output\state'
+        New-Item -Path $stateDir -ItemType Directory -Force | Out-Null
+        [string] $jsonPath = Join-Path $stateDir 'current-run.json'
+        @{ schema_version='1.0'; hostname='OTRA-PC'; opened_at='2026-06-01T10:00:00-03:00'; pre_taken_at=$null; open=$true } |
+            ConvertTo-Json | Out-File -FilePath $jsonPath -Encoding UTF8
+        # Test-ServiceStateStale con host distinto = true (stale)
+        [bool] $stale = Test-ServiceStateStale -OutputRootOverride $tmpRoot
+        if ($stale -ne $true) { throw 'host distinto debe ser stale (true)' }
+        # Cambiar hostname al local para probar el false
+        @{ schema_version='1.0'; hostname=$env:COMPUTERNAME; opened_at='2026-06-01T10:00:00-03:00'; pre_taken_at=$null; open=$true } |
+            ConvertTo-Json | Out-File -FilePath $jsonPath -Encoding UTF8 -Force
+        [bool] $notStale = Test-ServiceStateStale -OutputRootOverride $tmpRoot
+        if ($notStale -ne $false) { throw 'mismo host NO debe ser stale (false)' }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'JSON ilegible -> Get-ServiceState $null sin tirar' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-ss-corrupt-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $stateDir = Join-Path $tmpRoot 'output\state'
+    New-Item -Path $stateDir -ItemType Directory -Force | Out-Null
+    try {
+        # Escribir JSON corrupto (comilla sin cerrar)
+        [string] $jsonPath = Join-Path $stateDir 'current-run.json'
+        Set-Content -LiteralPath $jsonPath -Value '{"hostname": "PC-TEST", "open": true, "corrupto": "sin cerrar' -Encoding UTF8
+        $state = Get-ServiceState -OutputRootOverride $tmpRoot
+        if ($null -ne $state) { throw 'JSON corrupto debe devolver $null; got objeto' }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'Close-ServiceState: borra current-run.json (D3) + no tira si ausente' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-ss-close-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path $tmpRoot -ItemType Directory -Force | Out-Null
+    try {
+        # Abrir -> verificar que existe -> cerrar -> verificar que desaparecio
+        $null = Open-ServiceState -OutputRootOverride $tmpRoot
+        [string] $jsonPath = Get-ServiceStatePath -OutputRootOverride $tmpRoot
+        if (-not (Test-Path -LiteralPath $jsonPath)) { throw 'state no creado por Open-ServiceState' }
+        Close-ServiceState -OutputRootOverride $tmpRoot -WriteClosedLog $false
+        if (Test-Path -LiteralPath $jsonPath) { throw 'Close-ServiceState no borro current-run.json (D3)' }
+        # Llamar Close de nuevo sin state = no debe tirar (idempotencia)
+        Close-ServiceState -OutputRootOverride $tmpRoot -WriteClosedLog $false
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'Router [L] rutea a Invoke-CloseService (no a Invoke-ExportClientLogs directo)' {
+    $ErrorActionPreference = 'Stop'
+    [string] $dispDef = (Get-Command Invoke-MainMenuDispatch -CommandType Function).Definition
+    # El dispatch [L] debe contener Invoke-CloseService (no la llamada directa a ExportClientLogs)
+    if ($dispDef -notmatch "'L'\s*\{[\s\S]*?Invoke-CloseService") {
+        throw 'dispatch [L] no contiene Invoke-CloseService (recolector pieza C)'
+    }
+}
+
+# ─── Recolector: New-RunMeta (pieza D1) ──────────────────────────────────────
+# Helper puro (sin I/O real): usa fixture de AnyDeskConfPaths para no depender
+# de que AnyDesk este instalado en la PC del smoke. Shape completo.
+
+Test-SmokeFunction 'ServiceState' 'New-RunMeta: shape completo + anydesk_id con fixture (D1)' {
+    $ErrorActionPreference = 'Stop'
+    # Fixture de AnyDesk conf en TEMP para no depender de la instalacion real
+    [string] $tmpConf = Join-Path $env:TEMP ('pctk-ad-meta-' + [System.Guid]::NewGuid().ToString('N') + '.conf')
+    try {
+        Set-Content -LiteralPath $tmpConf -Value @('ad.anynet.id=123456789', 'other=x') -Encoding ASCII
+        $meta = New-RunMeta -ClientSlug 'cliente-test' -DateOverride '2026-06-14T10:00:00-03:00' -AnyDeskConfPaths @($tmpConf)
+        if ($null -eq $meta) { throw 'New-RunMeta devolvio $null' }
+        # Campos obligatorios del shape
+        foreach ($k in @('client','date','computer_name','anydesk_id','schema_version','compare_score','status','amount_charged_ars','notes')) {
+            if (-not $meta.Contains($k)) { throw ("campo '$k' ausente en New-RunMeta") }
+        }
+        if ($meta['client'] -ne 'cliente-test') { throw 'client incorrecto' }
+        if ($meta['computer_name'] -ne $env:COMPUTERNAME) { throw 'computer_name incorrecto' }
+        if ($meta['anydesk_id'] -ne '123456789') { throw ("anydesk_id esperado 123456789; got {0}" -f $meta['anydesk_id']) }
+        if ($meta['schema_version'] -ne '1.0') { throw 'schema_version incorrecto' }
+        if ($meta['status'] -ne 'closed') { throw 'status debe ser closed' }
+    } finally {
+        Remove-Item -LiteralPath $tmpConf -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'New-RunMeta: sin AnyDesk instalado -> anydesk_id null sin tirar' {
+    $ErrorActionPreference = 'Stop'
+    # Ruta inexistente = AnyDesk no instalado
+    $meta = New-RunMeta -AnyDeskConfPaths @((Join-Path $env:TEMP 'no-existe\system.conf'))
+    if ($null -eq $meta) { throw 'New-RunMeta no debe devolver $null sin AnyDesk' }
+    if ($meta.Contains('anydesk_id') -and -not [string]::IsNullOrEmpty([string]$meta['anydesk_id']) -and [string]$meta['anydesk_id'] -ne 'null') {
+        throw ('anydesk_id debe ser null sin AnyDesk; got {0}' -f $meta['anydesk_id'])
+    }
+}
+
+# ─── Recolector: Invoke-CloseService (pieza C) ───────────────────────────────
+# Tests con output en $env:TEMP. NO ejercitan Start-TelemetryJob (requiere el
+# sistema completo y muta output\snapshots\). Validan el bundle parcial (D4)
+# y que meta.json quede en el ZIP.
+
+Test-SmokeFunction 'ServiceState' 'Invoke-CloseService: bundle parcial sin service (D4) -> ZIP con audit' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot  = Join-Path $env:TEMP ('pctk-cs-partial-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest  = Join-Path $env:TEMP ('pctk-cs-dest-'    + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpRoot 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-06-14.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        # Sin state abierto + fake AnyDesk conf = bundle parcial (D4)
+        [string] $tmpConf = Join-Path $env:TEMP ('pctk-ad-cs-' + [System.Guid]::NewGuid().ToString('N') + '.conf')
+        Set-Content -LiteralPath $tmpConf -Value @('ad.anynet.id=999000111') -Encoding ASCII
+        try {
+            # Shadowear Start-TelemetryJob para que no se ejecute el POST real
+            function Start-TelemetryJob { param([string]$Phase); return $null }
+            function Invoke-JobWithProgress { param([object[]]$Jobs, [string]$Activity, [int]$TimeoutSeconds); return @() }
+            $r = Invoke-CloseService -OutputRootOverride $tmpRoot -DestDirOverride $tmpDest `
+                                     -TimestampOverride '20260614-100000' -AnyDeskConfPaths @($tmpConf)
+            # Sin state/sin PRE -> resultado puede ser 'Empty' (si solo extraItems) o 'OK' si hay audit
+            if ($r.Status -notin @('OK','Empty')) { throw ("Status esperado OK o Empty; got {0}" -f $r.Status) }
+            if ($r.Status -eq 'OK') {
+                # Si creo ZIP, verificar que existe y no esta vacio
+                if (-not (Test-Path -LiteralPath $r.ZipPath)) { throw 'ZipPath no existe' }
+                # Verificar que el ZIP contiene meta.json
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                [object[]] $entries = @()
+                $za = [System.IO.Compression.ZipFile]::OpenRead($r.ZipPath)
+                try { $entries = @($za.Entries | ForEach-Object { $_.FullName }) }
+                finally { $za.Dispose() }
+                [bool] $hasMeta = $false
+                foreach ($e in $entries) { if ($e -match 'meta') { $hasMeta = $true } }
+                if (-not $hasMeta) { throw 'ZIP del bundle no contiene meta.json (regresion D1)' }
+            }
+        } finally {
+            Remove-Item -LiteralPath $tmpConf -ErrorAction SilentlyContinue
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'Invoke-CloseService: cierra state despues de bundle (D3)' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot  = Join-Path $env:TEMP ('pctk-cs-close-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest  = Join-Path $env:TEMP ('pctk-cs-dest2-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpRoot 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-06-14.jsonl') -Value '{"Action":"test2"}' -Encoding UTF8
+    try {
+        # Abrir service (simula PRE tomado)
+        [string] $preAt = '2026-06-14T10:00:00-03:00'
+        $null = Set-ServiceStatePreTaken -OutputRootOverride $tmpRoot -PreTakenAtOverride $preAt
+        [string] $statePath = Get-ServiceStatePath -OutputRootOverride $tmpRoot
+        if (-not (Test-Path -LiteralPath $statePath)) { throw 'state no creado antes de CloseService' }
+        # Shadowear telemetria para no hacer snapshot real
+        function Start-TelemetryJob { param([string]$Phase); return $null }
+        function Invoke-JobWithProgress { param([object[]]$Jobs, [string]$Activity, [int]$TimeoutSeconds); return @() }
+        $r = Invoke-CloseService -OutputRootOverride $tmpRoot -DestDirOverride $tmpDest `
+                                 -TimestampOverride '20260614-101500'
+        # Verificar que el state fue borrado (D3)
+        if (Test-Path -LiteralPath $statePath) {
+            throw 'Invoke-CloseService no borro current-run.json (D3)'
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

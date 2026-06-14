@@ -4,10 +4,13 @@ function Invoke-ExportClientLogs {
     [CmdletBinding()]
     param(
         # Sobreescrito en tests para no tocar la instalacion real
-        [Parameter()] [string] $OutputRootOverride = '',
-        [Parameter()] [string] $DestDirOverride    = '',
-        [Parameter()] [string] $TimestampOverride  = '',
-        [Parameter()] [string] $TagOverride        = ''
+        [Parameter()] [string]   $OutputRootOverride = '',
+        [Parameter()] [string]   $DestDirOverride    = '',
+        [Parameter()] [string]   $TimestampOverride  = '',
+        [Parameter()] [string]   $TagOverride        = '',
+        # Pieza C recolector: paths extras a incluir en el ZIP (meta.json, clients/).
+        # Filtrados internamente: solo se agregan si existen y no estan ya en la lista.
+        [Parameter()] [string[]] $ExtraItems         = @()
     )
 
     [string] $outputRoot = if ([string]::IsNullOrEmpty($OutputRootOverride)) {
@@ -34,8 +37,17 @@ function Invoke-ExportClientLogs {
                           ($null -ne (Get-ChildItem -LiteralPath $snapshotsDir -Recurse -File -ErrorAction SilentlyContinue |
                                       Select-Object -First 1))
 
-    # Paso 3: ninguno poblado
-    if (-not $auditOk -and -not $snapshotsOk) {
+    # Filtrar ExtraItems: solo los que existen (archivo o directorio)
+    # PS5.1 StrictMode: inicializar como [object[]] antes del loop
+    [object[]] $extraValid = @()
+    foreach ($xp in $ExtraItems) {
+        if (-not [string]::IsNullOrWhiteSpace($xp) -and (Test-Path -LiteralPath $xp)) {
+            $extraValid += $xp
+        }
+    }
+
+    # Paso 3: ninguno poblado y sin extras
+    if (-not $auditOk -and -not $snapshotsOk -and $extraValid.Count -eq 0) {
         Write-PctkWarn '  [!] output\ esta vacio -- nada que empaquetar.'
         Write-ActionAudit -Action 'Logs.Export' -Status 'Empty' -Summary 'no populated subdirs'
         return [PSCustomObject]@{ Status = 'Empty'; ZipPath = '' }
@@ -86,6 +98,8 @@ function Invoke-ExportClientLogs {
     [object[]] $items = @()
     if ($auditOk)     { $items += $auditDir }
     if ($snapshotsOk) { $items += $snapshotsDir }
+    # Agregar items extras (meta.json del service, clients/ si existe)
+    foreach ($xp in $extraValid) { $items += $xp }
 
     try {
         Compress-Archive -LiteralPath $items -DestinationPath $zipPath -Force -ErrorAction Stop
@@ -110,13 +124,14 @@ function Invoke-ExportClientLogs {
     if ($auditOk)     { $auditFiles    = @(Get-ChildItem -LiteralPath $auditDir     -Recurse -File -ErrorAction SilentlyContinue) }
     if ($snapshotsOk) { $snapshotFiles = @(Get-ChildItem -LiteralPath $snapshotsDir -Recurse -File -ErrorAction SilentlyContinue) }
     [long] $totalBytes = (Get-Item -LiteralPath $zipPath).Length
-    [int]  $totalFiles = $auditFiles.Count + $snapshotFiles.Count
+    [int]  $totalFiles = $auditFiles.Count + $snapshotFiles.Count + $extraValid.Count
 
     # Paso 10: reporte al usuario
     [string] $sizeMb = '{0:0.##}' -f ($totalBytes / 1MB)
     [object[]] $includeLines = @()
-    if ($auditOk)     { $includeLines += ('audit ({0} archivos)'     -f $auditFiles.Count) }
-    if ($snapshotsOk) { $includeLines += ('snapshots ({0} archivos)' -f $snapshotFiles.Count) }
+    if ($auditOk)            { $includeLines += ('audit ({0} archivos)'     -f $auditFiles.Count) }
+    if ($snapshotsOk)        { $includeLines += ('snapshots ({0} archivos)' -f $snapshotFiles.Count) }
+    if ($extraValid.Count -gt 0) { $includeLines += ('+{0} extras (meta/clients)' -f $extraValid.Count) }
 
     Write-Host ''
     Write-PctkOk '  [OK] Logs empaquetados:'
@@ -134,4 +149,234 @@ function Invoke-ExportClientLogs {
     }
 
     return [PSCustomObject]@{ Status = 'OK'; ZipPath = $zipPath }
+}
+
+# ─── New-RunMeta ──────────────────────────────────────────────────────────────
+function New-RunMeta {
+    <#
+    .SYNOPSIS
+        Sintetiza el objeto meta.json del service al momento del cierre (D1).
+        Solo usa datos que siempre estan disponibles: AnyDesk ID (read-only),
+        hostname, fecha, y opcionalmente el score del Compare-Snapshot.
+
+        POR QUE no reutiliza el meta de [1]: el flujo recolector permite usar
+        [3]/[4] manuales sin pasar por [1]. El meta se genera igual en ambos
+        casos para que el bundle SIEMPRE tenga contexto del equipo.
+
+        En el futuro, [1] puede refactorizarse para llamar esta funcion en vez
+        de duplicar la logica; pero ese cambio no entra en este contrato
+        (blast-radius del refactor de Invoke-AutoProfile es alto).
+    .OUTPUTS
+        [ordered] hashtable con los campos del meta (listo para ConvertTo-Json).
+    #>
+    [CmdletBinding()]
+    param(
+        # Slug del cliente (por defecto usa hostname)
+        [string] $ClientSlug        = '',
+        # Override de fecha para tests reproducibles
+        [string] $DateOverride       = '',
+        # Paths de AnyDesk conf (override para tests)
+        [string[]] $AnyDeskConfPaths = @()
+    )
+
+    [string] $slug = if ([string]::IsNullOrWhiteSpace($ClientSlug)) {
+        'cliente-' + $env:COMPUTERNAME.ToLowerInvariant()
+    } else { $ClientSlug }
+
+    [string] $dateStr = if ([string]::IsNullOrEmpty($DateOverride)) {
+        (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
+    } else { $DateOverride }
+
+    # AnyDesk ID (read-only; $null si AnyDesk no instalado o conf no encontrado).
+    # Guard: la captura NUNCA debe abortar la escritura del meta.
+    [string] $anydeskId = $null
+    try {
+        if ($AnyDeskConfPaths.Count -gt 0) {
+            $anydeskId = Get-AnyDeskId -ConfPaths $AnyDeskConfPaths
+        } else {
+            $anydeskId = Get-AnyDeskId
+        }
+    } catch { $anydeskId = $null }
+
+    # Score del ultimo Compare-Snapshot (si hay PRE y POST disponibles).
+    # Si no hay PRE/POST, devuelve 'N/A' sin tirar.
+    [string] $compareScore = 'N/A'
+    try {
+        if (Get-Command -Name 'Compare-Snapshot' -CommandType Function -ErrorAction SilentlyContinue) {
+            $cmp = Compare-Snapshot
+            if ($null -ne $cmp -and $null -ne $cmp.PSObject.Properties['Score']) {
+                $compareScore = ('{0}/{1}' -f [string]$cmp.Score, [string]$cmp.ScoreMax)
+            }
+        }
+    } catch { $compareScore = 'N/A' }
+
+    return [ordered]@{
+        client             = $slug
+        date               = $dateStr
+        computer_name      = $env:COMPUTERNAME
+        anydesk_id         = $anydeskId
+        schema_version     = '1.0'
+        compare_score      = $compareScore
+        status             = 'closed'
+        amount_charged_ars = $null
+        notes              = ''
+    }
+}
+
+# ─── Invoke-CloseService ──────────────────────────────────────────────────────
+function Invoke-CloseService {
+    <#
+    .SYNOPSIS
+        Pieza C del recolector: cierra el service y arma el bundle completo.
+
+        Flujo:
+        1. Si hay service abierto con PRE -> toma POST automatico (igual que [4]).
+        2. Sintetiza meta.json del service (D1: Get-AnyDeskId + Compare-Snapshot).
+        3. Arma el ZIP incluyendo meta.json + audit + snapshots + clients/ si existe.
+        4. Cierra el state (borra current-run.json, D3).
+        5. Si [L] se aprieta sin service/sin PRE -> empaqueta lo que haya + aviso
+           "bundle parcial" (D4, no bloquear).
+
+        POR QUE separado de Invoke-ExportClientLogs: ExportClientLogs es el
+        modo a-la-carte (herramienta directa, pide tag, sin service state). Este
+        handler es el flujo de service completo. Reutiliza ExportClientLogs
+        para la compresion (codigo compartido).
+    #>
+    [CmdletBinding()]
+    param(
+        # Overrides para tests (no tocar instalacion real)
+        [Parameter()] [string]   $OutputRootOverride = '',
+        [Parameter()] [string]   $DestDirOverride    = '',
+        [Parameter()] [string]   $TimestampOverride  = '',
+        # Override de paths AnyDesk (para test sin AnyDesk instalado)
+        [Parameter()] [string[]] $AnyDeskConfPaths   = @()
+    )
+
+    Write-PctkWork '  Cerrando service...'
+    Write-ActionAudit -Action 'Service.Close' -Status 'Started'
+
+    [string] $outputRoot = if ([string]::IsNullOrEmpty($OutputRootOverride)) {
+        Join-Path (Split-Path -Parent $PSScriptRoot) 'output'
+    } else {
+        $OutputRootOverride
+    }
+
+    # ── Paso 1: leer el state del service ────────────────────────────────────
+    # Determina si hay PRE para el POST automatico y si el bundle es completo o parcial.
+    [bool] $hasService = $false
+    [bool] $hasPre     = $false
+    $svcState = $null
+
+    if (Get-Command -Name 'Get-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
+        $svcState = Get-ServiceState -OutputRootOverride $OutputRootOverride
+        if ($null -ne $svcState -and $null -ne $svcState.PSObject.Properties['open'] -and [bool]$svcState.open) {
+            $hasService = $true
+            if ($null -ne $svcState.PSObject.Properties['pre_taken_at'] -and
+                -not [string]::IsNullOrEmpty([string]$svcState.pre_taken_at) -and
+                [string]$svcState.pre_taken_at -ne 'null') {
+                $hasPre = $true
+            }
+        }
+    }
+
+    # ── Paso 2: POST automatico si hay service con PRE ────────────────────────
+    # Usa el mismo patron que [4] (Start-TelemetryJob + Invoke-JobWithProgress).
+    # El POST automático solo tiene sentido si hay PRE para comparar despues.
+    if ($hasService -and $hasPre) {
+        Write-PctkWork '  Capturando snapshot POST automatico...'
+        if (Get-Command -Name 'Start-TelemetryJob' -CommandType Function -ErrorAction SilentlyContinue) {
+            try {
+                $postJob = Start-TelemetryJob -Phase Post
+                $postResults = Invoke-JobWithProgress -Jobs @($postJob) -Activity 'Snapshot POST (cierre)' -TimeoutSeconds 120
+                if ($null -ne $postResults -and $postResults.Count -gt 0 -and $null -ne $postResults[0]) {
+                    $pr = $postResults[0]
+                    Write-PctkOk ('  [OK] POST: {0}' -f $pr.FileName)
+                } else {
+                    Write-PctkWarn '  [!] POST no se pudo capturar; continuando sin POST.'
+                }
+            } catch {
+                Write-PctkWarn ('  [!] POST automatico fallo: {0}. Continuando.' -f $_.Exception.Message)
+            }
+        }
+    } elseif (-not $hasService -or -not $hasPre) {
+        # D4: bundle parcial, no bloquear
+        Write-PctkWarn '  [!] Bundle parcial: no hay service abierto con PRE en esta PC.'
+    }
+
+    # ── Paso 3: sintetizar meta.json para el bundle ───────────────────────────
+    # Siempre se genera (D1): aunque no haya corrido [1], el bundle tiene contexto.
+    [string] $metaTmpPath = $null
+    try {
+        [string] $stateDir = Join-Path $outputRoot 'state'
+        if (-not (Test-Path -LiteralPath $stateDir -PathType Container)) {
+            $null = New-Item -ItemType Directory -Path $stateDir -Force -ErrorAction Stop
+        }
+        $metaTmpPath = Join-Path $stateDir 'bundle-meta.json'
+
+        # Slug del cliente (nombre del estado del service o fallback al hostname)
+        [string] $slug = 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant()
+
+        # Construir el objeto meta con New-RunMeta
+        $metaParams = @{ ClientSlug = $slug }
+        if ($TimestampOverride) { $metaParams['DateOverride'] = $TimestampOverride }
+        if ($AnyDeskConfPaths.Count -gt 0) { $metaParams['AnyDeskConfPaths'] = $AnyDeskConfPaths }
+
+        $metaObj = New-RunMeta @metaParams
+
+        ($metaObj | ConvertTo-Json -Depth 4) | Out-File -FilePath $metaTmpPath -Encoding UTF8 -ErrorAction Stop
+
+        # Validar que el JSON quedó bien formado
+        $null = Get-Content -LiteralPath $metaTmpPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-PctkOk '  [OK] meta.json sintetizado.'
+    } catch {
+        Write-PctkWarn ('  [!] No se pudo generar meta.json: {0}' -f $_.Exception.Message)
+        $metaTmpPath = $null
+    }
+
+    # ── Paso 4: incluir clients/ si existe (run-dir de [1] si se uso) ────────
+    [string] $clientsDir = Join-Path $outputRoot 'clients'
+    [string] $clientsDirOk = ''
+    if ((Test-Path -LiteralPath $clientsDir -PathType Container) -and
+        ($null -ne (Get-ChildItem -LiteralPath $clientsDir -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1))) {
+        $clientsDirOk = $clientsDir
+    }
+
+    # ── Paso 5: armar lista de extras para ExportClientLogs ──────────────────
+    # PS5.1 StrictMode: [object[]] inicializado antes de conditionals
+    [object[]] $extras = @()
+    if (-not [string]::IsNullOrEmpty($metaTmpPath) -and (Test-Path -LiteralPath $metaTmpPath)) {
+        $extras += $metaTmpPath
+    }
+    if (-not [string]::IsNullOrEmpty($clientsDirOk)) {
+        $extras += $clientsDirOk
+    }
+
+    # ── Paso 6: comprimir (reusar ExportClientLogs con tag fijo = cierre) ────
+    $exportParams = @{
+        OutputRootOverride = $OutputRootOverride
+        DestDirOverride    = $DestDirOverride
+        TagOverride        = 'cierre'      # fijo: no pedir tag al usuario en el cierre
+        ExtraItems         = $extras
+    }
+    if ($TimestampOverride) { $exportParams['TimestampOverride'] = $TimestampOverride }
+
+    $result = Invoke-ExportClientLogs @exportParams
+
+    # ── Paso 7: cerrar el service state (D3: borrar current-run.json) ────────
+    if (Get-Command -Name 'Close-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
+        try {
+            Close-ServiceState -OutputRootOverride $OutputRootOverride
+        } catch {
+            Write-PctkWarn ('  [!] No se pudo cerrar el state: {0}' -f $_.Exception.Message)
+        }
+    }
+
+    # ── Paso 8: limpiar meta temporal (ya esta en el ZIP) ────────────────────
+    if (-not [string]::IsNullOrEmpty($metaTmpPath) -and (Test-Path -LiteralPath $metaTmpPath)) {
+        Remove-Item -LiteralPath $metaTmpPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-ActionAudit -Action 'Service.Close' -Status $result.Status -Summary $result.ZipPath
+
+    return $result
 }
