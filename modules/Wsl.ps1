@@ -237,6 +237,12 @@ function Invoke-WslShutdown {
     [CmdletBinding()]
     param()
 
+    # wsl.exe es exe nativo y dependemos de $LASTEXITCODE: bajo EAP=Stop (main.ps1)
+    # su stderr seria un NativeCommandError terminante (2>&1 no salva). Neutralizar
+    # local (regla CLAUDE.md, misma clase que [A][16] USB y Optimize-Network).
+    # Function-scoped: auto-revierte al return.
+    $ErrorActionPreference = 'Continue'
+
     if (-not (Test-WslAvailable)) {
         return [PSCustomObject]@{
             Success = $false

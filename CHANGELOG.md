@@ -22,6 +22,7 @@ Release: capa de diagnóstico/mantenimiento ampliada (red, disco, cifrado, AnyDe
 
 - **#24 — adapters de red filtrados por `HardwareInterface`**: antes se filtraba por `PhysicalMediaType`, lo que dejaba colar adapters virtuales (VirtualBox, ZeroTier) que reportan `802.3` y se metían en el target de optimización; ahora solo entran NIC físicas reales. Además, neutralización de EAP local en `Optimize-Network`: las llamadas a `netsh`/`ipconfig` bajo `$ErrorActionPreference='Stop'` podían volverse `NativeCommandError` terminante (misma clase que el fix de USB `[16]`).
 - **#25 — UI de consola (`core/Router.ps1`, `utils/ConsoleTheme.ps1`)**: la ventana ahora entra el menú completo (`Set-PctkConsoleSize`) y el highlight de navegación sobrevive a maximizar/restaurar la ventana.
+- **Hardening EAP — `Invoke-WslShutdown` (`modules/Wsl.ps1`)**: `wsl.exe --shutdown` corría bajo `$ErrorActionPreference='Stop'` sin neutralizar EAP local pese a depender de `$LASTEXITCODE`; su stderr podía volverse `NativeCommandError` terminante (misma clase que USB `[16]`). No crasheaba hoy (el caller lo envolvía en try/catch) pero la función no cumplía la regla. Detectado por una auditoría sistemática de las dos clases de crash (StrictMode `[0]`/`.Count` + exe-nativo/EAP); el resto del barrido salió limpio.
 
 ### Changed
 
