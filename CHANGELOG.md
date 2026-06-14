@@ -2,6 +2,35 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.3.0] - 2026-06-14
+
+Release: capa de diagnóstico/mantenimiento ampliada (red, disco, cifrado, AnyDesk) + reporte de cliente al cierre del run + fixes de UI de consola.
+
+### Added
+
+- **#9 — AnyDesk ID en `meta.json` (`modules/AnyDesk.ps1`, `core/ProfileEngine.ps1`)**: captura read-only del ID de AnyDesk de la PC (desde `system.conf`, clave `ad.anynet.id`) y lo escribe en el `meta.json` del run, para atar el run al cliente en el CRM. No invoca el binario AnyDesk (puro file-read, StrictMode-safe, sin exe nativo); `$null` si AnyDesk no está instalado, y la captura nunca aborta la escritura del run-dir. Validado en HW real.
+- **#24 — capa PC de red `[A][5]` (`modules/Network.ps1`, `core/Router.ps1`)**: diagnóstico expandido read-only (driver + EEE/ahorro + Interrupt Moderation + duplex + aviso de "link bajo" en Ethernet ≤100 Mbps + NetworkThrottlingIndex report-only por ser mito) y **test de bufferbloat** que mide el ping idle al gateway y delega la medición bajo carga a waveform.com. Helpers puros con fixtures 0/1/N.
+- **Mantenimiento de discos `[A][17]` (`modules/DiskMaintenance.ps1`)**: TRIM en SSD / defrag en HDD según `MediaType` (guardrail: ante la duda, Skip).
+- **Antimalware on-demand en `[T]`**: KVRT (Kaspersky Virus Removal Tool) + AdwCleaner al manifest de herramientas.
+- **#18 — cifrado/BitLocker `[A][18]` (`modules/Encryption.ps1`)**: detección de cifrado (CIM numérico), captura de la clave de recuperación y decrypt `manage-bde` (con EAP local); gate de captura-primero antes de habilitar HVCI en `[A][12]`.
+- **#15 — reporte de cliente `[8]` (`modules/ClientReport.ps1`)**: HTML de 3 paneles honestos (sin panel que no se pueda respaldar con datos del run) generado al cierre.
+- **#23 — advisories y herramientas**: avisos para CPU X3D, reagendar el escaneo de Defender (`[A][19]`), PresentMon + DDU al manifest `[T]`.
+- **Inicio `[10]`**: descripciones de arranque ampliadas (16 reglas nuevas, 2 updaters marcados "seguro apagar") + deshabilitado en bloque de los "seguro apagar" (atajo `S`).
+- **Perfil gaming nombrado — receta `gaming.cfg` (OOSU)**: incluida en el paquete. **Validación de la receta en VM Win11 pendiente**; no se auto-aplica (el operador la elige desde `[2]`).
+
+### Fixed
+
+- **#24 — adapters de red filtrados por `HardwareInterface`**: antes se filtraba por `PhysicalMediaType`, lo que dejaba colar adapters virtuales (VirtualBox, ZeroTier) que reportan `802.3` y se metían en el target de optimización; ahora solo entran NIC físicas reales. Además, neutralización de EAP local en `Optimize-Network`: las llamadas a `netsh`/`ipconfig` bajo `$ErrorActionPreference='Stop'` podían volverse `NativeCommandError` terminante (misma clase que el fix de USB `[16]`).
+- **#25 — UI de consola (`core/Router.ps1`, `utils/ConsoleTheme.ps1`)**: la ventana ahora entra el menú completo (`Set-PctkConsoleSize`) y el highlight de navegación sobrevive a maximizar/restaurar la ventana.
+
+### Changed
+
+- **HVCI fuera del template default del perfil gaming**: se chequea GPO antes de ofrecer habilitarlo (`[A][12]`).
+
+### Notes
+
+- Smoke 145 → **186**. Pre-gate del candidato (Claude): smoke 186/0 + BOM/parse de 55 `.ps1` trackeados OK. **Gate Sandbox canónico pendiente** (instalar el one-liner real de `v2.3.0` en Sandbox limpia + ejercitar a mano). Fecha a confirmar al publicar.
+
 ## [2.2.0] - 2026-06-08
 
 Release: tema de consola PCTk (ANSI/VT truecolor con fallback a 16-color) aplicado a TODA la interfaz + agrupado y descripciones en el menu de Inicio `[10]`.
