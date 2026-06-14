@@ -233,6 +233,37 @@ Test-SmokeFunction 'Network' 'Get-NetworkAdapterReport: 0/1/N + virtual excluido
     if ($rn[2].LinkSuspect)     { throw '2.5 Gbps no es LinkSuspect' }
 }
 
+# §24 REGRESIÓN (gate Sandbox v2.3.0): el diagnóstico de red corre en un background
+# job, que arranca en un runspace FRESCO sin las funciones del módulo. El bug:
+# Start-NetworkDiagnosticsProcess solo serializaba Get-NetworkDiagnostics, no sus
+# helpers (Get-NetworkAdapterReport -> ConvertTo-PowerPropState / Test-LinkSuspect
+# -> ConvertTo-Mbps) -> CommandNotFoundException al recibir el job y crash de [A][5] D.
+# El smoke previo probaba los helpers SUELTOS (existen en esta sesión), nunca el job.
+# Este test ejercita el path real: corre el job y falla si reaparece el CommandNotFound.
+Test-SmokeFunction 'Network' 'Start-NetworkDiagnosticsProcess: job serializa toda la clausura (no CommandNotFound)' {
+    $job = Start-NetworkDiagnosticsProcess
+    try {
+        $null = Wait-Job -Job $job -Timeout 45
+        $result = Receive-Job -Job $job -ErrorAction SilentlyContinue -ErrorVariable jobErr
+        # Firma del bug: cualquier CommandNotFound dentro del job (helper no serializado).
+        [object[]] $cmdNotFound = @($jobErr | Where-Object {
+            ($null -ne $_.FullyQualifiedErrorId -and $_.FullyQualifiedErrorId -match 'CommandNotFound') -or
+            $_.Exception -is [System.Management.Automation.CommandNotFoundException]
+        })
+        if ($cmdNotFound.Count -gt 0) {
+            throw ("job tiró CommandNotFound (helper no serializado): {0}" -f $cmdNotFound[0].Exception.Message)
+        }
+        # Con la clausura completa el job completa y devuelve el shape esperado.
+        if ($job.State -eq 'Completed' -and $null -ne $result) {
+            foreach ($p in 'TcpAutoTuning','Adapters','PingMs','DnsServers','NetworkThrottlingIndex') {
+                if ($null -eq $result.PSObject.Properties[$p]) { throw ("falta prop '{0}' en el resultado del job" -f $p) }
+            }
+        }
+    } finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Test-SmokeFunction 'Network' 'ConvertTo-Mbps + Test-LinkSuspect + ConvertTo-PowerPropState' {
     $ErrorActionPreference = 'Stop'
     if ((ConvertTo-Mbps -LinkSpeed '1 Gbps')   -ne 1000) { throw '1 Gbps -> 1000' }

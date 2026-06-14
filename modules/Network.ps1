@@ -472,14 +472,43 @@ function Start-NetworkDiagnosticsProcess {
     .SYNOPSIS
         Serializa Get-NetworkDiagnostics y la envía al motor asíncrono mediante Invoke-AsyncToolkitJob.
         Retorna el objeto Job para su seguimiento con Wait-ToolkitJobs.
+    .NOTES
+        El job corre en un runspace FRESCO sin las funciones del módulo: hay que
+        serializar Get-NetworkDiagnostics Y toda helper que llame transitivamente,
+        o el job tira CommandNotFoundException al ejecutarse (bug cazado en el gate
+        Sandbox de v2.3.0; el smoke previo probaba los helpers sueltos, no el job):
+          Get-NetworkDiagnostics -> Get-NetworkAdapterReport
+                                       -> ConvertTo-PowerPropState
+                                       -> Test-LinkSuspect -> ConvertTo-Mbps
+        Optimize-Network (Start-NetworkProcess) NO necesita esto: es self-contained.
     #>
     [CmdletBinding()]
     param()
 
-    $fnBody   = ${Function:Get-NetworkDiagnostics}.ToString()
+    $fnDiag    = ${Function:Get-NetworkDiagnostics}.ToString()
+    $fnReport  = ${Function:Get-NetworkAdapterReport}.ToString()
+    $fnPpState = ${Function:ConvertTo-PowerPropState}.ToString()
+    $fnLink    = ${Function:Test-LinkSuspect}.ToString()
+    $fnMbps    = ${Function:ConvertTo-Mbps}.ToString()
+
+    # Definir en orden de dependencia (hojas primero); todas quedan disponibles
+    # antes de la invocación final. El here-string solo expande las $fn* (el cuerpo
+    # de cada función se inserta literal, sin re-parsear su $/backticks internos).
     $jobBlock = [scriptblock]::Create(@"
+function ConvertTo-Mbps {
+$fnMbps
+}
+function Test-LinkSuspect {
+$fnLink
+}
+function ConvertTo-PowerPropState {
+$fnPpState
+}
+function Get-NetworkAdapterReport {
+$fnReport
+}
 function Get-NetworkDiagnostics {
-$fnBody
+$fnDiag
 }
 Get-NetworkDiagnostics
 "@)
