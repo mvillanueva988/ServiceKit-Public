@@ -142,6 +142,31 @@ function Set-Algo {
 verde igual. Los tests que ejercitan handlers deben fijar `EAP='Stop'`
 para espejar `main.ps1`.
 
+### Funciones a un background job: serializar la clausura COMPLETA
+
+`Start-Job` corre en un runspace fresco que NO tiene las funciones del
+módulo. Las funciones `Start-*Process` arman el scriptblock del job con un
+here-string que embebe `function X { $body }`. Hay que embeber la función
+entry **Y toda función propia que llame transitivamente** - si falta una, el
+job tira `CommandNotFoundException` al ejecutarse (no al armarse).
+
+**El smoke con fixtures NO lo caza**: probar `Get-Helper` directo pasa
+(existe en la sesión del smoke); el bug vive SOLO en el path del job. Lo
+mismo un gate HW de una función puede pasar si se la ejercita directa y no
+por el menú que la manda al job.
+
+**Regla**: al serializar a un job, mapear el cierre transitivo de llamadas a
+funciones propias y embeberlas todas. El test de regresión debe **correr el
+job real** (`Start-...Process` + `Receive-Job`) y fallar si hay
+`CommandNotFound`, no probar los helpers sueltos.
+
+Lección del gate Sandbox v2.3.0 (2026-06-14): `[A][5] D` (#24) crasheaba
+porque `Start-NetworkDiagnosticsProcess` serializaba `Get-NetworkDiagnostics`
+pero no su cadena de helpers (`Get-NetworkAdapterReport` ->
+`ConvertTo-PowerPropState`/`Test-LinkSuspect` -> `ConvertTo-Mbps`). El gate
+HW había probado los helpers directos; el smoke igual. Auditados los 14
+sitios de serialización a job: era el único incompleto.
+
 ## Scope del producto
 
 **PCTk = orquestación + extractor + guía**. NO autor de tweaks hardcoded.
