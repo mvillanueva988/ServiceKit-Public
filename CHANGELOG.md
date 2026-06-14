@@ -2,6 +2,18 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.3.1] - 2026-06-14
+
+Fix de release: el diagnóstico de red `[A][5] D` (#24) crasheaba al ejecutarse. Cazado en el gate Sandbox limpia de v2.3.0.
+
+### Fixed
+
+- **#24 — `Start-NetworkDiagnosticsProcess` serializa la clausura completa al job (`modules/Network.ps1`)**: el diagnóstico de red corre en un background job (runspace fresco, sin las funciones del módulo). Se serializaba solo `Get-NetworkDiagnostics` pero no sus helpers transitivos (`Get-NetworkAdapterReport` → `ConvertTo-PowerPropState` / `Test-LinkSuspect` → `ConvertTo-Mbps`), así que el job tiraba `CommandNotFoundException` al recibirse y `[A][5] D` crasheaba. El gate HW de v2.3.0 había probado los helpers sueltos (existen en esa sesión), no el path del job; el smoke igual. Ahora se embebe toda la clausura. `Optimize-Network` (`[A][5] O`) no estaba afectado (es self-contained). Auditados los otros 13 sitios de serialización a job: clausuras completas.
+
+### Notes
+
+- Smoke 186 → **187**: nuevo test de regresión que ejercita el path REAL (corre `Start-NetworkDiagnosticsProcess` y falla si reaparece el `CommandNotFound`), no los helpers sueltos. **Gate Sandbox limpio de v2.3.1 pendiente** (re-instalar el one-liner real de `v2.3.1` + ejercitar `[A][5] D` y el resto).
+
 ## [2.3.0] - 2026-06-14
 
 Release: capa de diagnóstico/mantenimiento ampliada (red, disco, cifrado, AnyDesk) + reporte de cliente al cierre del run + fixes de UI de consola.
