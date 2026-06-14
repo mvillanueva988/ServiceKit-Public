@@ -13,6 +13,14 @@ function Optimize-Network {
         [string[]] $AdapterNames
     )
 
+    # Exe nativo (netsh/ipconfig) + dependencia de $LASTEXITCODE: neutralizar EAP
+    # localmente (regla CLAUDE.md, leccion [A][16] USB). Bajo EAP='Stop' (main.ps1)
+    # el stderr de netsh es un NativeCommandError terminante y 2>&1 no salva. Hoy se
+    # salva por el contexto del job (EAP='Continue'), pero esto la hace robusta si
+    # alguna vez se llama inline. Function-scoped: auto-revierte al return. Los cmdlets
+    # de abajo usan -ErrorAction explicito, que prevalece sobre esta preferencia.
+    $ErrorActionPreference = 'Continue'
+
     # -- 1. Resolver adaptadores objetivo --
     [System.Collections.Generic.List[PSCustomObject]] $optimized = [System.Collections.Generic.List[PSCustomObject]]::new()
     [bool] $overallSuccess = $true
