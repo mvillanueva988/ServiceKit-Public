@@ -168,6 +168,19 @@
             "sha256": ""
         },
         {
+            "name": "cinebenchr23",
+            "category": "hardware",
+            "description": "Maxon Cinebench R23 - benchmark de CPU (multi y single core) y test de estabilidad termica. Util para validar un repaste/undervolt, comparar CPUs y detectar throttling (correr junto a HWiNFO64 mirando temperaturas). Portable: se extrae y corre Cinebench.exe.",
+            "filename": "CinebenchR23.zip",
+            "launchExe": "Cinebench\\Cinebench.exe",
+            "type": "zip",
+            "extractDir": "Cinebench",
+            "url": "https://installer.maxon.net/cinebench/CinebenchR23.zip",
+            "updatePolicy": "latest",
+            "approxSizeMB": 250,
+            "sha256": ""
+        },
+        {
             "name": "ddu",
             "category": "drivers",
             "description": "Display Driver Uninstaller (DDU) - limpia completamente drivers de GPU (NVIDIA/AMD/Intel) del sistema incluyendo entradas de registro, para instalacion limpia de nuevo driver",

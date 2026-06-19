@@ -1815,6 +1815,19 @@ Test-SmokeFunction 'ToolsManifest' 'manifest: ddu ya presente (drivers) - no re-
     if ([string]$tool.category -ne 'drivers') { throw "ddu: category esperado 'drivers'; got '$($tool.category)'" }
 }
 
+Test-SmokeFunction 'ToolsManifest' 'manifest: cinebenchr23 (hardware, zip, launchExe correcto)' {
+    $ErrorActionPreference = 'Stop'
+    [string] $manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\manifest.json'
+    $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $tool = $m.tools | Where-Object { $_.name -eq 'cinebenchr23' } | Select-Object -First 1
+    if ($null -eq $tool)                                       { throw "Tool 'cinebenchr23' no encontrada en manifest" }
+    if ([string]$tool.category -ne 'hardware')                 { throw "cinebenchr23: category esperado 'hardware'; got '$($tool.category)'" }
+    if ([string]$tool.type -ne 'zip')                          { throw "cinebenchr23: type esperado 'zip'; got '$($tool.type)'" }
+    if ([string]::IsNullOrWhiteSpace([string]$tool.url))       { throw 'cinebenchr23: url vacia' }
+    if ([string]$tool.launchExe -ne 'Cinebench\Cinebench.exe') { throw "cinebenchr23: launchExe esperado 'Cinebench\Cinebench.exe'; got '$($tool.launchExe)'" }
+    if ([string]$tool.extractDir -ne 'Cinebench')             { throw "cinebenchr23: extractDir esperado 'Cinebench'; got '$($tool.extractDir)'" }
+}
+
 # ─── Encryption: label maps (funciones puras) ─────────────────────────────────
 Test-SmokeFunction 'Encryption' 'ConvertTo-Enc*Label: enums conocidos y default' {
     $ErrorActionPreference = 'Stop'
