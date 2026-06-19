@@ -401,8 +401,13 @@ function New-ClientReport {
             if (-not [string]::IsNullOrWhiteSpace($batCharge) -or -not [string]::IsNullOrWhiteSpace($batHealth)) {
                 _CR_H '      <div class="sub-title">Bateria</div>'
                 _CR_H '      <table class="info-table">'
-                _CR_Row 'Carga actual' (if (-not [string]::IsNullOrWhiteSpace($batCharge)) { ('{0}%' -f $batCharge) } else { '' })
-                _CR_Row 'Salud'        (if (-not [string]::IsNullOrWhiteSpace($batHealth)) { ('{0}%' -f $batHealth) } else { '' })
+                # PS5.1: un `if` como ARGUMENTO de comando (_CR_Row '...' (if ...)) se
+                # parsea como el cmdlet 'if' y crashea el reporte en laptops. La forma
+                # de ASIGNACION ($x = if ...) si es valida -> temp vars. (Bug campo 2026-06-18.)
+                [string] $batChargeTd = if (-not [string]::IsNullOrWhiteSpace($batCharge)) { ('{0}%' -f $batCharge) } else { '' }
+                [string] $batHealthTd = if (-not [string]::IsNullOrWhiteSpace($batHealth)) { ('{0}%' -f $batHealth) } else { '' }
+                _CR_Row 'Carga actual' $batChargeTd
+                _CR_Row 'Salud'        $batHealthTd
                 _CR_Row 'Estado'        $batStatus
                 _CR_H '      </table>'
             }

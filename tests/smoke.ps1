@@ -2088,6 +2088,36 @@ Test-SmokeFunction 'ClientReport' 'New-ClientReport: fixture 1 disco + 1 GPU no 
     }
 }
 
+Test-SmokeFunction 'ClientReport' 'New-ClientReport: laptop con bateria no crashea (if como arg, EAP=Stop)' {
+    # Regresion bug de campo 2026-06-18: el panel de bateria usaba un `if` como
+    # ARGUMENTO de _CR_Row -> en laptops PS5.1 lo parsea como el cmdlet 'if' y el
+    # reporte se cae. Las fixtures previas tenian Battery=$null y NO lo ejercitaban.
+    # EAP=Stop espeja main.ps1 (el smoke corre con Continue, que no cazaria el crash).
+    $ErrorActionPreference = 'Stop'
+    [PSCustomObject] $postSnap = [PSCustomObject]@{
+        ComputerName = 'LAPTOP-BAT'
+        CPU          = [PSCustomObject]@{ Name = 'Intel Core i5-1135G7'; Cores = 4; Threads = 8 }
+        RamTotalGb   = 16
+        RamSlots     = @([PSCustomObject]@{ Slot = 'DIMM0'; CapacityGb = 16; SpeedMhz = 3200; Manufacturer = 'Unknown' })
+        GPU          = @([PSCustomObject]@{ Name = 'Intel Iris Xe'; Type = 'Integrated'; DriverVersion = '31.0' })
+        Disks        = @([PSCustomObject]@{ Name = 'PM9B1 512GB'; MediaType = 'SSD'; SizeGb = 512; HealthStatus = 'Healthy'; TempC = 38; WearPct = 2 })
+        Volumes      = @([PSCustomObject]@{ Letter = 'C'; Label = ''; SizeGb = 512; FreeGb = 220; UsedPct = 57 })
+        Battery      = [PSCustomObject]@{ ChargePercent = 85; HealthPercent = 92; Status = 'OK' }
+        PowerPlan    = $null
+    }
+    [string] $tmp = Join-Path $env:TEMP ('pctk-cr-bat-' + [System.IO.Path]::GetRandomFileName() + '.html')
+    try {
+        $r = New-ClientReport -PostSnapshot $postSnap -OutputPath $tmp
+        if (-not $r.Success)                    { throw 'New-ClientReport fallo con fixture de bateria' }
+        if (-not (Test-Path -LiteralPath $tmp)) { throw 'Archivo HTML no creado' }
+        [string] $body = Get-Content -LiteralPath $tmp -Raw -Encoding UTF8
+        if ($body -notmatch 'Carga actual') { throw 'no renderizo la fila de bateria (Carga actual)' }
+        if ($body -notmatch '85%')          { throw 'no renderizo el valor de carga (85%)' }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 Test-SmokeFunction 'ClientReport' 'Router [8] rutea a Invoke-ClientReport' {
     $ErrorActionPreference = 'Stop'
     [string] $dispDef = (Get-Command Invoke-MainMenuDispatch -CommandType Function).Definition
