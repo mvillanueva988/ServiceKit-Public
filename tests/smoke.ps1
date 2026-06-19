@@ -915,6 +915,18 @@ Test-SmokeFunction 'ExportClientLogs' 'bundle usa .NET, NO Compress-Archive (mod
     }
 }
 
+Test-SmokeFunction 'ToolkitSupport' 'Write-ToolkitAuditLog escribe el audit en UTF-8 (no ANSI -> no mangla no-ASCII)' {
+    # Write-ToolkitAuditLog es el escritor real del .jsonl (Write-ActionAudit del Router
+    # es solo un wrapper que lo llama). El append por defecto de PS5.1 escribe ANSI.
+    [string] $def = (Get-Command Write-ToolkitAuditLog -CommandType Function).Definition
+    if ($def -notmatch 'AppendAllText') {
+        throw 'Write-ToolkitAuditLog no usa AppendAllText (.NET); el append por defecto de PS5.1 escribe ANSI y mangla no-ASCII (em-dash, tildes) en el audit que viaja al CRM'
+    }
+    if ($def -notmatch 'UTF8') {
+        throw 'Write-ToolkitAuditLog no escribe en UTF-8'
+    }
+}
+
 Test-SmokeFunction 'ExportClientLogs' 'export-both: audit + snapshots -> zip con ambos' {
     [string] $tmpOut    = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
     [string] $tmpDest   = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))

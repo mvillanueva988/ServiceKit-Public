@@ -33,7 +33,14 @@ function Write-ToolkitAuditLog {
             Details   = $Details
         }
 
-        Add-Content -LiteralPath $logPath -Value (($entry | ConvertTo-Json -Compress -Depth 8))
+        # UTF-8 sin BOM via .NET: Add-Content sin -Encoding escribe en ANSI (CP1252) en
+        # PS5.1 -> manglaba no-ASCII (em-dash, tildes) en el audit que viaja al CRM en el
+        # bundle. AppendAllText con UTF8Encoding($false) escribe UTF-8 sin BOM (sin BOM
+        # para no ensuciar el .jsonl que parsea el CRM).
+        [System.IO.File]::AppendAllText(
+            $logPath,
+            (($entry | ConvertTo-Json -Compress -Depth 8) + [Environment]::NewLine),
+            (New-Object System.Text.UTF8Encoding $false))
     }
     catch {
         # El audit log nunca debe romper la operacion principal.
