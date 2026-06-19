@@ -101,12 +101,44 @@ function Invoke-ExportClientLogs {
     # Agregar items extras (meta.json del service, clients/ si existe)
     foreach ($xp in $extraValid) { $items += $xp }
 
+    # Comprimir con el API de .NET (System.IO.Compression), NO con el cmdlet del
+    # modulo Microsoft.PowerShell.Archive: ese modulo puede fallar al cargar en
+    # Windows degradados (PC de cliente) o en instancias de Sandbox ("module could
+    # not be loaded"). El API de .NET viene con el framework, no necesita el modulo
+    # -> bundle a prueba de balas. Replica el layout previo: cada dir entra por su
+    # leaf (audit/.., snapshots/..) y cada archivo suelto en la raiz (meta.json).
     try {
-        Compress-Archive -LiteralPath $items -DestinationPath $zipPath -Force -ErrorAction Stop
+        Add-Type -AssemblyName System.IO.Compression           -ErrorAction SilentlyContinue
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+        [System.IO.Compression.ZipArchive] $zip = [System.IO.Compression.ZipFile]::Open(
+            $zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            foreach ($item in $items) {
+                if (Test-Path -LiteralPath $item -PathType Container) {
+                    [string] $leaf = Split-Path -Path $item -Leaf
+                    [string] $root = (Resolve-Path -LiteralPath $item).Path.TrimEnd('\')
+                    foreach ($f in @(Get-ChildItem -LiteralPath $item -Recurse -File -ErrorAction SilentlyContinue)) {
+                        [string] $rel   = $f.FullName.Substring($root.Length + 1) -replace '\\', '/'
+                        [string] $entry = '{0}/{1}' -f $leaf, $rel
+                        $null = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                            $zip, $f.FullName, $entry, [System.IO.Compression.CompressionLevel]::Optimal)
+                    }
+                } else {
+                    [string] $entry = Split-Path -Path $item -Leaf
+                    $null = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                        $zip, (Resolve-Path -LiteralPath $item).Path, $entry,
+                        [System.IO.Compression.CompressionLevel]::Optimal)
+                }
+            }
+        } finally {
+            $zip.Dispose()
+        }
     } catch {
         [string] $errMsg = $_.Exception.Message
         Write-PctkErr ('  [!] Error al comprimir: {0}' -f $errMsg)
         Write-ActionAudit -Action 'Logs.Export' -Status 'Failed' -Summary $errMsg
+        if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
         return [PSCustomObject]@{ Status = 'Failed'; ZipPath = ''; Error = $errMsg }
     }
 

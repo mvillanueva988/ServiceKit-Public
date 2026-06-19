@@ -905,6 +905,16 @@ Test-SmokeFunction 'ExportClientLogs' 'export-only-audit: 1 subdir (PS5.1 array)
     }
 }
 
+Test-SmokeFunction 'ExportClientLogs' 'bundle usa .NET, NO Compress-Archive (modulo Archive puede faltar en cliente/Sandbox)' {
+    [string] $def = (Get-Command Invoke-ExportClientLogs -CommandType Function).Definition
+    if ($def -match 'Compress-Archive') {
+        throw 'Invoke-ExportClientLogs todavia usa Compress-Archive; debe usar System.IO.Compression para no depender del modulo Microsoft.PowerShell.Archive'
+    }
+    if ($def -notmatch 'System\.IO\.Compression') {
+        throw 'Invoke-ExportClientLogs no usa el API .NET System.IO.Compression'
+    }
+}
+
 Test-SmokeFunction 'ExportClientLogs' 'export-both: audit + snapshots -> zip con ambos' {
     [string] $tmpOut    = Join-Path $env:TEMP ('pctk-smoke-out-'  + [System.Guid]::NewGuid().ToString('N'))
     [string] $tmpDest   = Join-Path $env:TEMP ('pctk-smoke-dest-' + [System.Guid]::NewGuid().ToString('N'))
@@ -1289,8 +1299,11 @@ Test-SmokeFunction 'UninstallPreserve' 'preserve-zip-fails-doesnt-abort-uninstal
     try {
         function Read-Host { throw 'Read-Host NO debe invocarse' }
         function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
-        function Compress-Archive { throw 'Error simulado de compresion' }
-        # No debe lanzar al caller aunque Compress-Archive falle
+        # Simular fallo del zip en el limite real: Invoke-ExportClientLogs ahora usa
+        # el API .NET (no Compress-Archive), asi que el mock va a nivel funcion ->
+        # devuelve Failed, como cuando el zip no se puede crear.
+        function Invoke-ExportClientLogs { return [PSCustomObject]@{ Status = 'Failed'; ZipPath = ''; Error = 'simulado' } }
+        # No debe lanzar al caller aunque el zip falle
         $r = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpZipDest
         if ($null -eq $r)                      { throw 'Save-PreUninstallArtifacts devolvio $null (no debia abortar por zip fallido)' }
         if (-not [string]::IsNullOrWhiteSpace($r.ZipPath) -and (Test-Path -LiteralPath $r.ZipPath)) {
@@ -1316,7 +1329,10 @@ Test-SmokeFunction 'UninstallPreserve' 'preserve-clients-survives-zip-fail: si z
     try {
         function Read-Host { $tmpCliDest }
         function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
-        function Compress-Archive { throw 'Error simulado de compresion' }
+        # Simular fallo del zip a nivel funcion (Invoke-ExportClientLogs usa .NET, no
+        # Compress-Archive): devuelve Failed. El copy de clients/ ocurre ANTES del zip
+        # dentro de Save-PreUninstallArtifacts, asi que debe sobrevivir igual.
+        function Invoke-ExportClientLogs { return [PSCustomObject]@{ Status = 'Failed'; ZipPath = ''; Error = 'simulado' } }
         $r = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpZipDest
         if ($null -eq $r) { throw 'Save-PreUninstallArtifacts devolvio $null' }
         # clients debe haber quedado copiado (el copy ocurre ANTES del zip)
