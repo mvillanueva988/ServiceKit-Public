@@ -65,6 +65,12 @@ function Invoke-ToolDownload {
     $fileStream = [System.IO.FileStream]::new($Dest, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
     $buffer     = [byte[]]::new(65536)
     [long] $recv = 0
+    # Write-Progress en CADA chunk (64KB) frena la descarga muchisimo: para 250MB
+    # son ~4000 redibujados de la barra, y eso (no la red) es el cuello de botella.
+    # Throttle: solo redibujar al cambiar el % entero (o cada ~4MB si no hay
+    # ContentLength) -> la descarga va a velocidad de red.
+    [int]  $lastPct    = -1
+    [long] $lastReport = 0
 
     try {
         while (($read = $netStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
@@ -72,10 +78,14 @@ function Invoke-ToolDownload {
             $recv += $read
             if ($total -gt 0) {
                 [int] $pct = [int](($recv / $total) * 100)
-                Write-Progress -Activity "Descargando $DisplayName" `
-                               -PercentComplete $pct `
-                               -Status ('{0:N1} / {1:N1} MB' -f ($recv / 1MB), ($total / 1MB))
-            } else {
+                if ($pct -ne $lastPct) {
+                    $lastPct = $pct
+                    Write-Progress -Activity "Descargando $DisplayName" `
+                                   -PercentComplete $pct `
+                                   -Status ('{0:N1} / {1:N1} MB' -f ($recv / 1MB), ($total / 1MB))
+                }
+            } elseif (($recv - $lastReport) -ge 4MB) {
+                $lastReport = $recv
                 Write-Progress -Activity "Descargando $DisplayName" `
                                -PercentComplete 0 `
                                -Status ('{0:N1} MB...' -f ($recv / 1MB))

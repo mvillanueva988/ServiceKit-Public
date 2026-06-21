@@ -93,8 +93,16 @@ function Invoke-Launch {
     # ── Descargar ZIP ─────────────────────────────────────────────────────────
     Write-Host '  Descargando toolkit...' -ForegroundColor Cyan
     try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $zipDest -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
-        Invoke-WebRequest -Uri $shaUrl -OutFile $shaDest -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+        # PS5.1: Invoke-WebRequest con la barra de progreso visible descarga MUCHISIMO
+        # mas lento que la red. Silenciarla acelera ~10x. Se restaura al salir.
+        $prevPP = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $zipDest -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+            Invoke-WebRequest -Uri $shaUrl -OutFile $shaDest -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+        } finally {
+            $ProgressPreference = $prevPP
+        }
     }
     catch {
         Write-Host "  [!] Error al descargar: $($_.Exception.Message)" -ForegroundColor Red
