@@ -47,6 +47,11 @@ _local-dev/
 # Handoffs / contratos de implementacion (scratch, no publicar en repo toolkit)
 HANDOFF_*.md
 
+# Doc interna de Claude Code — NO publicar en el repo publico.
+# Claude Code la lee de disco igual (gitignore no afecta el auto-load).
+# Privada desde 2026-06-26 por decision de Mateo.
+CLAUDE.md
+
 # Catalogo de referencia de OOSU (fuente para regenerar / diff cross-OS;
 # la app NO lo consume: las recetas usan basic/medium/multimedia/aggressive.cfg)
 data/oosu10-profiles/_*.cfg
