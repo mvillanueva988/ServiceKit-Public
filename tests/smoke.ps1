@@ -103,6 +103,26 @@ function Test-SmokeFunction {
 # ─── static checks ────────────────────────────────────────────────────────────
 Test-SmokeFunction 'StaticCheck' 'BomRegression' { Test-BomRegression }
 
+# --- #26-A1: red de cierre de serializacion a background jobs ---
+# Caza la clase de bug que rompio v2.3.0: un Start-*Process que serializa una
+# funcion entry al job sin embeber una funcion que llama transitivamente ->
+# CommandNotFound al ejecutar el job (probar los helpers sueltos NO lo caza).
+# Red estatica por AST, sin efectos secundarios -> segura en el gate. Detalle y
+# demostracion con diente: tests/job-closure.ps1 (corrible standalone).
+. (Join-Path $PSScriptRoot 'job-closure.ps1')
+$script:JobClosureReport = Get-JobClosureReport -RepoRoot $repoRoot
+Test-SmokeFunction 'JobClosure' 'red encontro los sitios de job (piso 14)' {
+    [int] $n = @($script:JobClosureReport.Sites).Count
+    if ($n -lt 14) { throw ("esperaba >=14 sitios de job serializado; encontro {0} (AST/regex roto?)" -f $n) }
+}
+foreach ($__site in @($script:JobClosureReport.Sites)) {
+    Test-SmokeFunction 'JobClosure' ('{0} [{1}:{2}]' -f $__site.Enclosing, $__site.File, $__site.Line) {
+        if (@($__site.Missing).Count -gt 0) {
+            throw ('cierre INCOMPLETO: faltan en el job -> {0}' -f (@($__site.Missing) -join ', '))
+        }
+    }
+}
+
 # ─── core ─────────────────────────────────────────────────────────────────────
 Test-SmokeFunction 'MachineProfile' 'Get-MachineProfile' { Get-MachineProfile }
 Test-SmokeFunction 'MachineProfile' 'IsVirtualMachine field' {
