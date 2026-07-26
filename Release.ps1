@@ -75,12 +75,36 @@ Write-Host ("  [v] {0}" -f $shaName) -ForegroundColor Green
 Write-Host "      $shaPath" -ForegroundColor DarkGray
 
 # -- SHA-256 de Launch.ps1 (pegar en README/release notes) ----------------------
+# #38 (2026-07-25): NO hashear el archivo del arbol de trabajo.
+# El repo tiene core.autocrlf=true -> git ALMACENA con LF y CHECKOUTEA con CRLF.
+# El usuario que sigue el paso de verificacion del README baja Launch.ps1 de
+# raw.githubusercontent.com, que sirve el BLOB (LF). Hashear el archivo local (CRLF)
+# publica un valor que NO coincide -> el usuario obtiene mismatch y concluye que el
+# archivo fue adulterado. Publicar un hash equivocado es PEOR que no publicar ninguno:
+# entrena a ignorar la verificacion.
+# Medido en v2.4.0: working tree 4A8C5F... vs blob servido 8D138E... (181 bytes de
+# diferencia = los 181 CR). Normalizar a LF reproduce EXACTO lo que sirve GitHub.
 [string] $launchPs1 = Join-Path $PSScriptRoot 'Launch.ps1'
 if (Test-Path $launchPs1) {
-    [string] $launchSha = (Get-FileHash -Path $launchPs1 -Algorithm SHA256).Hash.ToUpperInvariant()
+    [byte[]] $launchBytes = [System.IO.File]::ReadAllBytes($launchPs1)
+    [byte[]] $launchLf    = @($launchBytes | Where-Object { $_ -ne 13 })
+
+    [string] $launchSha = ''
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $launchSha = ([BitConverter]::ToString($sha256.ComputeHash($launchLf)) -replace '-', '').ToUpperInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+
+    [bool] $hadCrlf = ($launchBytes.Length -ne $launchLf.Length)
     Write-Host ''
     Write-Host '  SHA-256 de Launch.ps1 (pegar en README/release notes):' -ForegroundColor Cyan
     Write-Host "  $launchSha" -ForegroundColor White
+    if ($hadCrlf) {
+        Write-Host '  (normalizado a LF: es el hash del archivo COMO LO SIRVE GitHub,' -ForegroundColor DarkGray
+        Write-Host '   no el del archivo local. El local tiene CRLF y da otro valor.)' -ForegroundColor DarkGray
+    }
 }
 
 # -- Publicar a GitHub Releases (opcional) ---------------------------------------

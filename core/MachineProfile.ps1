@@ -461,6 +461,16 @@ function Get-MachineProfile {
         IsHome           = ($osReg -and ([string]$osReg.ProductName -match '\bHome\b'))
         Build            = $build
         OemCatalogPath   = $oemCatalogPath
+        # ── #28: identidad fisica del equipo (2026-07-25) ─────────────────────
+        # Las consultas CIM ya estaban hechas y se TIRABAN: $cs y $bios se leian
+        # para RAM y deteccion de VM, y Model/SerialNumber se descartaban. Esto no
+        # agrega ni una query ni un ms al escaneo -- son dos campos mas al objeto.
+        # Para que sirve: con el Service Tag entras al soporte del fabricante y
+        # sacas el despiece y los part-numbers exactos (caso Olivo: hubo que correr
+        # wmic a mano para poder buscar teclado y fan). En Dell el SerialNumber ES
+        # el Service Tag de 7 caracteres.
+        Model            = if ($null -ne $cs   -and $cs.PSObject.Properties['Model']        -and $null -ne $cs.Model)          { ([string]$cs.Model).Trim() }          else { '' }
+        SerialNumber     = if ($null -ne $bios -and $bios.PSObject.Properties['SerialNumber'] -and $null -ne $bios.SerialNumber) { ([string]$bios.SerialNumber).Trim() } else { '' }
         # ── Campos nuevos snapshot-vm-plan §5 ─────────────────────────────────
         IsVirtualMachine = [bool]   $vmInfo.IsVirtual
         VmVendor         = [string] $vmInfo.Vendor

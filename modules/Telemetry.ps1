@@ -177,7 +177,24 @@ function Get-SystemSnapshot {
         $qt['Win32_ComputerSystem'] = [int] $sw.ElapsedMilliseconds
     } catch { $qt['Win32_ComputerSystem'] = 'timeout' }
 
-    $vmInfo = Test-IsVirtualMachine -ComputerSystem $csRaw
+    # ── #28: identidad fisica del equipo (2026-07-25) ────────────────────────
+    # Win32_BIOS ya se consultaba adentro de Test-IsVirtualMachine y se descartaba.
+    # Aca se consulta UNA vez, se instrumenta el timing como el resto, y se pasa a
+    # la deteccion de VM para que no re-consulte. El SerialNumber es el Service Tag
+    # en Dell (7 chars) y el serial de fabrica en el resto: es lo que se necesita
+    # para pedir repuestos (caso Olivo). Vacio en clones/PCs armadas, que es correcto.
+    $biosRaw = $null
+    try {
+        $sw.Restart()
+        $biosRaw = Get-CimInstance -ClassName Win32_BIOS -OperationTimeoutSec 2 -ErrorAction SilentlyContinue
+        $qt['Win32_BIOS'] = [int] $sw.ElapsedMilliseconds
+    } catch { $qt['Win32_BIOS'] = 'timeout' }
+
+    [string] $machineModel  = if ($null -ne $csRaw   -and $csRaw.PSObject.Properties['Model']          -and $null -ne $csRaw.Model)            { ([string]$csRaw.Model).Trim() }            else { '' }
+    [string] $machineVendor = if ($null -ne $csRaw   -and $csRaw.PSObject.Properties['Manufacturer']   -and $null -ne $csRaw.Manufacturer)     { ([string]$csRaw.Manufacturer).Trim() }     else { '' }
+    [string] $machineSerial = if ($null -ne $biosRaw -and $biosRaw.PSObject.Properties['SerialNumber'] -and $null -ne $biosRaw.SerialNumber)   { ([string]$biosRaw.SerialNumber).Trim() }   else { '' }
+
+    $vmInfo = Test-IsVirtualMachine -ComputerSystem $csRaw -Bios $biosRaw
     [bool]   $isVM    = $vmInfo.IsVirtual
     [string] $vmVendor = $vmInfo.Vendor
 
@@ -722,6 +739,11 @@ function Get-SystemSnapshot {
         Phase             = [string]   $Phase
         Timestamp         = [string]   (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         ComputerName      = [string]   $env:COMPUTERNAME
+        # ── #28: identidad fisica (2026-07-25). ComputerName es el hostname
+        # (DESKTOP-XXXX, inutil para identificar el equipo); esto es la maquina real.
+        Manufacturer      = [string]   $machineVendor
+        Model             = [string]   $machineModel
+        SerialNumber      = [string]   $machineSerial
         CPU               = $cpu
         GPU               = $gpus
         RamTotalGb        = [double]   $ramTotalGb
