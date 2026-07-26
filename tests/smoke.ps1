@@ -2420,6 +2420,108 @@ Test-SmokeFunction 'ServiceState' 'Invoke-CloseService: cierra state despues de 
     }
 }
 
+# ─── Canarios de la sesion 2026-07-25 (code-map + combo de campo) ────────────
+
+Test-SmokeFunction 'Bundle' '#29: el bundle lleva reports/ y audits/, y NUNCA recovery/' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-b29-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest = Join-Path $env:TEMP ('pctk-b29d-' + [System.Guid]::NewGuid().ToString('N'))
+    foreach ($d in @('audit', 'snapshots', 'reports', 'audits', 'recovery')) {
+        New-Item -Path (Join-Path $tmpRoot $d) -ItemType Directory -Force | Out-Null
+    }
+    New-Item -Path $tmpDest -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $tmpRoot 'audit\2026-07-25.jsonl')     -Value '{"Action":"x"}' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $tmpRoot 'snapshots\a_pre.json')       -Value '{}'             -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $tmpRoot 'reports\reporte-cliente.html') -Value '<html></html>' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $tmpRoot 'audits\audit_PC.txt')        -Value 'informe'        -Encoding UTF8
+    # El secreto que NUNCA debe viajar (feedback_secrets_not_in_bundles)
+    Set-Content -LiteralPath (Join-Path $tmpRoot 'recovery\bitlocker.txt')     -Value '111111-222222'  -Encoding UTF8
+    try {
+        $r = Invoke-ExportClientLogs -OutputRootOverride $tmpRoot -DestDirOverride $tmpDest `
+                                     -TimestampOverride '20260725-000000' -TagOverride 'test' `
+                                     -ExtraItems @((Join-Path $tmpRoot 'reports'), (Join-Path $tmpRoot 'audits'))
+        if ($r.Status -ne 'OK') { throw ('Status esperado OK; got {0}' -f $r.Status) }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [string[]] $entries = @()
+        $za = [System.IO.Compression.ZipFile]::OpenRead($r.ZipPath)
+        try { $entries = @($za.Entries | ForEach-Object { $_.FullName }) } finally { $za.Dispose() }
+
+        if (-not @($entries | Where-Object { $_ -like 'reports/*' })) { throw 'Falta reports/ en el ZIP' }
+        if (-not @($entries | Where-Object { $_ -like 'audits/*' }))  { throw 'Falta audits/ en el ZIP' }
+        if (@($entries | Where-Object { $_ -match '(?i)recovery|bitlocker' })) {
+            throw 'FUGA DE SECRETO: recovery/ entro al ZIP'
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ClientReport' '#30: sin POST, la ficha del equipo sale del PRE (no el placeholder)' {
+    $ErrorActionPreference = 'Stop'
+    # El bug: Invoke-ClientReport solo miraba *_post.json; en visita de diagnostico
+    # (sin pipeline auto) el reporte salia con el nombre del tecnico y nada mas.
+    [PSCustomObject] $preSnap = [PSCustomObject]@{
+        Phase = 'Pre'; ComputerName = 'PC-TEST'
+        CPU = [PSCustomObject]@{ Name = 'Ryzen 7 5800H'; Cores = 8; Threads = 16 }
+        RamTotalGb = 16.0
+        Disks = @([PSCustomObject]@{ Name = 'SSD'; MediaType = 'SSD'; SizeGb = 512; HealthStatus = 'Healthy' })
+    }
+    [string] $out = Join-Path $env:TEMP ('pctk-r30-' + [System.Guid]::NewGuid().ToString('N') + '.html')
+    try {
+        $r = New-ClientReport -PostSnapshot $preSnap -OutputPath $out
+        if (-not $r.Success) { throw 'New-ClientReport fallo' }
+        [string] $html = Get-Content -LiteralPath $out -Raw -Encoding UTF8
+        if ($html -match 'Informacion del equipo no disponible') {
+            throw 'Salio el placeholder: el fallback al PRE no alimento la ficha'
+        }
+        if ($html -notmatch 'Ryzen 7 5800H') { throw 'La ficha no trae los datos del snapshot' }
+        # Honestidad: sin Compare, el panel Antes/Despues DEBE seguir diciendo no disponible
+        if ($html -notmatch 'Comparacion PRE/POST no disponible') {
+            throw 'Sin Compare, el panel Antes/Despues no deberia mostrarse'
+        }
+    } finally {
+        Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'Diagnostics' 'BSOD: BsodCount y PowerCount se cuentan por separado' {
+    $ErrorActionPreference = 'Stop'
+    # Regresion del caso Olivo: 1 BSOD + 5 apagones se leia como "6 crashes".
+    $d = Get-BsodHistory -Days 1
+    foreach ($campo in @('BsodCount', 'PowerCount', 'TotalCrashes', 'ReadFailed')) {
+        if (-not $d.PSObject.Properties[$campo]) { throw ("Falta el campo {0}" -f $campo) }
+    }
+    if ([int]$d.BsodCount + [int]$d.PowerCount -ne [int]$d.TotalCrashes) {
+        throw ('BsodCount({0}) + PowerCount({1}) != TotalCrashes({2})' -f $d.BsodCount, $d.PowerCount, $d.TotalCrashes)
+    }
+    if ([bool]$d.ReadFailed -and [string]::IsNullOrEmpty($d.ReadError)) {
+        throw 'ReadFailed=true pero sin ReadError: no se puede distinguir el fallo'
+    }
+}
+
+Test-SmokeFunction 'MachineProfile' '#28: expone Manufacturer / Model / SerialNumber' {
+    $ErrorActionPreference = 'Stop'
+    $mp = Get-MachineProfile
+    foreach ($campo in @('Manufacturer', 'Model', 'SerialNumber')) {
+        if (-not $mp.PSObject.Properties[$campo]) { throw ("Falta el campo {0}" -f $campo) }
+        if ($null -eq $mp.$campo) { throw ("{0} es null (deberia ser '' si no hay dato)" -f $campo) }
+    }
+}
+
+Test-SmokeFunction 'Router' 'Menu [I] informe tecnico cableado a Invoke-RawAuditReport' {
+    if (-not (Get-Command -Name 'Invoke-RawAuditReport' -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw 'Invoke-RawAuditReport no esta definida'
+    }
+    if (-not (Get-Command -Name 'New-RawAuditReport' -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw 'New-RawAuditReport no esta definida'
+    }
+    [object[]] $rows = Get-MainMenuRows
+    if (-not @($rows | Where-Object { $_.Kind -eq 'Item' -and $_.Key -eq 'I' })) {
+        throw 'El menu principal no tiene la tecla [I]'
+    }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'
