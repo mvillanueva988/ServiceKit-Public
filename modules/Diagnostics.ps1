@@ -27,6 +27,10 @@ function Get-BsodHistory {
     [System.Collections.Generic.List[PSCustomObject]] $events = `
         [System.Collections.Generic.List[PSCustomObject]]::new()
 
+    # PS5.1 StrictMode: inicializar ANTES del try. El catch la escribe y el objeto
+    # de retorno la lee siempre; sin esto, el camino feliz tira VariableIsUndefined.
+    [string] $readError = ''
+
     try {
         $raw = Get-WinEvent -FilterHashtable @{
             LogName   = 'System'
@@ -47,9 +51,11 @@ function Get-BsodHistory {
             if ($ev.Id -eq 1001) {
                 try {
                     foreach ($p in $ev.Properties) {
-                        $raw = $p.Value
-                        if ($raw -is [long] -or $raw -is [int] -or $raw -is [uint32] -or $raw -is [uint64]) {
-                            [long] $val = [long] $raw
+                        # OJO: no reusar $raw aca -- es la variable que alimenta el
+                        # foreach de afuera. Se renombro a $propVal (2026-07-25).
+                        $propVal = $p.Value
+                        if ($propVal -is [long] -or $propVal -is [int] -or $propVal -is [uint32] -or $propVal -is [uint64]) {
+                            [long] $val = [long] $propVal
                             if ($val -gt 0 -and $val -le 0xFFFFFFFFFFFF) {
                                 $detail = '0x{0:X8}' -f $val
                                 break
@@ -70,7 +76,13 @@ function Get-BsodHistory {
             })
         }
     }
-    catch { <# Sin eventos en el rango — lista vacía #> }
+    catch {
+        # Hasta 2026-07-25 este catch estaba vacio: un fallo REAL de lectura del
+        # Event Log era indistinguible de "no hubo crashes" -> el handler reportaba
+        # Success con 0 eventos y el operador se iba tranquilo. Ahora se propaga el
+        # motivo para que la UI pueda decir "no se pudo leer" en vez de "todo bien".
+        $readError = $_.Exception.Message
+    }
 
     # Ordenar cronológico descendente
     [PSCustomObject[]] $sortedEvents = @($events | Sort-Object -Property Fecha -Descending)
@@ -88,12 +100,25 @@ function Get-BsodHistory {
         )
     }
 
+    # Conteos DISCRIMINADOS (2026-07-25). Antes solo existia TotalCrashes = la suma
+    # de los 3 event IDs, y esa suma es la que se mostraba y la que iba al audit.
+    # Mezclar 1001 (BSOD real, falla de kernel) con 41/6008 (apagon sucio, corte de
+    # luz) lleva a diagnosticos equivocados: el caso Olivo 2026-07-14 se leyo como
+    # "11 BSOD" cuando eran 1 BSOD + 5 apagones. Son problemas DISTINTOS: uno apunta
+    # a driver/RAM, el otro a la instalacion electrica o a la fuente.
+    [int] $bsodCount  = @($sortedEvents | Where-Object { $_.EventId -eq 1001 }).Count
+    [int] $powerCount = @($sortedEvents | Where-Object { $_.EventId -eq 41 -or $_.EventId -eq 6008 }).Count
+
     return [PSCustomObject]@{
         DaysScanned  = $Days
         Since        = $since
-        TotalCrashes = $sortedEvents.Count
+        TotalCrashes = $sortedEvents.Count   # total de EVENTOS (no de BSOD) - ver BsodCount
+        BsodCount    = $bsodCount            # solo 1001: pantallazo azul real
+        PowerCount   = $powerCount           # 41 + 6008: apagon sucio / corte
         Events       = $sortedEvents
         Minidumps    = $minidumps
+        ReadFailed   = (-not [string]::IsNullOrEmpty($readError))
+        ReadError    = $readError
     }
 }
 
@@ -111,12 +136,30 @@ function Show-BsodHistory {
     Write-Host ''
     Write-PctkSection ("  Crashes / reinicios inesperados en los ultimos {0} dias:" -f $Data.DaysScanned)
 
+    # Si la lectura del Event Log fallo, decirlo. "0 eventos" y "no pude leer" NO son
+    # lo mismo y hasta 2026-07-25 se veian igual (el operador se iba tranquilo).
+    if ($Data.PSObject.Properties['ReadFailed'] -and [bool] $Data.ReadFailed) {
+        Write-PctkErr  '  [!] No se pudo leer el Event Log -- este resultado NO es confiable.'
+        Write-PctkHint ('      {0}' -f $Data.ReadError)
+        Write-Host ''
+    }
+
     if ($Data.TotalCrashes -eq 0) {
         Write-PctkOk '  Sin eventos criticos registrados.'
     } else {
-        Write-PctkLine ("  Total eventos : {0}" -f $Data.TotalCrashes) $(
-            if ($Data.TotalCrashes -ge 5) { 'err' } elseif ($Data.TotalCrashes -ge 2) { 'warn' } else { 'ok' }
+        # Conteos SEPARADOS: un BSOD real (1001) apunta a driver/RAM; un apagon sucio
+        # (41/6008) apunta a la electrica o la fuente. Sumarlos lleva a diagnosticar
+        # mal -- caso Olivo: "11 BSOD" que eran 1 BSOD + 5 apagones.
+        [int] $bsodN  = if ($Data.PSObject.Properties['BsodCount'])  { [int] $Data.BsodCount }  else { 0 }
+        [int] $powerN = if ($Data.PSObject.Properties['PowerCount']) { [int] $Data.PowerCount } else { 0 }
+
+        Write-PctkLine ("  BSOD reales (pantallazo azul) : {0}" -f $bsodN) $(
+            if ($bsodN -ge 3) { 'err' } elseif ($bsodN -ge 1) { 'warn' } else { 'ok' }
         )
+        Write-PctkLine ("  Apagones sucios / cortes      : {0}" -f $powerN) $(
+            if ($powerN -ge 5) { 'warn' } else { 'hint' }
+        )
+        Write-PctkHint ("  (total de eventos: {0})" -f $Data.TotalCrashes)
         Write-Host ''
         Write-PctkSection ('  {0,-21} {1,-7} {2,-35} {3}' -f 'Fecha', 'ID', 'Tipo', 'Detalle')
         Write-PctkSection ('  {0}' -f ('-' * 80))

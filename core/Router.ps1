@@ -368,8 +368,19 @@ function Invoke-DiagnosticBsod {
     $job = Start-BsodHistoryJob -Days 90
     $results = Invoke-JobWithProgress -Jobs @($job) -Activity 'Historial BSOD' -TimeoutSeconds 120
     if ($null -ne $results -and $results.Count -gt 0 -and $null -ne $results[0]) {
-        Show-BsodHistory -Data $results[0]
-        Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Success' -Summary ('{0} eventos en {1} dias' -f $results[0].TotalCrashes, $results[0].DaysScanned)
+        $bsodData = $results[0]
+        Show-BsodHistory -Data $bsodData
+
+        # PERSISTIR el detalle (2026-07-25). Antes solo se pintaba en consola y el
+        # audit guardaba un resumen de UNA linea sin -Details: al cerrar la consola
+        # se perdian los stop codes y los nombres de los minidumps, y habia que
+        # re-sacarlos a mano con Get-WinEvent (paso con Olivo). El handler de disco
+        # ya pasaba -Details; esto lo empareja.
+        [int] $bsodN  = if ($bsodData.PSObject.Properties['BsodCount'])  { [int] $bsodData.BsodCount }  else { -1 }
+        [int] $powerN = if ($bsodData.PSObject.Properties['PowerCount']) { [int] $bsodData.PowerCount } else { -1 }
+        [string] $sum = 'BSOD={0} Apagones={1} TotalEventos={2} en {3} dias' -f `
+            $bsodN, $powerN, $bsodData.TotalCrashes, $bsodData.DaysScanned
+        Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Success' -Summary $sum -Details $bsodData
     } else {
         Write-PctkWarn '  [!] No se pudo leer el Event Log.'
         Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Failed' -Summary 'No result'
