@@ -419,7 +419,18 @@ function Invoke-ClientReport {
         Write-PctkHint ('  [i] Compare no disponible: {0}' -f $_.Exception.Message)
     }
 
-    # Leer POST mas reciente para la ficha del equipo
+    # Leer el snapshot mas reciente para la ficha del equipo.
+    # #29/#30: se prefiere el POST, pero si no hay (visita de DIAGNOSTICO, sin
+    # pipeline auto) se cae al PRE. El PRE trae exactamente la misma ficha del
+    # equipo (CPU, RAM, discos, bateria, servicios), asi que el reporte pasa de
+    # inservible a entregable en el caso mas comun de la primera visita.
+    # HONESTIDAD (regla de New-ClientReport: "nunca se fabrica un delta"): esto
+    # SOLO alimenta la ficha del equipo. El panel Antes/Despues depende del
+    # Compare, que sin POST sigue diciendo "no disponible" -- y esta bien, porque
+    # no hubo servicio que comparar.
+    # NOTA: no hace falta re-rotular el panel. El titulo "Tu equipo" es honesto con
+    # PRE o con POST (es la ficha del equipo, no un "despues"), y "Antes y despues"
+    # sigue diciendo "no disponible" solo. El fallback alcanza.
     [PSCustomObject] $postSnap = $null
     try {
         [string] $snapshotsDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'output\snapshots'
@@ -428,11 +439,20 @@ function Invoke-ClientReport {
                 Sort-Object LastWriteTime -Descending)
             if ($postFiles.Count -gt 0) {
                 $postSnap = Get-Content -LiteralPath $postFiles[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            } else {
+                [object[]] $preFiles = @(Get-ChildItem -Path $snapshotsDir -Filter '*_pre.json' -File -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending)
+                if ($preFiles.Count -gt 0) {
+                    $postSnap = Get-Content -LiteralPath $preFiles[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+                    $isPreFallback = $true
+                    Write-PctkHint '  [i] Sin snapshot POST: la ficha del equipo sale del PRE (estado actual).'
+                }
             }
         }
     } catch {
-        Write-PctkHint ('  [i] Snapshot POST no encontrado: {0}' -f $_.Exception.Message)
+        Write-PctkHint ('  [i] Snapshot no encontrado: {0}' -f $_.Exception.Message)
     }
+    $null = $isPreFallback
 
     try {
         $r = New-ClientReport `

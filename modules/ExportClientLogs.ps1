@@ -373,6 +373,20 @@ function Invoke-CloseService {
         $clientsDirOk = $clientsDir
     }
 
+    # ── Paso 4b: incluir reports/ si existe (#29) ────────────────────────────
+    # El reporte HTML del cliente ([8] / cierre de [1]) vive en output\reports\ y
+    # hasta v2.4.0 NO viajaba en el bundle: el detalle quedaba en la PC del cliente
+    # y habia que ir a buscarlo aparte (caso Olivo 2026-07-14, los BSOD).
+    # GUARDRAIL (feedback_secrets_not_in_bundles): se agrega reports\, NO recovery\.
+    # La clave de BitLocker se escribe en output\recovery\, que sigue fuera del ZIP
+    # a proposito -- no ampliar la lista sin auditar que no arrastre secretos.
+    [string] $reportsDir = Join-Path $outputRoot 'reports'
+    [string] $reportsDirOk = ''
+    if ((Test-Path -LiteralPath $reportsDir -PathType Container) -and
+        ($null -ne (Get-ChildItem -LiteralPath $reportsDir -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1))) {
+        $reportsDirOk = $reportsDir
+    }
+
     # ── Paso 5: armar lista de extras para ExportClientLogs ──────────────────
     # PS5.1 StrictMode: [object[]] inicializado antes de conditionals
     [object[]] $extras = @()
@@ -381,6 +395,9 @@ function Invoke-CloseService {
     }
     if (-not [string]::IsNullOrEmpty($clientsDirOk)) {
         $extras += $clientsDirOk
+    }
+    if (-not [string]::IsNullOrEmpty($reportsDirOk)) {
+        $extras += $reportsDirOk
     }
 
     # ── Paso 6: comprimir (reusar ExportClientLogs con tag fijo = cierre) ────
