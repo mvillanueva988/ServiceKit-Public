@@ -2,6 +2,54 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.5.0] - 2026-07-26
+
+Release: cierre del ciclo de bugs de campo. El `[L]` y el `[U]` dejan de duplicar el paquete, la clave de recuperación de BitLocker deja de morir con la desinstalación, el `[6]` deja de mezclar BSOD con apagones, y se enciende una tanda de código que estaba escrito y sin cablear (`[I]` informe técnico, submenú de Defender, Autoruns).
+
+### Added
+
+- **`[I]` — informe técnico del equipo (`modules/RawAudit.ps1`, `core/Router.ps1`)**: vuelca CPU / RAM / discos / térmica / USB / programas / Steam a un `.txt` legible. La función existía completa y **no tenía menú, ni caller, ni test**. Se diferencia del `[8]`: el `[8]` es para el **cliente** (HTML honesto, imprimible); el `[I]` es para el **técnico** (crudo, completo). El bundle del `[L]` lo incluye (`output\audits\`).
+- **`[A][19]` — submenú de Defender (`modules/Diagnostics.ps1`, `core/Router.ps1`)**: reagendar el escaneo programado, ver exclusiones, aplicar el set de exclusiones de desarrollo (WSL2 + Docker + VS Code) y quitarlas. Cablea tres funciones que estaban huérfanas.
+- **`[A][10] A` — abrir Autoruns**: el `[T]` bajaba el ejecutable y nada lo lanzaba.
+- **#28 — modelo y Service Tag del equipo (`core/MachineProfile.ps1`, `modules/Telemetry.ps1`, `core/Router.ps1`, `modules/ResearchPrompt.ps1`)**: el `ComputerName` que se guardaba es el hostname (`DESKTOP-XXXX`), inútil para identificar la máquina. El modelo y el serial ya se leían (`Win32_ComputerSystem` y `Win32_BIOS` se consultaban para RAM y detección de VM) y se tiraban. Ahora el perfil y el snapshot los exponen —así que viajan al bundle—, el **banner los muestra** y el research prompt `[R]` lleva el modelo. En Dell el `SerialNumber` **es** el Service Tag: con eso se entra al soporte del fabricante y se sacan los part-numbers exactos, sin correr `wmic` a mano en cada visita. Los placeholders del SMBIOS (`To Be Filled By O.E.M.`, `Default string`) se normalizan a `N/A` al mostrarse, sin tocar el dato guardado. Validado en HW real: Lenovo / 82K2 / serial de 8 caracteres.
+- **Datos del técnico configurables (`data/tecnico.json`, `modules/ClientReport.ps1`)**: nombre y teléfono estaban hardcodeados en un módulo. Si el archivo falta o está roto, el reporte se genera igual y esas líneas se **omiten** (no queda una etiqueta `Técnico:` colgada en el papel que ve el cliente).
+- **Rollback de servicios (`modules/Debloat.ps1`, `core/Router.ps1`)**: `Disable-BloatServices` guarda el `StartType` **original** de cada servicio tocado y el comando exacto para restaurarlo; se imprime y queda en el audit. Antes revertir era adivinar entre `Automatic` y `Manual` — y con el Spooler esa diferencia es "no me imprime" resuelto o no.
+- **Térmica y plan de energía en el reporte `[8]`**: el snapshot ya guardaba `CpuTempC`, `ThermalZones` y `PowerPlan`, y el reporte no los miraba. Se suman al panel "Tu equipo", con aviso de pasta térmica a ≥90 °C. Sin sensores las secciones **no se dibujan**: nada de paneles vacíos.
+- **Logo PCTk en el encabezado del reporte `[8]`**: embebido como PNG base64, así que el HTML sigue siendo self-contained.
+
+### Changed
+
+- **`[L]` y `[U]` unificados (`modules/ServiceState.ps1`, `modules/ExportClientLogs.ps1`, `modules/UninstallToolkit.ps1`, `core/Router.ps1`)**: el `[L]` cerraba el service y el `[U]` empaquetaba igual, así que el flujo natural —me llevo el paquete y dejo la PC limpia— dejaba **dos ZIP en el Escritorio del cliente**, y el segundo peor (con el service ya cerrado salía como "bundle parcial", sin POST). Ahora el `[L]` deja un marcador (`output\state\last-bundle.json`) y el `[U]` **no re-empaqueta** si el bundle de esa PC ya se generó: muestra dónde quedó. El `[L]` además ofrece dejar la PC limpia al terminar, y el `[U]` directo sigue funcionando como atajo para "no hubo service, sólo saco el toolkit".
+- **`[6]` — BSOD real separado de apagón sucio (`modules/Diagnostics.ps1`)**: se sumaban los tres event IDs en un solo total: 1001 (BSOD real, apunta a driver o RAM) junto con 41 y 6008 (apagón sucio, apunta a la eléctrica o la fuente). Ese número mezclado era lo que se mostraba **y lo único que quedaba en el audit**. Ahora son dos líneas con umbrales propios. Validado en HW real: 32 eventos, 0 BSOD, 32 apagones — el código viejo pintaba eso en rojo como "32 crashes".
+- **Etiqueta del `[L]`**: decía "Empaquetar logs de esta PC", que era el nombre de antes de v2.4.0. Ahora dice lo que hace.
+- **Descargas del `[T]` más rápidas (`Bootstrap-Tools.ps1`, `Launch.ps1`)**: se redibujaba la barra de progreso en **cada chunk de 64 KB** (~4000 veces para un ZIP de 250 MB), y eso —no la red— frenaba la descarga. Ahora sólo redibuja al cambiar el porcentaje entero. El self-installer silencia `$ProgressPreference` alrededor del `Invoke-WebRequest` (en PS5.1 la barra visible descarga ~10× más lento).
+
+### Fixed
+
+- **#29 — el bundle del `[L]` no llevaba el reporte del cliente (`modules/ExportClientLogs.ps1`)**: el HTML se quedaba en la PC del cliente y había que ir a buscarlo aparte. Ahora `output\reports\` viaja en el ZIP.
+- **#30 — el reporte `[8]` salía vacío en visita de diagnóstico (`core/Router.ps1`)**: sólo se buscaban snapshots `*_post.json`; sin pipeline automático no hay POST, así que el reporte salía con el nombre del técnico y nada más. Ahora cae al PRE más reciente, que trae la misma ficha del equipo. El panel Antes/Después **sigue diciendo "no disponible"**: no se fabrica ningún delta que no exista.
+- **#38 — el SHA-256 publicado de `Launch.ps1` no coincidía con el que baja el usuario (`Release.ps1`)**: el repo usa `core.autocrlf=true`, así que git almacena LF y checkoutea CRLF; se hasheaba el archivo del árbol de trabajo mientras `raw.githubusercontent` sirve el blob. El que seguía el paso de verificación del README obtenía mismatch y concluía que el archivo estaba adulterado. Publicar un hash equivocado es peor que no publicar ninguno: entrena a ignorar la verificación.
+- **#39 — el ZIP del `[U]` salía sin `bundle-meta.json`**: el desinstalador empaquetaba por el camino a-la-carte, y sin meta el CRM no puede ingerirlo. Ahora arma el mismo paquete que el `[L]`.
+- **El `[8]` crasheaba sin ningún snapshot (`core/Router.ps1`)**: quedó una lectura de una variable que sólo se asignaba dentro de un `if`; sin snapshots ninguna rama corre y StrictMode tira `VariableIsUndefined`. Introducido después de v2.4.0 — **la v2.4.0 publicada no lo tiene**.
+- **`[A][19][V]` imprimía el objeto crudo**: el handler iteraba `{Available; Paths[]}` como si fuera un array de strings y mostraba `@{Available=True; Paths=System.String[]}`. Ahora lee `.Paths` y distingue "Defender no disponible" de "sin exclusiones".
+- **El `[L]` imprimía su objeto de resultado en la consola del cliente**: el dispatch llamaba a `Invoke-CloseService` suelto. Misma clase de bug que el anterior.
+- **El `[U]` nunca veía el service abierto (`modules/ExportClientLogs.ps1`)**: se le pasaba el *output root* a `Get-ServiceState`, que espera la raíz del toolkit. En el `[L]` no se notaba (ambos vacíos resuelven a la raíz real), pero el `[U]` sí pasa un override → se salteaba el POST automático en silencio.
+- **`Disable-BloatServices` crasheaba con una lista de UN servicio (`modules/Debloat.ps1`)**: la trampa de PS5.1 con `$x = if (c) { $lista }`, que desenrolla una colección de un elemento a escalar y hace que `.Count` tire `PropertyNotFoundStrict`. Una receta con un solo servicio a desactivar rompía el pipeline automático. Cazado por un test nuevo.
+- **`Get-BsodHistory` se tragaba los errores de lectura del Event Log**: "falló la lectura" y "no hubo crashes" se veían idénticos. Ahora expone `ReadFailed`/`ReadError` y la UI avisa que el resultado no es confiable. Además, un `$raw` reasignado pisaba la variable del `foreach` de afuera.
+
+### Security
+
+- **#40 — el `[U]` destruía la clave de recuperación de BitLocker (`modules/UninstallToolkit.ps1`)**: el desinstalador preservaba `clients\` + `audit\` + el ZIP, pero **nunca** `output\recovery\`, y borra la instalación entera. Capturar una clave con `[A][18][C]` y después desinstalar la destruía sin avisar; si el disco pedía recovery más tarde, el cliente quedaba afuera de su propia PC. Ahora el `[U]` frena **antes de cualquier confirmación**, muestra las claves en pantalla y exige escribir `GUARDADA`. No se copian al Escritorio del cliente a propósito: es un secreto suyo, no algo para dejar suelto en su máquina.
+- **El Service Tag no va al research prompt `[R]` (`modules/ResearchPrompt.ps1`)**: el `[R]` suma el modelo, que es el dato útil para buscar drivers y foros del equipo exacto, pero **no** el serial. Ese texto se copia al portapapeles para pegarlo en un LLM de terceros: el modelo lo comparten millones de equipos, el serial identifica el del cliente. Hay un canario que falla si el serial vuelve a aparecer.
+- **`[A][2]` Limpieza ahora confirma (`core/Router.ps1`)**: era el único camino destructivo del toolkit sin `Confirm-Action`. Borra el Temp de todos los perfiles y las cachés de cinco navegadores, irreversible y sin papelera. Confirma con el detalle de lo que se lleva, default No.
+- **El `[R]` pregunta siempre por los identificadores**: sólo preguntaba si el sistema **no** era Home, o sea que en la mayoría de las PCs de cliente el nombre del equipo salía en claro sin avisar. Ahora pregunta siempre y el default es scrubear.
+- **`Set-UltimatePowerPlan`: la guarda de X3D dejó de saltearse en silencio (`modules/Performance.ps1`)**: el `catch` de la detección estaba vacío, así que si fallaba la lectura de la CPU se caía a Ultimate Performance — justo lo que la guarda evita (en un X3D de dos chiplets, Ultimate cuesta fps). Ante la duda ya no cambia el plan. Además `$ErrorActionPreference` local: la función llama a `powercfg` siete veces y decide por `$LASTEXITCODE`.
+
+### Notes
+
+- Smoke 203 → **239**, 0 fallos. La tanda suma canarios que ejercitan **el handler, no la función pura** — la lección de #30, donde el test probaba el renderer y el crash vivía en el handler. El canario de `[L]`+`[U]` corre los dos handlers reales y cuenta los ZIP; verificado con mutación (sin el marcador reporta "hay 2").
+- **#26-A1**: red estática que verifica el cierre transitivo de los 14 sitios de serialización a background jobs. Corre en cada smoke.
+
 ## [2.4.0] - 2026-07-25
 
 Release: recolección de estado del service reboot-safe + bundle de cliente con metadatos (evolución del `[L]`), fix del reporte de cliente en laptops, y Cinebench R23 al menú de herramientas.
