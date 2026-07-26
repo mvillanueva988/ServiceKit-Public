@@ -2,6 +2,31 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.4.0] - 2026-07-25
+
+Release: recolección de estado del service reboot-safe + bundle de cliente con metadatos (evolución del `[L]`), fix del reporte de cliente en laptops, y Cinebench R23 al menú de herramientas.
+
+### Added
+
+- **Recolector — estado de service + bundle `[L]` (`modules/ServiceState.ps1` nuevo, `modules/ExportClientLogs.ps1`, `core/Router.ps1`, `core/ProfileEngine.ps1`)**: el run de service ahora lleva un estado persistente reboot-safe. Al abrir PCTk avisa si falta el snapshot PRE (no lo toma solo) y muestra un indicador "último PRE" arriba a la derecha. El hook de PRE quedó cableado también en el flujo de perfil `[1]`/`[2]` (`Invoke-AutoProfile`), que antes no abría el service. El `[L]` pasó de "exportar logs" a **cerrar el service**: corre el POST automático y arma un bundle ZIP con `meta.json` + snapshots `*_pre.json`/`*_post.json` + `audit/*.jsonl`, listo para ingerir en el CRM.
+- **Cinebench R23 al menú `[T]` (`tools/manifest.json`)**: benchmark de CPU + test térmico (complementa CPU-Z/HWiNFO). URL de descarga directa verificada; despacho por extensión como el resto del `[T]`.
+
+### Fixed
+
+- **#2 — el panel de batería crasheaba el reporte `[8]` en laptops (`modules/ClientReport.ps1`)**: se pasaba un `if` como argumento de `_CR_Row`, que PS5.1 parsea como el cmdlet `if`; bajo `$ErrorActionPreference='Stop'` (main.ps1) tira `CommandNotFound` terminante. Las PCs de escritorio no tienen batería, así que el bug escapaba al smoke y al gate en Sandbox. Fix con temp vars (`$x = if ...`, forma de asignación válida). Canario en smoke con Battery + EAP=Stop.
+- **Recolector — bundle con API .NET en vez de `Compress-Archive` (`modules/ExportClientLogs.ps1`)**: `Compress-Archive` depende del módulo `Microsoft.PowerShell.Archive`, que en instancias degradadas (Sandbox, ciertos Win) falla con "could not be loaded"; ahora el ZIP se arma con `System.IO.Compression` (.NET), siempre disponible. Además, el service NO se cierra si el ZIP no se llegó a crear (no perder el estado; se puede reintentar el `[L]`).
+- **Audit `.jsonl` en UTF-8 sin BOM (`utils/ToolkitSupport.ps1`)**: el log de auditoría se escribía con la code page del sistema (CP1252 en es-AR), que mangla caracteres no-ASCII; ahora se escribe en UTF-8 sin BOM (como corresponde a JSONL).
+
+### Security
+
+- **Clave de recuperación de BitLocker fuera del bundle (`modules/Encryption.ps1`, `modules/ExportClientLogs.ps1`)**: la captura de la clave va a un directorio dedicado (`output\recovery\`) que el bundle ZIP del `[L]` **nunca** incluye (el `[L]` zipea `clients\` + snapshots + audit). Evita que un secreto del cliente viaje en el paquete que se archiva/sube al CRM. Defensa en profundidad.
+
+### Notes
+
+- Smoke 187 → **203**, 0 fallos.
+- **Gate Sandbox del path mutante: PASS.** El recolector se ejercitó end-to-end en Windows Sandbox limpia (PRE → perfil `[1]` generic → `[L]` cierre de service), con `Status=Success` y sin `output\recovery\` en el bundle. El candidato gateado es idéntico al código de esta release en los 73 archivos del paquete (única diferencia: `VERSION`).
+- El paquete ya no incluye `CLAUDE.md` (doc interna del repo, desde ahora fuera del artefacto publicado).
+
 ## [2.3.1] - 2026-06-14
 
 Fix de release: el diagnóstico de red `[A][5] D` (#24) crasheaba al ejecutarse. Cazado en el gate Sandbox limpia de v2.3.0.
