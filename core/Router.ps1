@@ -273,6 +273,7 @@ function Invoke-MainMenuDispatch {
         '6' { Invoke-DiagnosticBsod     -MachineProfile $MachineProfile; return }
         '7' { Invoke-DiagnosticDiskHealth -MachineProfile $MachineProfile; return }
         '8' { Invoke-ClientReport -MachineProfile $MachineProfile; return }
+        'I' { Invoke-RawAuditReport -MachineProfile $MachineProfile; return }
         'R' { Invoke-ResearchPrompt -MachineProfile $MachineProfile; return }
         'A' {
             Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
@@ -384,6 +385,42 @@ function Invoke-DiagnosticBsod {
     } else {
         Write-PctkWarn '  [!] No se pudo leer el Event Log.'
         Write-ActionAudit -Action 'Diagnostics.BsodHistory' -Status 'Failed' -Summary 'No result'
+    }
+}
+
+function Invoke-RawAuditReport {
+    <#
+    .SYNOPSIS
+        Menu [I]: informe tecnico legible del equipo (.txt).
+
+        POR QUE EXISTE ESTE HANDLER: `New-RawAuditReport` (modules\RawAudit.ps1)
+        estaba escrito, funcionando y COMPLETAMENTE HUERFANO -- ni menu, ni caller,
+        ni test. 230 lineas que vuelcan CPU/RAM/discos/termica/USB/programas/Steam
+        a un .txt legible, apagadas. Cableado el 2026-07-25 tras el mapa del codigo.
+
+        Se diferencia del [8]: el [8] es el reporte para EL CLIENTE (HTML, 3 paneles
+        honestos, imprimible). Este es para EL TECNICO: crudo, completo, sin maquillar.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    Write-ActionAudit -Action 'Report.RawAudit' -Status 'Started'
+    Write-PctkWork '  Generando informe tecnico (toma ~30-60s, escanea el equipo)...'
+
+    try {
+        $r = New-RawAuditReport -OpenAfter
+        if ($null -ne $r -and $r.Success) {
+            Write-PctkOk  ('  [OK] Informe generado: {0}' -f $r.FileName)
+            Write-PctkHint ('       {0}  ({1} KB)' -f $r.FilePath, [math]::Round($r.FileSize / 1KB, 1))
+            Write-ActionAudit -Action 'Report.RawAudit' -Status 'Success' -Summary $r.FilePath
+        } else {
+            Write-PctkWarn '  [!] No se pudo generar el informe.'
+            Write-ActionAudit -Action 'Report.RawAudit' -Status 'Failed' -Summary 'Sin resultado'
+        }
+    } catch {
+        Write-PctkWarn ('  [!] Error al generar el informe: {0}' -f $_.Exception.Message)
+        Write-ActionAudit -Action 'Report.RawAudit' -Status 'Failed' -Summary $_.Exception.Message
     }
 }
 

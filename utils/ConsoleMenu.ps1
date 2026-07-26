@@ -23,7 +23,8 @@ function Get-MainMenuRows {
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = '';                    Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  HERRAMIENTAS';       Color = 'DarkCyan' }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'T';   Label = '  [T]  Herramientas externas';            Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'L';   Label = '  [L]  Empaquetar logs de esta PC  (para llevarse)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'I';   Label = '  [I]  Informe tecnico del equipo        (.txt legible para leer/mandar)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'L';   Label = '  [L]  Cerrar service y llevarse el paquete  (POST + ZIP)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'X';   Label = '  [X]  Salir';                           Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'U';   Label = '  [U]  Desinstalar PCTk de esta PC (borra todo)'; Color = 'DarkRed' }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = '';                    Color = $null }

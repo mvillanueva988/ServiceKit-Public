@@ -1540,10 +1540,11 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice presente' {
         throw 'Read-PctkMenuChoice no encontrado'
     }
 }
-Test-SmokeFunction 'ConsoleMenu' 'Get-MainMenuRows: 14 items en orden + 4 headers' {
+Test-SmokeFunction 'ConsoleMenu' 'Get-MainMenuRows: 15 items en orden + 4 headers' {
     [object[]] $rows  = Get-MainMenuRows
     [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
-    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','R','A','T','L','X','U')
+    # [I] = informe tecnico del equipo (RawAudit), cableado 2026-07-25.
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','R','A','T','I','L','X','U')
     if ($items.Count -ne $expectedKeys.Count) {
         throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
     }

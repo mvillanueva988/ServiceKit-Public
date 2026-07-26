@@ -387,6 +387,17 @@ function Invoke-CloseService {
         $reportsDirOk = $reportsDir
     }
 
+    # ── Paso 4c: incluir audits/ (informe tecnico del [I]) ───────────────────
+    # OJO con el nombre: 'audits' (informe legible del tecnico, RawAudit) NO es
+    # 'audit' (el JSONL del audit trail). Un caracter de diferencia entre dos cosas
+    # que no tienen nada que ver -- ver code-map.md seccion 7.
+    [string] $auditsDir = Join-Path $outputRoot 'audits'
+    [string] $auditsDirOk = ''
+    if ((Test-Path -LiteralPath $auditsDir -PathType Container) -and
+        ($null -ne (Get-ChildItem -LiteralPath $auditsDir -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1))) {
+        $auditsDirOk = $auditsDir
+    }
+
     # ── Paso 5: armar lista de extras para ExportClientLogs ──────────────────
     # PS5.1 StrictMode: [object[]] inicializado antes de conditionals
     [object[]] $extras = @()
@@ -398,6 +409,9 @@ function Invoke-CloseService {
     }
     if (-not [string]::IsNullOrEmpty($reportsDirOk)) {
         $extras += $reportsDirOk
+    }
+    if (-not [string]::IsNullOrEmpty($auditsDirOk)) {
+        $extras += $auditsDirOk
     }
 
     # ── Paso 6: comprimir (reusar ExportClientLogs con tag fijo = cierre) ────

@@ -127,20 +127,54 @@ function Save-PreUninstallArtifacts {
         }
     }
 
-    # Bloque B: zip audit + snapshots via [L] (sin gate por clients\).
+    # Bloque B: empaquetar antes de borrar.
+    # #39 (2026-07-25): esto llamaba a Invoke-ExportClientLogs (el path a-la-carte),
+    # asi que el ZIP del desinstalador salia SIN bundle-meta.json -> el CRM no lo
+    # podia ingestar (sin meta no renderiza el boton "Importar a cliente"). Y
+    # desinstalar al terminar el service es un camino natural: dejar la PC del
+    # cliente limpia. Ahora usa Invoke-CloseService, que sintetiza el meta, mete
+    # clients\ + reports\ y cierra el estado -- el mismo paquete que el [L].
+    # Fallback al export directo si la funcion no cargo (mismo patron que Router.ps1).
     [string] $zipPath = ''
     try {
         Write-Host ''
-        Write-PctkWork '  Empaquetando audit + snapshots...'
+        Write-PctkWork '  Empaquetando el service para llevarte...'
         [string] $outputRoot = Join-Path $InstallRoot 'output'
-        [hashtable] $exportParams = @{
-            TagOverride        = 'preuninstall'
-            OutputRootOverride = $outputRoot
+        [PSCustomObject] $zipResult = $null
+
+        # Guard: si NO hay nada real que preservar, no empaquetar nada.
+        # Invoke-CloseService sintetiza un meta.json SIEMPRE, asi que sin este guard
+        # una PC sin service dejaria un ZIP inutil (solo meta) en el Escritorio del
+        # cliente. La intencion del [U] es no perder datos, no fabricar basura.
+        [bool] $hayAlgo = $false
+        foreach ($sub in @('audit', 'snapshots', 'clients')) {
+            [string] $d = Join-Path $outputRoot $sub
+            if ((Test-Path -LiteralPath $d -PathType Container) -and
+                ($null -ne (Get-ChildItem -LiteralPath $d -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1))) {
+                $hayAlgo = $true
+                break
+            }
         }
-        if (-not [string]::IsNullOrWhiteSpace($ZipDestOverride)) {
-            $exportParams['DestDirOverride'] = $ZipDestOverride
+
+        if (-not $hayAlgo) {
+            Write-PctkHint '  [i] Sin datos de service para empaquetar.'
+            $zipResult = [PSCustomObject]@{ Status = 'Empty'; ZipPath = '' }
+        } elseif (Get-Command -Name 'Invoke-CloseService' -CommandType Function -ErrorAction SilentlyContinue) {
+            [hashtable] $closeParams = @{ OutputRootOverride = $outputRoot }
+            if (-not [string]::IsNullOrWhiteSpace($ZipDestOverride)) {
+                $closeParams['DestDirOverride'] = $ZipDestOverride
+            }
+            $zipResult = Invoke-CloseService @closeParams
+        } else {
+            [hashtable] $exportParams = @{
+                TagOverride        = 'preuninstall'
+                OutputRootOverride = $outputRoot
+            }
+            if (-not [string]::IsNullOrWhiteSpace($ZipDestOverride)) {
+                $exportParams['DestDirOverride'] = $ZipDestOverride
+            }
+            $zipResult = Invoke-ExportClientLogs @exportParams
         }
-        [PSCustomObject] $zipResult = Invoke-ExportClientLogs @exportParams
         if ($zipResult.Status -eq 'OK') {
             Write-PctkOk ('  [OK] Zip generado: {0}' -f $zipResult.ZipPath)
             $zipPath = $zipResult.ZipPath
