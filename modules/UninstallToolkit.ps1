@@ -138,14 +138,42 @@ function Save-PreUninstallArtifacts {
     [string] $zipPath = ''
     try {
         Write-Host ''
-        Write-PctkWork '  Empaquetando el service para llevarte...'
         [string] $outputRoot = Join-Path $InstallRoot 'output'
         [PSCustomObject] $zipResult = $null
 
-        # Guard: si NO hay nada real que preservar, no empaquetar nada.
-        # Invoke-CloseService sintetiza un meta.json SIEMPRE, asi que sin este guard
-        # una PC sin service dejaria un ZIP inutil (solo meta) en el Escritorio del
-        # cliente. La intencion del [U] es no perder datos, no fabricar basura.
+        # ── Decision de empaquetar (unificacion [L]/[U]) ──────────────────────
+        # Antes, el unico criterio era "hay archivos en audit/snapshots/clients".
+        # Como el [L] cierra el service pero NO borra esos archivos, hacer [L] y
+        # despues [U] -- el flujo natural: me llevo el paquete y dejo la PC
+        # limpia -- dejaba DOS ZIP en el Escritorio del cliente, y el segundo
+        # peor (el service ya estaba cerrado, asi que salia "bundle parcial" sin
+        # POST). Ahora se decide en este orden:
+        #   1. Service ABIERTO en esta PC  -> empaquetar (el [U] tambien cierra).
+        #   2. Bundle ya tomado en esta PC -> NO re-empaquetar, mostrar el ZIP.
+        #   3. Datos sueltos sin service   -> empaquetar.
+        #   4. Nada                        -> no fabricar un ZIP vacio.
+        # OJO: los helpers de ServiceState reciben la RAIZ DEL TOOLKIT
+        # ($InstallRoot), no la carpeta output.
+        [bool] $svcAbierto = $false
+        if (Get-Command -Name 'Get-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
+            $svcState = Get-ServiceState -OutputRootOverride $InstallRoot
+            if ($null -ne $svcState -and
+                $null -ne $svcState.PSObject.Properties['open']     -and [bool]$svcState.open -and
+                $null -ne $svcState.PSObject.Properties['hostname'] -and [string]$svcState.hostname -eq $env:COMPUTERNAME) {
+                $svcAbierto = $true
+            }
+        }
+
+        [bool] $yaEmpaquetado = $false
+        if (-not $svcAbierto -and
+            (Get-Command -Name 'Test-BundleAlreadyTaken' -CommandType Function -ErrorAction SilentlyContinue)) {
+            $yaEmpaquetado = Test-BundleAlreadyTaken -OutputRootOverride $InstallRoot
+        }
+
+        # Guard historico: Invoke-CloseService sintetiza un meta.json SIEMPRE, asi
+        # que sin esto una PC sin service dejaria un ZIP inutil (solo meta) en el
+        # Escritorio del cliente. La intencion del [U] es no perder datos, no
+        # fabricar basura.
         [bool] $hayAlgo = $false
         foreach ($sub in @('audit', 'snapshots', 'clients')) {
             [string] $d = Join-Path $outputRoot $sub
@@ -156,16 +184,35 @@ function Save-PreUninstallArtifacts {
             }
         }
 
-        if (-not $hayAlgo) {
+        if ($yaEmpaquetado) {
+            [string] $zipPrevio = ''
+            if (Get-Command -Name 'Get-LastBundleMarker' -CommandType Function -ErrorAction SilentlyContinue) {
+                $marker = Get-LastBundleMarker -OutputRootOverride $InstallRoot
+                if ($null -ne $marker -and $null -ne $marker.PSObject.Properties['zip_path']) {
+                    $zipPrevio = [string]$marker.zip_path
+                }
+            }
+            Write-PctkOk '  [OK] El paquete de este service ya se genero; no se duplica.'
+            if (-not [string]::IsNullOrWhiteSpace($zipPrevio)) {
+                Write-PctkHint ('       {0}' -f $zipPrevio)
+                $zipPath = $zipPrevio
+            }
+            $zipResult = [PSCustomObject]@{ Status = 'Skipped'; ZipPath = $zipPrevio }
+        } elseif (-not $hayAlgo) {
             Write-PctkHint '  [i] Sin datos de service para empaquetar.'
             $zipResult = [PSCustomObject]@{ Status = 'Empty'; ZipPath = '' }
         } elseif (Get-Command -Name 'Invoke-CloseService' -CommandType Function -ErrorAction SilentlyContinue) {
-            [hashtable] $closeParams = @{ OutputRootOverride = $outputRoot }
+            Write-PctkWork '  Empaquetando el service para llevarte...'
+            [hashtable] $closeParams = @{
+                OutputRootOverride  = $outputRoot
+                ToolkitRootOverride = $InstallRoot
+            }
             if (-not [string]::IsNullOrWhiteSpace($ZipDestOverride)) {
                 $closeParams['DestDirOverride'] = $ZipDestOverride
             }
             $zipResult = Invoke-CloseService @closeParams
         } else {
+            Write-PctkWork '  Empaquetando el service para llevarte...'
             [hashtable] $exportParams = @{
                 TagOverride        = 'preuninstall'
                 OutputRootOverride = $outputRoot
@@ -180,7 +227,7 @@ function Save-PreUninstallArtifacts {
             $zipPath = $zipResult.ZipPath
         } elseif ($zipResult.Status -eq 'Empty') {
             Write-PctkHint '  [i] Sin audit ni snapshots para empaquetar.'
-        } else {
+        } elseif ($zipResult.Status -ne 'Skipped') {
             Write-PctkWarn ('  [!] No se pudo empaquetar (Status={0}). Borrado continua.' -f $zipResult.Status)
         }
     } catch {
@@ -194,6 +241,57 @@ function Save-PreUninstallArtifacts {
     }
 }
 
+# --- Confirm-RecoveryKeysSaved (#40) ------------------------------------------
+# output\recovery\ guarda las claves de recuperacion de BitLocker capturadas con
+# [A][18][C]. El deleter borra $InstallRoot ENTERO y Save-PreUninstallArtifacts
+# preserva clients\ + audit\ + el ZIP pero NUNCA recovery\: capturar una clave y
+# despues desinstalar la destruia sin avisar. Si el disco pide la clave mas
+# tarde, el cliente queda afuera de su propia PC.
+#
+# NO se copia al Escritorio del cliente a proposito: es un secreto suyo, no algo
+# para dejar suelto en su maquina (misma regla que la mantiene fuera del bundle).
+# La capa 2 -- subirla a la boveda del CRM -- va aparte.
+#
+# Devuelve $true si se puede seguir: no habia claves, o el operador confirmo.
+function Confirm-RecoveryKeysSaved {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [string] $InstallRoot
+    )
+
+    [string] $recoveryDir = Join-Path $InstallRoot 'output\recovery'
+    if (-not (Test-Path -LiteralPath $recoveryDir -PathType Container)) { return $true }
+
+    [object[]] $files = @()
+    $files = @(Get-ChildItem -LiteralPath $recoveryDir -Recurse -File -ErrorAction SilentlyContinue)
+    if ($files.Count -eq 0) { return $true }
+
+    Write-Host ''
+    Write-PctkWarn '  [!] ATENCION: esta instalacion tiene claves de recuperacion de BitLocker guardadas.'
+    Write-PctkWarn '      Desinstalar las BORRA. Si el disco pide la clave despues, el cliente queda afuera.'
+    Write-Host ''
+
+    foreach ($f in $files) {
+        Write-PctkHint ('  --- {0}' -f $f.FullName)
+        try {
+            foreach ($ln in @(Get-Content -LiteralPath $f.FullName -Encoding UTF8 -ErrorAction Stop)) {
+                Write-Host ('  {0}' -f $ln) -ForegroundColor Yellow
+            }
+        } catch {
+            Write-PctkErr ('  [!] No se pudo leer el archivo: {0}' -f $_.Exception.Message)
+            Write-PctkWarn '      Copialo a mano antes de seguir.'
+        }
+        Write-Host ''
+    }
+
+    Write-PctkHint '  Pasala a tu registro antes de seguir. No se copia al Escritorio del cliente.'
+    Write-Host ''
+    Write-PctkWarn '  Para confirmar que ya la guardaste, escribi exactamente: GUARDADA'
+    [string] $ans = (Read-Host '  >').Trim().ToUpperInvariant()
+    return ($ans -eq 'GUARDADA')
+}
+
 # --- Invoke-UninstallToolkit --------------------------------------------------
 # Handler del menu [U]. Devuelve $true si el deleter fue spawneado (el caller
 # debe salir inmediatamente). Devuelve $false si fue cancelado o fallo (continuar
@@ -201,12 +299,20 @@ function Save-PreUninstallArtifacts {
 function Invoke-UninstallToolkit {
     [CmdletBinding()]
     [OutputType([bool])]
-    param()
+    param(
+        # Override para tests: sin esto el handler resuelve la instalacion REAL y
+        # no habria forma de ejercitarlo sin borrar el toolkit de la maquina.
+        [string] $InstallRootOverride = ''
+    )
 
     # Resolver root: mismo idiom que Show-ToolsMenu / Invoke-ActionDriverBackup.
     # Este modulo vive en <root>\modules\, asi que $PSScriptRoot = <root>\modules
     # y Split-Path -Parent da <root>.
-    [string] $installRoot = Split-Path -Parent $PSScriptRoot
+    [string] $installRoot = if (-not [string]::IsNullOrWhiteSpace($InstallRootOverride)) {
+        $InstallRootOverride
+    } else {
+        Split-Path -Parent $PSScriptRoot
+    }
 
     # Guard obligatorio (ss 6.2): verificar que el root parece una instalacion PCTk
     # antes de generar cualquier Remove-Item -Recurse -Force.
@@ -215,6 +321,14 @@ function Invoke-UninstallToolkit {
         Write-PctkErr '  [!] No se pudo validar la instalacion de PCTk.'
         Write-PctkHint ("      Ruta resuelta: {0}" -f $installRoot)
         Write-PctkHint '  Abortando sin borrar nada.'
+        return $false
+    }
+
+    # Gate #40: las claves de BitLocker se muestran y se confirman ANTES de
+    # cualquier otra confirmacion -- el operador tiene que poder copiarlas sin
+    # haberse comprometido todavia a borrar.
+    if (-not (Confirm-RecoveryKeysSaved -InstallRoot $installRoot)) {
+        Write-PctkHint '  Desinstalacion cancelada (clave de recuperacion sin confirmar).'
         return $false
     }
 

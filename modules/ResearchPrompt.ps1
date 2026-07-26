@@ -240,7 +240,25 @@ function New-ResearchPrompt {
     } else { 'Unknown' }
     [string] $tier     = if ($MachineProfile.PSObject.Properties['Tier'])     { [string] $MachineProfile.Tier }     else { 'N/A' }
     [bool]   $isLaptop = if ($MachineProfile.PSObject.Properties['IsLaptop'] -and $null -ne $MachineProfile.IsLaptop) { [bool] $MachineProfile.IsLaptop } else { $false }
-    $L.Add(('- **OEM**: {0}' -f $manufacturer))
+
+    # #28: el MODELO si va -- es la mitad util del dato OEM para research (drivers
+    # del fabricante, hilos de foro de ese equipo exacto, despiece). Sin el, el LLM
+    # solo sabe "Lenovo" y contesta generalidades.
+    #
+    # El SerialNumber / Service Tag NO VA, y no es un olvido: este texto se copia
+    # al portapapeles para pegarlo en un LLM de terceros. El modelo lo comparten
+    # millones de equipos; el serial identifica ESTE, el del cliente. Hay un
+    # canario en el smoke que falla si el serial vuelve a aparecer en el prompt.
+    [string] $oemModel = ''
+    if ($MachineProfile.PSObject.Properties['Model']) {
+        $oemModel = Get-OemDisplayValue -Value ([string] $MachineProfile.Model) -Fallback ''
+    }
+    [string] $oemLine = if ([string]::IsNullOrWhiteSpace($oemModel)) {
+        $manufacturer
+    } else {
+        ('{0} {1}' -f $manufacturer, $oemModel)
+    }
+    $L.Add(('- **OEM**: {0}' -f $oemLine))
     $L.Add(('- **Tier resuelto**: {0}' -f $tier))
     $L.Add(('- **Form factor**: {0}' -f $(if ($isLaptop) { 'Laptop' } else { 'Desktop' })))
     $L.Add('')

@@ -260,3 +260,122 @@ function Close-ServiceState {
         }
     }
 }
+
+# ─── Marcador del ultimo bundle ────────────────────────────────────────────────
+# POR QUE EXISTE: el [L] cierra el service borrando current-run.json, asi que
+# despues del cierre "nunca hubo service" y "el service ya se cerro" se ven
+# IGUAL. El [U] usaba eso para decidir si empaquetar -> hacer [L] y despues [U]
+# (el flujo natural: me llevo el paquete y dejo la PC limpia) dejaba DOS ZIP en
+# el Escritorio del cliente, y el segundo peor (sin POST, "bundle parcial").
+# Este marcador es el dato que faltaba: quien cerro, cuando, y donde quedo el ZIP.
+
+function Get-LastBundleMarkerPath {
+    <#
+    .SYNOPSIS
+        Ruta de output\state\last-bundle.json.
+        OJO con $OutputRootOverride: igual que Get-ServiceStatePath, recibe la
+        RAIZ DEL TOOLKIT (le agrega 'output\state'), NO la carpeta output.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [string] $OutputRootOverride = ''
+    )
+
+    [string] $root = if ([string]::IsNullOrEmpty($OutputRootOverride)) {
+        Split-Path -Parent $PSScriptRoot
+    } else {
+        $OutputRootOverride
+    }
+
+    return (Join-Path $root 'output\state\last-bundle.json')
+}
+
+function Set-LastBundleMarker {
+    <#
+    .SYNOPSIS
+        Sella "el bundle de esta PC ya se genero" con la ruta del ZIP.
+        Lo llama Invoke-CloseService cuando el paquete salio OK. Nunca tira: si
+        no se puede escribir, el peor caso es que el [U] vuelva a empaquetar
+        (molesto, no destructivo).
+    .OUTPUTS
+        [string] la ruta del marcador escrito, o '' si no se pudo.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $ZipPath,
+        [string] $OutputRootOverride = '',
+        [string] $ClosedAtOverride   = ''
+    )
+
+    [string] $path     = Get-LastBundleMarkerPath -OutputRootOverride $OutputRootOverride
+    [string] $stateDir = Split-Path -Parent $path
+
+    try {
+        if (-not (Test-Path -LiteralPath $stateDir -PathType Container)) {
+            $null = New-Item -ItemType Directory -Path $stateDir -Force -ErrorAction Stop
+        }
+
+        [string] $closedAt = if ([string]::IsNullOrEmpty($ClosedAtOverride)) {
+            (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
+        } else {
+            $ClosedAtOverride
+        }
+
+        $marker = [ordered]@{
+            schema_version = '1.0'
+            hostname       = $env:COMPUTERNAME
+            closed_at      = $closedAt
+            zip_path       = $ZipPath
+        }
+
+        ($marker | ConvertTo-Json -Depth 3) | Out-File -FilePath $path -Encoding UTF8 -ErrorAction Stop
+        return $path
+    } catch {
+        return ''
+    }
+}
+
+function Get-LastBundleMarker {
+    <#
+    .SYNOPSIS
+        Lee el marcador, o $null si no existe / esta corrupto. Nunca tira.
+    #>
+    [CmdletBinding()]
+    param(
+        [string] $OutputRootOverride = ''
+    )
+
+    [string] $path = Get-LastBundleMarkerPath -OutputRootOverride $OutputRootOverride
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+
+    try {
+        [string] $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        return ($raw | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Test-BundleAlreadyTaken {
+    <#
+    .SYNOPSIS
+        $true si YA se genero el bundle para ESTA PC (marcador presente y
+        hostname coincidente). Un marcador de otra PC (USB del tecnico que viene
+        de otro cliente) NO cuenta: ahi hay que empaquetar igual.
+    .OUTPUTS
+        [bool]
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [string] $OutputRootOverride = ''
+    )
+
+    $marker = Get-LastBundleMarker -OutputRootOverride $OutputRootOverride
+    if ($null -eq $marker) { return $false }
+    if ($null -eq $marker.PSObject.Properties['hostname']) { return $false }
+    return ([string]$marker.hostname -eq $env:COMPUTERNAME)
+}

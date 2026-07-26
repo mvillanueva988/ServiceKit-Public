@@ -281,7 +281,9 @@ function Invoke-CloseService {
         [Parameter()] [string]   $DestDirOverride    = '',
         [Parameter()] [string]   $TimestampOverride  = '',
         # Override de paths AnyDesk (para test sin AnyDesk instalado)
-        [Parameter()] [string[]] $AnyDeskConfPaths   = @()
+        [Parameter()] [string[]] $AnyDeskConfPaths   = @(),
+        # Raiz del TOOLKIT para los helpers de ServiceState. Ver nota de $stateRoot.
+        [Parameter()] [string]   $ToolkitRootOverride = ''
     )
 
     Write-PctkWork '  Cerrando service...'
@@ -293,6 +295,22 @@ function Invoke-CloseService {
         $OutputRootOverride
     }
 
+    # OJO, dos convenciones distintas con el mismo nombre de parametro:
+    #   - Aca $OutputRootOverride ES la carpeta output.
+    #   - En ServiceState.ps1 $OutputRootOverride es la RAIZ DEL TOOLKIT (le
+    #     agrega 'output\state').
+    # Pasarle nuestro output root a Get-ServiceState lo manda a buscar
+    # <output>\output\state\current-run.json -> nunca encuentra nada. En el [L]
+    # no se notaba (ambos vacios = raiz real), pero el [U] SI pasa un override
+    # (<install>\output): por eso Save-PreUninstallArtifacts nunca veia el service
+    # abierto y se salteaba el POST en silencio.
+    # $ToolkitRootOverride vacio = comportamiento historico (hereda el otro).
+    [string] $stateRoot = if (-not [string]::IsNullOrEmpty($ToolkitRootOverride)) {
+        $ToolkitRootOverride
+    } else {
+        $OutputRootOverride
+    }
+
     # ── Paso 1: leer el state del service ────────────────────────────────────
     # Determina si hay PRE para el POST automatico y si el bundle es completo o parcial.
     [bool] $hasService = $false
@@ -300,7 +318,7 @@ function Invoke-CloseService {
     $svcState = $null
 
     if (Get-Command -Name 'Get-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
-        $svcState = Get-ServiceState -OutputRootOverride $OutputRootOverride
+        $svcState = Get-ServiceState -OutputRootOverride $stateRoot
         if ($null -ne $svcState -and $null -ne $svcState.PSObject.Properties['open'] -and [bool]$svcState.open) {
             $hasService = $true
             if ($null -ne $svcState.PSObject.Properties['pre_taken_at'] -and
@@ -432,9 +450,20 @@ function Invoke-CloseService {
     if ($null -ne $result -and $null -ne $result.PSObject.Properties['Status'] -and $result.Status -eq 'OK' -and
         (Get-Command -Name 'Close-ServiceState' -CommandType Function -ErrorAction SilentlyContinue)) {
         try {
-            Close-ServiceState -OutputRootOverride $OutputRootOverride
+            Close-ServiceState -OutputRootOverride $stateRoot
         } catch {
             Write-PctkWarn ('  [!] No se pudo cerrar el state: {0}' -f $_.Exception.Message)
+        }
+
+        # Marcador del bundle: es lo que le permite al [U] saber que el paquete
+        # de ESTA PC ya se genero y no dejar un segundo ZIP en el Escritorio del
+        # cliente. Se sella DESPUES de cerrar el state y solo con Status OK.
+        if (Get-Command -Name 'Set-LastBundleMarker' -CommandType Function -ErrorAction SilentlyContinue) {
+            try {
+                $null = Set-LastBundleMarker -ZipPath ([string]$result.ZipPath) -OutputRootOverride $stateRoot
+            } catch {
+                # El marcador es una optimizacion de UX; si falla, el [U] re-empaqueta.
+            }
         }
     } elseif ($null -ne $result -and $result.Status -ne 'OK') {
         Write-PctkWarn ('  [!] El bundle no se creo (estado {0}); el service queda ABIERTO para reintentar [L].' -f $result.Status)

@@ -478,3 +478,36 @@ function Get-MachineProfile {
         Advisories       = [string[]] @($advisories | ForEach-Object { [string]$_ })
     }
 }
+
+# ─── Get-OemDisplayValue ──────────────────────────────────────────────────────
+# Los campos OEM del SMBIOS vienen sin llenar en cualquier PC de armado o clon:
+# el fabricante deja el placeholder de la plantilla. Mostrar "To Be Filled By
+# O.E.M." como si fuera el modelo del equipo es ruido que el operador tiene que
+# aprender a ignorar. Esto NO toca el dato guardado (el snapshot y el meta.json
+# siguen llevando lo que dijo el firmware, crudo); normaliza solo lo que se
+# MUESTRA.
+function Get-OemDisplayValue {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()] [string] $Value,
+        [string] $Fallback = 'N/A'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $Fallback }
+    [string] $v = $Value.Trim()
+
+    # Placeholders conocidos del SMBIOS. Comparacion exacta (case-insensitive):
+    # un modelo real puede contener la palabra "none" adentro.
+    [string[]] $placeholders = @(
+        'To Be Filled By O.E.M.', 'Default string',
+        'System Product Name', 'System Serial Number', 'System manufacturer',
+        'Not Applicable', 'Not Specified', 'Unknown', 'None', 'N/A',
+        'INVALID', 'O.E.M.', 'Chassis Manufacture', '0123456789'
+    )
+    foreach ($p in $placeholders) {
+        if ($v -eq $p) { return $Fallback }
+    }
+
+    return $v
+}

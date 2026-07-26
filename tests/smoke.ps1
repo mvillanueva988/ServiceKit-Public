@@ -2299,12 +2299,17 @@ Test-SmokeFunction 'ServiceState' 'Close-ServiceState: borra current-run.json (D
     }
 }
 
-Test-SmokeFunction 'ServiceState' 'Router [L] rutea a Invoke-CloseService (no a Invoke-ExportClientLogs directo)' {
+Test-SmokeFunction 'ServiceState' 'Router [L] rutea a Invoke-ServiceClose -> Invoke-CloseService' {
     $ErrorActionPreference = 'Stop'
+    # La cadena cambio al unificar [L]/[U]: el dispatch va a Invoke-ServiceClose,
+    # y ES ESE el que llama a Invoke-CloseService (recolector pieza C).
     [string] $dispDef = (Get-Command Invoke-MainMenuDispatch -CommandType Function).Definition
-    # El dispatch [L] debe contener Invoke-CloseService (no la llamada directa a ExportClientLogs)
-    if ($dispDef -notmatch "'L'\s*\{[\s\S]*?Invoke-CloseService") {
-        throw 'dispatch [L] no contiene Invoke-CloseService (recolector pieza C)'
+    if ($dispDef -notmatch "'L'\s*\{[\s\S]*?Invoke-ServiceClose") {
+        throw 'dispatch [L] no rutea a Invoke-ServiceClose'
+    }
+    [string] $closeDef = (Get-Command Invoke-ServiceClose -CommandType Function).Definition
+    if ($closeDef -notmatch 'Invoke-CloseService') {
+        throw 'Invoke-ServiceClose no llama a Invoke-CloseService (recolector pieza C)'
     }
 }
 
@@ -2644,6 +2649,264 @@ Test-SmokeFunction 'Router' 'Huerfanas cableadas: Autoruns, exclusiones dev, gra
         if ($router -notmatch [regex]::Escape($fn)) {
             throw ("{0} sigue huerfana: el Router no la llama" -f $fn)
         }
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  v2.5.0 - unificacion [L]/[U] + #40 claves BitLocker + remate #28
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Test-SmokeFunction 'ServiceState' 'Marcador de bundle: round-trip, otro host no cuenta, JSON roto no tira' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-lb-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path $tmpRoot -ItemType Directory -Force | Out-Null
+    try {
+        if (Test-BundleAlreadyTaken -OutputRootOverride $tmpRoot) { throw 'sin marcador debe dar $false' }
+
+        [string] $p = Set-LastBundleMarker -ZipPath 'C:\Fake\Desktop\bundle.zip' `
+                                           -OutputRootOverride $tmpRoot `
+                                           -ClosedAtOverride '2026-07-26T10:00:00-03:00'
+        if ([string]::IsNullOrEmpty($p))  { throw 'Set-LastBundleMarker no devolvio ruta' }
+        if (-not (Test-Path -LiteralPath $p)) { throw 'el marcador no se escribio a disco' }
+
+        $m = Get-LastBundleMarker -OutputRootOverride $tmpRoot
+        if ($null -eq $m) { throw 'Get-LastBundleMarker devolvio $null' }
+        if ([string]$m.zip_path -ne 'C:\Fake\Desktop\bundle.zip') { throw 'zip_path no round-trippea' }
+        if (-not (Test-BundleAlreadyTaken -OutputRootOverride $tmpRoot)) { throw 'con marcador de esta PC debe dar $true' }
+
+        # USB del tecnico que viene de OTRO cliente: ese marcador no cuenta.
+        [string] $mp = Get-LastBundleMarkerPath -OutputRootOverride $tmpRoot
+        Set-Content -LiteralPath $mp -Encoding UTF8 `
+            -Value '{"schema_version":"1.0","hostname":"OTRA-PC","closed_at":"x","zip_path":"y"}'
+        if (Test-BundleAlreadyTaken -OutputRootOverride $tmpRoot) { throw 'marcador de otro host NO debe contar' }
+
+        # JSON corrupto: $null sin tirar, y no se toma como "ya empaquetado"
+        # (equivocarse para ese lado deja al cliente sin paquete).
+        Set-Content -LiteralPath $mp -Value '{"hostname": "roto' -Encoding UTF8
+        if ($null -ne (Get-LastBundleMarker -OutputRootOverride $tmpRoot)) { throw 'JSON corrupto debe dar $null' }
+        if (Test-BundleAlreadyTaken -OutputRootOverride $tmpRoot) { throw 'JSON corrupto no debe contar como tomado' }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'UninstallPreserve' '[L] y despues [U]: UN solo ZIP en el Escritorio del cliente' {
+    # EL bug que motiva la unificacion: [L] cierra el service y [U] empaquetaba
+    # igual, asi que el flujo natural (me llevo el paquete y dejo la PC limpia)
+    # dejaba DOS ZIP, y el segundo peor -- sin POST, "bundle parcial".
+    # Este test corre los DOS handlers reales, no los helpers.
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot  = Join-Path $env:TEMP ('pctk-lu-'      + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest  = Join-Path $env:TEMP ('pctk-lu-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpRoot 'output\audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-07-26.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        # Sin POST real (requiere el sistema completo y muta output\snapshots\).
+        function Start-TelemetryJob { param([string]$Phase); return $null }
+        function Invoke-JobWithProgress { param([object[]]$Jobs, [string]$Activity, [int]$TimeoutSeconds); return @() }
+
+        # --- [L] Cerrar service ---
+        $rl = Invoke-CloseService -OutputRootOverride (Join-Path $tmpRoot 'output') `
+                                  -ToolkitRootOverride $tmpRoot `
+                                  -DestDirOverride $tmpDest `
+                                  -TimestampOverride '20260726-100000' `
+                                  -AnyDeskConfPaths @((Join-Path $env:TEMP 'no-existe\system.conf'))
+        [string] $st = if ($null -eq $rl) { 'null' } else { [string]$rl.Status }
+        if ($st -ne 'OK') { throw ('el [L] no armo el bundle (Status={0})' -f $st) }
+        if (-not (Test-BundleAlreadyTaken -OutputRootOverride $tmpRoot)) {
+            throw 'el [L] no dejo el marcador del bundle: el [U] va a re-empaquetar'
+        }
+
+        # --- [U] Desinstalar (la parte que preserva/empaqueta) ---
+        $ru = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpDest
+        if ($null -eq $ru) { throw 'Save-PreUninstallArtifacts devolvio $null' }
+
+        [object[]] $zips = @(Get-ChildItem -LiteralPath $tmpDest -Filter '*.zip' -File -ErrorAction SilentlyContinue)
+        if ($zips.Count -ne 1) {
+            throw ('Se esperaba UN solo ZIP tras [L]+[U]; hay {0}. Volvio el bug de los dos paquetes.' -f $zips.Count)
+        }
+        if ([string]$ru.ZipPath -ne [string]$rl.ZipPath) {
+            throw ('El [U] deberia reportar el ZIP del [L]; got "{0}" vs "{1}"' -f $ru.ZipPath, $rl.ZipPath)
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'UninstallPreserve' '[U] sin [L] previo: SI empaqueta (no romper el atajo)' {
+    # La contracara del test de arriba: el [U] directo ("no hubo service, solo
+    # saco el toolkit") tiene que seguir armando el paquete con lo que haya.
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot  = Join-Path $env:TEMP ('pctk-uonly-'      + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest  = Join-Path $env:TEMP ('pctk-uonly-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpRoot 'output\audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-07-26.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Start-TelemetryJob { param([string]$Phase); return $null }
+        function Invoke-JobWithProgress { param([object[]]$Jobs, [string]$Activity, [int]$TimeoutSeconds); return @() }
+
+        $ru = Save-PreUninstallArtifacts -InstallRoot $tmpRoot -ZipDestOverride $tmpDest
+        if ($null -eq $ru) { throw 'Save-PreUninstallArtifacts devolvio $null' }
+
+        [object[]] $zips = @(Get-ChildItem -LiteralPath $tmpDest -Filter '*.zip' -File -ErrorAction SilentlyContinue)
+        if ($zips.Count -ne 1) { throw ('el [U] directo deberia dejar 1 ZIP; hay {0}' -f $zips.Count) }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'Invoke-CloseService no pregunta por desinstalar (evita recursion con el [U])' {
+    # Save-PreUninstallArtifacts (el [U]) llama a Invoke-CloseService para armar el
+    # paquete. Si la pregunta "dejar PCTk instalado?" viviera adentro de
+    # Invoke-CloseService, el [U] preguntaria por desinstalar en medio de una
+    # desinstalacion -> recursion. Por eso vive en Invoke-ServiceClose (el Router).
+    [string] $def = (Get-Command Invoke-CloseService -CommandType Function).Definition
+    if ($def -match 'Invoke-UninstallToolkit') {
+        throw 'Invoke-CloseService llama al [U]: recursion con Save-PreUninstallArtifacts'
+    }
+    [string] $router = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'core\Router.ps1') -Raw -Encoding UTF8
+    # El [L] tiene que poder SALIR de PCTk: si desinstala sin cerrarse, el deleter
+    # espera al PID 30s y despues intenta borrar una instalacion en uso.
+    if ($router -notmatch "\`$choice -eq 'L'") {
+        throw 'Show-MainMenu no intercepta la [L]: el [L] no puede cerrar PCTk al desinstalar'
+    }
+}
+
+Test-SmokeFunction 'UninstallToolkit' '#40: con claves BitLocker guardadas el [U] frena (handler completo)' {
+    # #40: Save-PreUninstallArtifacts preserva clients\ + audit\ + el ZIP, pero
+    # output\recovery\ no aparecia en ningun lado y el deleter borra el InstallRoot
+    # entero. Capturar una clave con [A][18][C] y desinstalar la destruia: si el
+    # disco pide recovery despues, el cliente queda afuera de su propia PC.
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-40-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path (Join-Path $tmpRoot 'core')            -ItemType Directory -Force | Out-Null
+    New-Item -Path (Join-Path $tmpRoot 'output\recovery') -ItemType Directory -Force | Out-Null
+    try {
+        # El handler valida que el root parezca una instalacion PCTk antes de nada.
+        Set-Content -LiteralPath (Join-Path $tmpRoot 'main.ps1')        -Value '# fixture' -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $tmpRoot 'core\Router.ps1') -Value '# fixture' -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $tmpRoot 'output\recovery\bitlocker-recovery-PC.txt') `
+                    -Value @('Key ID  : 1a2b3c4d', 'Clave   : 111111-222222-333333') -Encoding UTF8
+
+        # El operador NO confirma que guardo la clave.
+        function Read-Host { param([string]$Prompt) return 'siguiente' }
+        # Redes: si el gate no frena, estas cazan el paso ANTES de que borre nada.
+        function Confirm-Action { param([string]$Title, [string[]]$Lines, [bool]$DefaultYes = $true)
+            throw 'el [U] paso el gate de claves BitLocker SIN confirmacion' }
+        function Start-Process { throw 'el [U] lanzo el deleter con claves BitLocker sin confirmar' }
+
+        [bool] $r = Invoke-UninstallToolkit -InstallRootOverride $tmpRoot
+        if ($r) { throw 'el [U] devolvio $true: habria borrado la instalacion con la clave adentro' }
+        if (-not (Test-Path -LiteralPath (Join-Path $tmpRoot 'output\recovery\bitlocker-recovery-PC.txt'))) {
+            throw 'la clave se borro'
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'UninstallToolkit' '#40: sin claves guardadas el [U] sigue al flujo normal' {
+    # La contracara: el gate no debe frenar una desinstalacion comun.
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-40b-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path (Join-Path $tmpRoot 'core') -ItemType Directory -Force | Out-Null
+    try {
+        Set-Content -LiteralPath (Join-Path $tmpRoot 'main.ps1')        -Value '# fixture' -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $tmpRoot 'core\Router.ps1') -Value '# fixture' -Encoding UTF8
+
+        $script:pctk40Llego = $false
+        function Confirm-Action { param([string]$Title, [string[]]$Lines, [bool]$DefaultYes = $true)
+            $script:pctk40Llego = $true; return $false }
+        function Read-Host { param([string]$Prompt) return '' }
+
+        [bool] $r = Invoke-UninstallToolkit -InstallRootOverride $tmpRoot
+        if (-not $script:pctk40Llego) { throw 'el gate #40 freno una desinstalacion sin claves guardadas' }
+        if ($r) { throw 'se cancelo en la confirmacion: deberia devolver $false' }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'MachineProfile' 'Get-OemDisplayValue: placeholders del SMBIOS -> fallback' {
+    $ErrorActionPreference = 'Stop'
+    foreach ($p in @('To Be Filled By O.E.M.', 'Default string', 'System Product Name',
+                     'System Serial Number', 'None', 'Not Specified', '', '   ')) {
+        [string] $got = Get-OemDisplayValue -Value $p
+        if ($got -ne 'N/A') { throw ("placeholder '{0}' no se normalizo (got '{1}')" -f $p, $got) }
+    }
+    if ((Get-OemDisplayValue -Value '82K2')   -ne '82K2') { throw 'un modelo real no debe tocarse' }
+    if ((Get-OemDisplayValue -Value ' 82K2 ') -ne '82K2') { throw 'deberia trimear' }
+    # Match EXACTO: un modelo que contenga la palabra no es un placeholder.
+    if ((Get-OemDisplayValue -Value 'Nonetype X1') -ne 'Nonetype X1') { throw 'match parcial: no debe normalizar' }
+    if ((Get-OemDisplayValue -Value '' -Fallback '') -ne '') { throw 'el fallback debe ser configurable' }
+}
+
+Test-SmokeFunction 'Router' '#28: el banner muestra modelo y Service Tag (handler, no la funcion pura)' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $script:pctkBannerRows = $null
+    function Write-PctkMachineBanner { param([object[]]$Rows, [string]$Tier, [string]$VmLine = '')
+        $script:pctkBannerRows = $Rows }
+
+    [PSCustomObject] $mp = [PSCustomObject]@{
+        IsWin11 = $true; IsHome = $false; Build = 22631; RamMB = 16384
+        GpuNames = @('Intel UHD'); HasIGpuOnly = $true; HasDGpu = $false
+        Manufacturer = 'LENOVO'; Tier = 'Mid'; CpuClass = 'Modern'
+        Model = '82K2'; SerialNumber = 'PF3ABCDE'
+    }
+    Show-MachineBanner -MachineProfile $mp
+    if ($null -eq $script:pctkBannerRows) { throw 'el banner no rendereo filas' }
+    [object[]] $rows = @($script:pctkBannerRows)
+
+    [object[]] $oem = @($rows | Where-Object { $_.Label -eq 'OEM' })
+    if ($oem.Count -ne 1) { throw 'falta la fila OEM' }
+    if ([string]$oem[0].Value -notmatch '82K2') { throw ('la fila OEM no muestra el modelo (#28): {0}' -f $oem[0].Value) }
+
+    [object[]] $sn = @($rows | Where-Object { $_.Label -eq 'S/N' })
+    if ($sn.Count -ne 1) { throw 'falta la fila S/N (#28)' }
+    if ([string]$sn[0].Value -ne 'PF3ABCDE') { throw ('S/N incorrecto: {0}' -f $sn[0].Value) }
+
+    # Perfil sparse (sin Model ni SerialNumber): no debe tirar bajo StrictMode.
+    $script:pctkBannerRows = $null
+    [PSCustomObject] $mpSparse = [PSCustomObject]@{
+        IsWin11 = $false; IsHome = $true; Build = 19045; RamMB = 8192
+        GpuNames = @(); HasIGpuOnly = $false; HasDGpu = $false; Manufacturer = ''
+    }
+    Show-MachineBanner -MachineProfile $mpSparse
+    [object[]] $rows2 = @($script:pctkBannerRows)
+    [object[]] $sn2 = @($rows2 | Where-Object { $_.Label -eq 'S/N' })
+    if ($sn2.Count -ne 1)                  { throw 'la fila S/N desaparece con perfil sparse' }
+    if ([string]$sn2[0].Value -ne 'N/A')   { throw ('sin serial deberia decir N/A; got {0}' -f $sn2[0].Value) }
+}
+
+Test-SmokeFunction 'ResearchPrompt' '#28: el prompt [R] lleva el modelo y NUNCA el Service Tag' {
+    # El texto del [R] se copia al portapapeles para pegarlo en un LLM de terceros.
+    # El modelo lo comparten millones de equipos; el serial identifica el del
+    # cliente. Este canario existe para que nadie lo agregue "por completitud".
+    $ErrorActionPreference = 'Stop'
+    [PSCustomObject] $mp = [PSCustomObject]@{
+        Manufacturer = 'LENOVO'; Model = '82K2'; SerialNumber = 'PF3ABCDE'
+        Tier = 'Mid'; IsLaptop = $true; IsWin11 = $true; IsHome = $false; Build = 22631
+    }
+    [PSCustomObject] $snap = [PSCustomObject]@{
+        ComputerName = 'PC-DEL-CLIENTE'; CPU = [PSCustomObject]@{ Name = 'i5' }
+    }
+    $r = New-ResearchPrompt -Template Optimization -Snapshot $snap -MachineProfile $mp
+    if ($null -eq $r -or -not $r.Success) { throw 'New-ResearchPrompt fallo' }
+    try {
+        [string] $txt = Get-Content -LiteralPath $r.FilePath -Raw -Encoding UTF8
+        if ($txt -notmatch '82K2')     { throw 'el prompt no lleva el modelo (#28)' }
+        if ($txt -match 'PF3ABCDE')    { throw 'FUGA: el Service Tag salio en el prompt que se pega en un LLM externo' }
+    } finally {
+        Remove-Item -LiteralPath $r.FilePath -Force -ErrorAction SilentlyContinue
     }
 }
 

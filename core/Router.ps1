@@ -108,6 +108,23 @@ function Show-MachineBanner {
     }
 
     [string] $manufacturer = if ([string]::IsNullOrWhiteSpace([string]$MachineProfile.Manufacturer)) { 'Unknown' } else { [string]$MachineProfile.Manufacturer }
+
+    # #28: modelo y Service Tag a la vista. El perfil ya los traia (salen de las
+    # mismas queries CIM que se hacian igual) pero no se mostraban en ningun lado:
+    # con el modelo entras al soporte del fabricante a buscar drivers y despiece,
+    # y con el Service Tag a la garantia y a la config con la que salio de fabrica.
+    # Antes habia que sacarlos con wmic a mano en cada visita (caso Olivo).
+    [string] $model = ''
+    if ($MachineProfile.PSObject.Properties['Model']) {
+        $model = Get-OemDisplayValue -Value ([string]$MachineProfile.Model) -Fallback ''
+    }
+    [string] $oemLabel = if ([string]::IsNullOrWhiteSpace($model)) { $manufacturer } else { ('{0} {1}' -f $manufacturer, $model) }
+
+    [string] $serialLabel = 'N/A'
+    if ($MachineProfile.PSObject.Properties['SerialNumber']) {
+        $serialLabel = Get-OemDisplayValue -Value ([string]$MachineProfile.SerialNumber) -Fallback 'N/A'
+    }
+
     [string] $oemSuffix = '  [sin catalogo OEM]'
     if ($MachineProfile.PSObject.Properties['OemCatalogPath'] -and -not [string]::IsNullOrWhiteSpace([string]$MachineProfile.OemCatalogPath)) {
         if (Test-Path -Path ([string]$MachineProfile.OemCatalogPath) -PathType Leaf) {
@@ -124,7 +141,8 @@ function Show-MachineBanner {
     $rows += [PSCustomObject]@{ Label = 'CPU'; Value = ('{0}  {1} nucleos / {2} hilos  [{3}]' -f $cpuName, $cpuCores, $cpuThreads, $cpuClass) }
     $rows += [PSCustomObject]@{ Label = 'RAM'; Value = ('{0}  |  {1}' -f $ramTotalLabel, $ramFreeLabel) }
     $rows += [PSCustomObject]@{ Label = 'GPU'; Value = [string]$gpuLabel }
-    $rows += [PSCustomObject]@{ Label = 'OEM'; Value = ('{0}{1}' -f $manufacturer, $oemSuffix) }
+    $rows += [PSCustomObject]@{ Label = 'OEM'; Value = ('{0}{1}' -f $oemLabel, $oemSuffix) }
+    $rows += [PSCustomObject]@{ Label = 'S/N'; Value = $serialLabel }
 
     # Indicador "ultimo PRE" (D2 recolector-plan): siempre visible en el banner.
     # Permite saber de un vistazo si ya se tomo el PRE en esta visita.
@@ -162,6 +180,52 @@ function Show-MachineBanner {
             }
         }
     }
+}
+
+# ─── Invoke-ServiceClose ([L]) ────────────────────────────────────────────────
+function Invoke-ServiceClose {
+    <#
+    .SYNOPSIS
+        Handler del [L]: cierra el service (POST automatico + bundle + cierra el
+        estado) y despues ofrece dejar la PC limpia en el mismo movimiento.
+
+        POR QUE la pregunta vive ACA y no adentro de Invoke-CloseService:
+        Save-PreUninstallArtifacts (o sea, el [U]) llama a Invoke-CloseService
+        para armar el paquete. Si la pregunta viviera ahi, el [U] preguntaria
+        "desinstalar?" en medio de una desinstalacion -> recursion.
+
+        Y POR QUE captura el resultado: Invoke-CloseService devuelve un objeto de
+        datos. Llamarlo suelto en el dispatch lo imprimia crudo en la consola del
+        cliente (misma clase de bug que el [A][19][V]).
+    .OUTPUTS
+        [bool] $true si se lanzo el desinstalador y PCTk tiene que cerrarse ya.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    $result = $null
+    if (Get-Command -Name 'Invoke-CloseService' -CommandType Function -ErrorAction SilentlyContinue) {
+        $result = Invoke-CloseService
+    } else {
+        $result = Invoke-ExportClientLogs
+    }
+
+    [string] $status = if ($null -ne $result -and $null -ne $result.PSObject.Properties['Status']) {
+        [string] $result.Status
+    } else { '' }
+
+    # Si el bundle no salio, el service queda ABIERTO para reintentar el [L].
+    # Ofrecer desinstalar ahi seria ofrecer perder el service.
+    if ($status -ne 'OK') { return $false }
+
+    Write-Host ''
+    Write-PctkHint '  El paquete ya esta hecho. Podes dejar la PC del cliente limpia ahora.'
+    [string] $ans = (Read-Host '  Dejar PCTk instalado en esta PC? [S/n]').Trim().ToUpperInvariant()
+    if ($ans -ne 'N') { return $false }
+
+    # El [U] NO re-empaqueta: el marcador que acaba de dejar el cierre se lo dice.
+    return (Invoke-UninstallToolkit)
 }
 
 # ─── Show-MainMenu ────────────────────────────────────────────────────────────
@@ -238,6 +302,17 @@ function Show-MainMenu {
             continue
         }
 
+        # El [L] se maneja aca (no en el dispatch) por la misma razon que el [U]:
+        # puede terminar en desinstalacion, y ahi PCTk tiene que CERRARSE para que
+        # el deleter pueda borrar la instalacion (espera al PID, max 30s).
+        if ($choice -eq 'L') {
+            [bool] $okClose = Invoke-ServiceClose
+            if ($okClose) { return 'U' }
+            Write-Host ''
+            Read-Host '  [Enter] para continuar' | Out-Null
+            continue
+        }
+
         Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
         Write-Host ''
         Read-Host '  [Enter] para continuar' | Out-Null
@@ -281,12 +356,12 @@ function Invoke-MainMenuDispatch {
         }
         'L' {
             # Pieza C (recolector): [L] = Cerrar service. Incluye POST auto + meta.json.
-            # Si Invoke-CloseService no esta disponible (fallo de carga), cae al export directo.
-            if (Get-Command -Name 'Invoke-CloseService' -CommandType Function -ErrorAction SilentlyContinue) {
-                Invoke-CloseService
-            } else {
-                Invoke-ExportClientLogs
-            }
+            # El camino real pasa por Show-MainMenu, que intercepta la 'L' antes de
+            # llegar aca porque necesita poder SALIR si el operador desinstala.
+            # Este caso queda como red por si alguien despacha 'L' directo.
+            # El $null = es obligatorio: sin el, el objeto de resultado se imprime
+            # crudo en la consola del cliente.
+            $null = Invoke-ServiceClose
             return
         }
         'T' { Show-ToolsMenu -MachineProfile $MachineProfile; return }
