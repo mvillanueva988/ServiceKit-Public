@@ -939,6 +939,17 @@ function Invoke-ActionDebloat {
         Write-PctkWarn '  Errores:'
         foreach ($e in $r.Errors) { Write-PctkHint ('    - {0}' -f $e) }
     }
+    # Mostrar COMO revertir, con el StartType real que tenia cada servicio. Antes
+    # el preview decia generico "volver a Automatic", que para Spooler/RemoteRegistry
+    # es adivinar. Esto sale del rollback capturado por Disable-BloatServices.
+    if ($r.PSObject.Properties['Rollback'] -and @($r.Rollback).Count -gt 0) {
+        Write-Host ''
+        Write-PctkHint '  Para revertir (estado exacto que tenia cada uno):'
+        foreach ($rb in $r.Rollback) {
+            Write-PctkValue ('    {0}' -f $rb.RestoreCommand)
+        }
+        Write-PctkHint '  (tambien queda en el audit log, dentro del ZIP del cierre)'
+    }
     Write-ActionAudit -Action 'Debloat' -Status 'Success' -Summary ('Disabled={0} AlreadyDisabled={1} Skipped={2} Failed={3}' -f $r.Disabled, $r.AlreadyDisabled, $r.Skipped, $r.Failed) -Details $r
 }
 
@@ -1152,6 +1163,21 @@ function Invoke-ActionNetwork {
         $bb = Get-NetworkBufferbloat
         Write-Host ('  Gateway        : {0}' -f $bb.Gateway)
         Write-Host ('  Ping idle      : avg {0} ms / max {1} ms' -f $bb.IdleAvgMs, $bb.IdleMaxMs)
+
+        # Estabilidad en reposo: cuanto salta la latencia SIN carga (max - avg).
+        # Usa Get-BufferbloatGrade, que estaba escrita y testeada pero sin ningun
+        # caller (el grado real lo tipeaba el operador a mano). La escala es de
+        # delta de latencia, asi que aplicarla al spread idle es semanticamente
+        # correcto -- NO seria correcto aplicarla al ping absoluto.
+        # Esto NO reemplaza el test de waveform: una linea puede ser estable en
+        # reposo y colapsar bajo carga. Es una senal previa, gratis y local.
+        [int] $idleSpread = [int] ($bb.IdleMaxMs - $bb.IdleAvgMs)
+        if ($idleSpread -ge 0) {
+            [string] $spreadGrade = Get-BufferbloatGrade -DeltaMs $idleSpread
+            Write-PctkLine ('  Estabilidad    : grado {0} en reposo (salto de {1} ms entre pico y promedio)' -f $spreadGrade, $idleSpread) $(
+                switch ($spreadGrade) { 'A' { 'ok' } 'B' { 'hint' } 'C' { 'warn' } default { 'err' } }
+            )
+        }
         Write-Host ''
         Write-PctkHint '  El bufferbloat (latencia que sube cuando la red se satura) vive en el'
         Write-PctkHint '  modem/router, no en la PC. Lo mide bien waveform.com:'
@@ -1560,10 +1586,27 @@ function Invoke-ActionStartup {
             $listed = $true
         }
         Write-Host ''
-        Write-PctkHint "  Indice/s (ej: 3  o  1,4  o  2-5)  |  S = desactivar las 'seguro apagar'  |  V para volver:"
+        Write-PctkHint "  Indice/s (ej: 3  o  1,4  o  2-5)  |  S = desactivar las 'seguro apagar'  |  A = abrir Autoruns  |  V para volver:"
         [string] $raw = (Read-Host '  >').Trim().ToUpperInvariant()
 
         if ($raw -eq 'V' -or [string]::IsNullOrEmpty($raw)) { break }
+
+        # A: abrir Autoruns (Sysinternals) para los casos que este menu no cubre.
+        # Open-Autoruns estaba escrita y huerfana: el [T] baja el exe y nada lo
+        # lanzaba, mientras el propio modulo sugeria "descargalo desde [T]".
+        if ($raw -eq 'A') {
+            $ar = Open-Autoruns
+            if ($null -ne $ar -and $ar.PSObject.Properties['Success'] -and [bool]$ar.Success) {
+                Write-PctkOk '  [OK] Autoruns abierto.'
+                Write-ActionAudit -Action 'Startup.Autoruns' -Status 'Success'
+            } else {
+                [string] $arMsg = if ($null -ne $ar -and $ar.PSObject.Properties['Error']) { [string]$ar.Error } else { 'no disponible' }
+                Write-PctkWarn ('  [!] No se pudo abrir Autoruns: {0}' -f $arMsg)
+                Write-PctkHint  '      Bajalo primero desde [T] Herramientas externas.'
+                Write-ActionAudit -Action 'Startup.Autoruns' -Status 'Failed' -Summary $arMsg
+            }
+            continue
+        }
 
         # S: bulk auto-disable de las entradas ACTIVAS marcadas "seguro apagar"
         # (updaters/relanzadores de fondo). Conservador: solo lo tagged, con lista
@@ -1907,9 +1950,79 @@ function Invoke-ActionEncryption {
 }
 
 function Invoke-ActionDefenderScan {
+    <#
+    .SYNOPSIS
+        [A][19] Defender: reagendar escaneo + exclusiones.
+
+        Submenu agregado 2026-07-25. Antes esta accion solo reagendaba el escaneo,
+        y TRES funciones utiles de Privacy.ps1 estaban huerfanas (escritas, andando,
+        sin caller): Get-CustomDefenderExclusions, Add-WslDefenderExclusions y
+        Remove-WslDefenderExclusions. Las exclusiones dev son justo lo que Mateo
+        aplico a mano en el service de Olivo (notebook con WSL2 + Docker: el scan
+        sincronico de Defender sobre el rootfs del LXSS es la causa #1 de lentitud
+        en flujos de desarrollo).
+
+        El nombre de la funcion queda por compatibilidad con el dispatch y el smoke.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
     $null = $MachineProfile
+
+    Write-PctkSection '  DEFENDER'
+    Write-Host '  [R]eagendar escaneo (anti-stutter)  /  [V]er exclusiones  /'
+    Write-Host '  [D]ev: excluir WSL2+Docker+VSCode   /  [Q]uitar exclusiones dev  /  [B]volver'
+    [string] $dsub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+
+    if ($dsub -eq 'B' -or [string]::IsNullOrEmpty($dsub)) { return }
+
+    if ($dsub -eq 'V') {
+        [object[]] $ex = @(Get-CustomDefenderExclusions)
+        if ($ex.Count -eq 0) {
+            Write-PctkHint '  Sin exclusiones personalizadas (o Defender no disponible).'
+        } else {
+            Write-PctkSection ('  Exclusiones actuales ({0}):' -f $ex.Count)
+            foreach ($e in $ex) { Write-PctkValue ('    {0}' -f $e) }
+        }
+        Write-ActionAudit -Action 'Defender.Exclusions.List' -Status 'Success' -Summary ('{0} exclusiones' -f $ex.Count)
+        return
+    }
+
+    if ($dsub -eq 'D') {
+        if (-not (Confirm-Action -Title 'Excluir de Defender las carpetas de desarrollo?' -Lines @(
+            'Excluye el rootfs de WSL2 (Ubuntu), Docker Desktop y VS Code.',
+            'Para que: el scan sincronico sobre esos archivos frena cada open de archivo.',
+            'Solo tiene sentido en una PC que se usa para DESARROLLAR.',
+            'Tamper Protection y proteccion en tiempo real siguen ON. Reversible con [Q].'
+        ) -DefaultYes:$false)) {
+            Write-PctkHint '  Cancelado.'
+            Write-ActionAudit -Action 'Defender.Exclusions.Dev' -Status 'Cancelled'
+            return
+        }
+        $rx = Add-WslDefenderExclusions
+        if ($rx.PSObject.Properties['Skipped'] -and [bool]$rx.Skipped) {
+            Write-PctkHint ('  {0}' -f $rx.Reason)
+            Write-ActionAudit -Action 'Defender.Exclusions.Dev' -Status 'Info' -Summary 'skipped'
+            return
+        }
+        foreach ($a in $rx.Applied) { Write-PctkOk ('  [OK] {0}' -f $a) }
+        foreach ($e in $rx.Errors)  { Write-PctkWarn ('  [!] {0}' -f $e) }
+        Write-PctkHint ('  {0}' -f $rx.Reason)
+        [string] $stX = if ($rx.Success) { 'Success' } else { 'Partial' }
+        Write-ActionAudit -Action 'Defender.Exclusions.Dev' -Status $stX -Summary ('{0} exclusiones' -f @($rx.Applied).Count) -Details $rx
+        return
+    }
+
+    if ($dsub -eq 'Q') {
+        $rq = Remove-WslDefenderExclusions
+        Write-PctkOk '  [OK] Exclusiones de desarrollo quitadas.'
+        Write-ActionAudit -Action 'Defender.Exclusions.Undo' -Status 'Success' -Details $rq
+        return
+    }
+
+    if ($dsub -ne 'R') {
+        Write-PctkHint '  Opcion invalida.'
+        return
+    }
 
     Write-PctkSection '  REAGENDAR ESCANEO DE DEFENDER (anti-stutter)'
     $st = Get-DefenderScanSchedule

@@ -141,8 +141,25 @@ function New-ClientReport {
     # ── Metadata del run ──────────────────────────────────────────────────────
     [string] $pcName     = if ($null -ne $PostSnapshot) { [string]$PostSnapshot.ComputerName } else { $env:COMPUTERNAME }
     [string] $reportDate = (Get-Date -Format 'dd/MM/yyyy HH:mm')
-    [string] $techName   = 'Mateo Villanueva'
-    [string] $techPhone  = '387-515-0999'
+    # Datos del tecnico: salen de data\tecnico.json, no del codigo (2026-07-25).
+    # Antes estaban hardcodeados aca: cambiar un telefono obligaba a tocar un modulo
+    # y re-releasear. Degradacion: si el archivo falta o esta roto, el reporte se
+    # genera igual y el bloque del tecnico queda vacio -- nunca se rompe el entregable.
+    [string] $techName  = ''
+    [string] $techPhone = ''
+    try {
+        [string] $tecPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'data\tecnico.json'
+        if (Test-Path -LiteralPath $tecPath -PathType Leaf) {
+            $tec = Get-Content -LiteralPath $tecPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $tec) {
+                if ($tec.PSObject.Properties['nombre']   -and $null -ne $tec.nombre)   { $techName  = ([string]$tec.nombre).Trim() }
+                if ($tec.PSObject.Properties['telefono'] -and $null -ne $tec.telefono) { $techPhone = ([string]$tec.telefono).Trim() }
+            }
+        }
+    } catch {
+        # JSON roto o ilegible: seguir sin datos del tecnico, no abortar el reporte.
+        $techName = ''; $techPhone = ''
+    }
 
     # ─────────────────────────────────────────────────────────────────────────
     # HTML: cabecera + estilos
@@ -281,8 +298,14 @@ function New-ClientReport {
     _CR_H '    <div class="meta-block">'
     _CR_H ('      <strong>{0}</strong><br>' -f (_CR_Esc $pcName))
     _CR_H ('      Fecha: {0}<br>' -f (_CR_Esc $reportDate))
-    _CR_H ('      Tecnico: {0}<br>' -f (_CR_Esc $techName))
-    _CR_H ('      Tel: {0}' -f (_CR_Esc $techPhone))
+    # Condicionales: sin data\tecnico.json no se imprime una etiqueta huerfana
+    # ("Tecnico:" seguido de nada) en el papel que ve el cliente.
+    if (-not [string]::IsNullOrWhiteSpace($techName)) {
+        _CR_H ('      Tecnico: {0}<br>' -f (_CR_Esc $techName))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($techPhone)) {
+        _CR_H ('      Tel: {0}' -f (_CR_Esc $techPhone))
+    }
     _CR_H '    </div>'
     _CR_H '  </div>'
 
@@ -411,6 +434,50 @@ function New-ClientReport {
                 _CR_Row 'Estado'        $batStatus
                 _CR_H '      </table>'
             }
+        }
+
+        # ── Temperatura (2026-07-25) ──────────────────────────────────────────
+        # El snapshot YA capturaba CpuTempC y ThermalZones y el reporte nunca los
+        # miraba. La termica es el diagnostico que mas veces aparece en campo (caso
+        # Ignacio: CPU tocando TjMax, medido a mano con HWiNFO). Si el equipo no
+        # reporta sensores (comun en desktops y en VM), la seccion no se dibuja.
+        [string] $cpuTempStr = ''
+        [object] $tempObj = $PostSnapshot.PSObject.Properties['CpuTempC']
+        if ($null -ne $tempObj -and $null -ne $tempObj.Value) {
+            [double] $tC = 0
+            if ([double]::TryParse([string]$tempObj.Value, [ref] $tC) -and $tC -gt 0) {
+                $cpuTempStr = '{0} C' -f [math]::Round($tC, 1)
+                if ($tC -ge 90) {
+                    $cpuTempStr += ' — alta: conviene limpieza y cambio de pasta termica'
+                } elseif ($tC -ge 80) {
+                    $cpuTempStr += ' — elevada'
+                }
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($cpuTempStr)) {
+            _CR_H '      <div class="sub-title">Temperatura</div>'
+            _CR_H '      <table class="info-table">'
+            _CR_Row 'CPU en reposo' $cpuTempStr
+            _CR_H '      </table>'
+        }
+
+        # ── Plan de energia (2026-07-25) ──────────────────────────────────────
+        # PowerPlan tambien se capturaba y se ignoraba. Un equipo en "Economizador"
+        # explica media consulta de lentitud sin tocar una sola linea de registro.
+        [string] $planStr = ''
+        [object] $ppObj = $PostSnapshot.PSObject.Properties['PowerPlan']
+        if ($null -ne $ppObj -and $null -ne $ppObj.Value) {
+            [object] $pp = $ppObj.Value
+            if ($null -ne $pp.PSObject.Properties['ActiveName'] -and
+                -not [string]::IsNullOrWhiteSpace([string]$pp.ActiveName)) {
+                $planStr = [string] $pp.ActiveName
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($planStr)) {
+            _CR_H '      <div class="sub-title">Energia</div>'
+            _CR_H '      <table class="info-table">'
+            _CR_Row 'Plan activo' $planStr
+            _CR_H '      </table>'
         }
 
         _CR_H '    </div>'
@@ -584,7 +651,10 @@ function New-ClientReport {
 
     # ── Pie ───────────────────────────────────────────────────────────────────
     _CR_H '  <div class="report-footer">'
-    _CR_H ('    PCTk &bull; Reporte generado el {0} &bull; Tecnico: {1}' -f (_CR_Esc $reportDate), (_CR_Esc $techName))
+    [string] $pieTec = if (-not [string]::IsNullOrWhiteSpace($techName)) {
+        ' &bull; Tecnico: ' + (_CR_Esc $techName)
+    } else { '' }
+    _CR_H ('    PCTk &bull; Reporte generado el {0}{1}' -f (_CR_Esc $reportDate), $pieTec)
     _CR_H '  </div>'
 
     _CR_H '</div>'

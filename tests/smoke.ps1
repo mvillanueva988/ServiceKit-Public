@@ -2522,6 +2522,90 @@ Test-SmokeFunction 'Router' 'Menu [I] informe tecnico cableado a Invoke-RawAudit
     }
 }
 
+Test-SmokeFunction 'ClientReport' 'Datos del tecnico salen de data\tecnico.json (no hardcodeados)' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tecPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'data\tecnico.json'
+    if (-not (Test-Path -LiteralPath $tecPath)) { throw 'Falta data\tecnico.json' }
+    $tec = Get-Content -LiteralPath $tecPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace([string]$tec.nombre)) { throw 'tecnico.json sin nombre' }
+    # El modulo NO debe tener el nombre ni el telefono escritos a mano
+    [string] $src = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'modules\ClientReport.ps1') -Raw -Encoding UTF8
+    if ($src -match "'Mateo Villanueva'" -or $src -match "'387-515-0999'") {
+        throw 'ClientReport.ps1 volvio a tener los datos del tecnico hardcodeados'
+    }
+}
+
+Test-SmokeFunction 'ClientReport' 'Termica y plan de energia: salen con dato, se omiten sin dato' {
+    $ErrorActionPreference = 'Stop'
+    [string] $o1 = Join-Path $env:TEMP ('pctk-t1-' + [System.Guid]::NewGuid().ToString('N') + '.html')
+    [string] $o2 = Join-Path $env:TEMP ('pctk-t2-' + [System.Guid]::NewGuid().ToString('N') + '.html')
+    try {
+        $conDatos = [PSCustomObject]@{
+            ComputerName = 'PC'; RamTotalGb = 8.0
+            CPU = [PSCustomObject]@{ Name = 'CPU'; Cores = 4; Threads = 8 }
+            CpuTempC = 94.3
+            PowerPlan = [PSCustomObject]@{ ActiveGuid = 'x'; ActiveName = 'Economizador' }
+        }
+        $null = New-ClientReport -PostSnapshot $conDatos -OutputPath $o1
+        [string] $h1 = Get-Content -LiteralPath $o1 -Raw -Encoding UTF8
+        if ($h1 -notmatch 'Temperatura')   { throw 'Falta el panel de temperatura con dato presente' }
+        if ($h1 -notmatch 'pasta termica') { throw 'A 94 C deberia sugerir cambio de pasta' }
+        if ($h1 -notmatch 'Economizador')  { throw 'Falta el plan de energia' }
+
+        # Sin sensores (desktop tipico / VM): NO inventar secciones vacias
+        $sinDatos = [PSCustomObject]@{
+            ComputerName = 'PC'; RamTotalGb = 8.0
+            CPU = [PSCustomObject]@{ Name = 'CPU'; Cores = 4; Threads = 8 }
+        }
+        $null = New-ClientReport -PostSnapshot $sinDatos -OutputPath $o2
+        [string] $h2 = Get-Content -LiteralPath $o2 -Raw -Encoding UTF8
+        if ($h2 -match 'Temperatura') { throw 'Dibujo el panel de temperatura sin dato' }
+        if ($h2 -match 'Plan activo') { throw 'Dibujo el plan de energia sin dato' }
+    } finally {
+        Remove-Item -LiteralPath $o1, $o2 -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'Debloat' 'Rollback + lista de UN elemento no crashea (trampa PS5.1)' {
+    $ErrorActionPreference = 'Stop'
+    # DOS cosas a la vez:
+    # 1) El shape del rollback (estado previo para poder revertir).
+    # 2) La trampa de CLAUDE.md: `$v = if (c) { $lista }` desenrolla una coleccion
+    #    de UN elemento a escalar -> `.Count` tira PropertyNotFoundStrict. Antes de
+    #    2026-07-25, pasar UN solo servicio crasheaba la funcion (y con ella el
+    #    pipeline auto si una receta tenia un unico servicio a desactivar).
+    #    Por eso la fixture es de largo 1: es el caso que rompe.
+    $r = Disable-BloatServices -ServicesList @('PctkServicioQueNoExiste_ZZZ')
+    if (-not $r.PSObject.Properties['Rollback']) { throw 'Falta el campo Rollback' }
+    if ($null -eq $r.Rollback) { throw 'Rollback es null (deberia ser array vacio)' }
+    if (@($r.Rollback).Count -ne 0) { throw 'No se toco nada: Rollback deberia estar vacio' }
+    if ($r.TotalTargeted -ne 1) { throw ('TotalTargeted esperado 1; got {0}' -f $r.TotalTargeted) }
+    if ($r.Skipped -ne 1) { throw ('El servicio inexistente deberia contar como Skipped; got {0}' -f $r.Skipped) }
+}
+
+Test-SmokeFunction 'JobManager' 'Invoke-ModuleJob borrado (dead code con Invoke-Expression)' {
+    if (Get-Command -Name 'Invoke-ModuleJob' -CommandType Function -ErrorAction SilentlyContinue) {
+        throw 'Invoke-ModuleJob volvio a existir: era dead code y usaba Invoke-Expression'
+    }
+}
+
+Test-SmokeFunction 'Router' 'Huerfanas cableadas: Autoruns, exclusiones dev, grado de bufferbloat' {
+    foreach ($fn in @('Open-Autoruns', 'Add-WslDefenderExclusions', 'Remove-WslDefenderExclusions',
+                      'Get-CustomDefenderExclusions', 'Get-BufferbloatGrade')) {
+        if (-not (Get-Command -Name $fn -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw ("{0} no esta definida" -f $fn)
+        }
+    }
+    # Que esten LLAMADAS desde el Router, no solo definidas: es justo lo que fallaba.
+    [string] $router = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'core\Router.ps1') -Raw -Encoding UTF8
+    foreach ($fn in @('Open-Autoruns', 'Add-WslDefenderExclusions', 'Remove-WslDefenderExclusions',
+                      'Get-CustomDefenderExclusions', 'Get-BufferbloatGrade')) {
+        if ($router -notmatch [regex]::Escape($fn)) {
+            throw ("{0} sigue huerfana: el Router no la llama" -f $fn)
+        }
+    }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

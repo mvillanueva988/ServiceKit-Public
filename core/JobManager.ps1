@@ -178,89 +178,12 @@ function Invoke-JobWithProgress {
     return ,$result
 }
 
-function Invoke-ModuleJob {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string] $EntryPoint,
-
-        [Parameter(Mandatory)]
-        [scriptblock[]] $Functions,
-
-        [Parameter()]
-        [hashtable] $Params = @{},
-
-        [Parameter()]
-        [string] $JobName = $EntryPoint
-    )
-
-    if ([string]::IsNullOrWhiteSpace($EntryPoint)) {
-        throw 'EntryPoint no puede estar vacio.'
-    }
-
-    if ($null -eq $Functions -or $Functions.Count -eq 0) {
-        throw 'Debe proveer al menos una funcion para serializar en el job.'
-    }
-
-    [string[]] $functionDefinitions = @()
-
-    for ($i = 0; $i -lt $Functions.Count; $i++) {
-        [scriptblock] $fn = $Functions[$i]
-        if ($null -eq $fn) {
-            continue
-        }
-
-        [string] $fnText = $fn.ToString().Trim()
-        if ([string]::IsNullOrWhiteSpace($fnText)) {
-            continue
-        }
-
-        # Si ya viene como definicion completa (function Nombre { ... }), se usa tal cual.
-        if ($fnText -match '^\s*function\s+[A-Za-z_][A-Za-z0-9_-]*\s*\{') {
-            $functionDefinitions += $fnText
-            continue
-        }
-
-        # Para compatibilidad con ${Function:Nombre}, ToString() devuelve el body.
-        # El primer bloque se envuelve con el nombre del EntryPoint.
-        if ($i -eq 0) {
-            $functionDefinitions += ("function {0} {{`n{1}`n}}" -f $EntryPoint, $fnText)
-            continue
-        }
-
-        throw 'Solo la primera funcion puede venir como body suelto. Las funciones auxiliares deben incluir declaracion completa: function Nombre { ... }'
-    }
-
-    if ($functionDefinitions.Count -eq 0) {
-        throw 'No se pudo construir ninguna definicion de funcion valida para el job.'
-    }
-
-    $jobScript = {
-        param(
-            [string[]] $SerializedFunctions,
-            [string] $SerializedEntryPoint,
-            [hashtable] $SerializedParams
-        )
-
-        Set-StrictMode -Version Latest
-
-        foreach ($fnDef in $SerializedFunctions) {
-            Invoke-Expression $fnDef
-        }
-
-        if (-not (Get-Command -Name $SerializedEntryPoint -CommandType Function -ErrorAction SilentlyContinue)) {
-            throw ("EntryPoint '{0}' no existe dentro del job." -f $SerializedEntryPoint)
-        }
-
-        if ($null -eq $SerializedParams) {
-            $SerializedParams = @{}
-        }
-
-        return & $SerializedEntryPoint @SerializedParams
-    }
-
-    return Invoke-AsyncToolkitJob -ScriptBlock $jobScript -JobName $JobName -ArgumentList @($functionDefinitions, $EntryPoint, $Params)
-}
+# NOTA (2026-07-25): aca vivia Invoke-ModuleJob, un serializador generico de
+# modulos a background job. Se BORRO: tenia CERO adopters (los ~14 sitios de job
+# arman su here-string a mano) y ademas reconstituia las funciones dentro del job
+# con Invoke-Expression. Mentia sobre ser el patron canonico y confundia al que
+# lo leyera. Lo que SI cubre esta clase de bug es tests\job-closure.ps1 (#26-A1),
+# la red estatica que verifica el cierre transitivo de cada sitio de serializacion.
 
 # ─── Test-StepSucceeded ───────────────────────────────────────────────────────
 # Helper compartido: Invoke-AutoProfile y Invoke-NamedProfile lo usan via adapter

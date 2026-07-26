@@ -1,0 +1,8 @@
+{
+  "_comment": "Datos del tecnico que salen en el encabezado del reporte al cliente ([8]). Editar aca, no en el codigo. Si este archivo falta o esta roto, el reporte se genera igual sin el bloque del tecnico.",
+  "schema_version": "1.0",
+  "nombre": "Mateo Villanueva",
+  "telefono": "387-515-0999",
+  "negocio": "",
+  "email": ""
+}

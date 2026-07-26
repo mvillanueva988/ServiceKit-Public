@@ -28,7 +28,18 @@ function Disable-BloatServices {
         'dmwappushservice'
     )
 
-    $targetServices = if ($ServicesList -and $ServicesList.Count -gt 0) { $ServicesList } else { $defaultServices }
+    # PS5.1 + StrictMode: NO usar `$v = if (c) { $lista } else { ... }`.
+    # El if como EXPRESION enumera su salida, asi que una coleccion de UN elemento
+    # se desenrolla a escalar y despues `.Count` tira PropertyNotFoundStrict.
+    # Sintoma real: pasar una lista de 1 servicio (receta con un solo servicio a
+    # desactivar) crasheaba la funcion entera. Ver CLAUDE.md "@() en if-expression".
+    # Patron seguro: variable tipada [string[]] + asignacion por STATEMENT.
+    [string[]] $targetServices = @()
+    if ($null -ne $ServicesList -and @($ServicesList).Count -gt 0) {
+        $targetServices = @($ServicesList)
+    } else {
+        $targetServices = @($defaultServices)
+    }
 
     $disabled         = 0
     $failed           = 0
@@ -36,6 +47,13 @@ function Disable-BloatServices {
     $alreadyDisabled  = 0  # ya estaba deshabilitado de antes
     $errors           = [System.Collections.Generic.List[string]]::new()
     [System.Collections.Generic.List[string]] $skippedNames = [System.Collections.Generic.List[string]]::new()
+
+    # ROLLBACK (2026-07-25): guardar el StartType ORIGINAL de cada servicio que se
+    # toca. Sin esto, revertir era adivinar entre Automatic y Manual -- y si el
+    # cliente vuelve con "no me imprime", adivinar el Spooler es justo lo que no
+    # queres estar haciendo. Ahora queda registrado que era, exactamente.
+    [System.Collections.Generic.List[PSCustomObject]] $rollback = `
+        [System.Collections.Generic.List[PSCustomObject]]::new()
 
     foreach ($svcName in $targetServices) {
         try {
@@ -47,12 +65,22 @@ function Disable-BloatServices {
                 continue
             }
 
+            # Capturar ANTES de mutar
+            [string] $prevStart  = [string] $svc.StartType
+            [string] $prevStatus = [string] $svc.Status
+
             if ($svc.Status -eq 'Running') {
                 Stop-Service -Name $svcName -Force -ErrorAction Stop
             }
 
             Set-Service -Name $svcName -StartupType Disabled -ErrorAction Stop
             $disabled++
+            $rollback.Add([PSCustomObject]@{
+                Name           = [string] $svcName
+                PrevStartType  = $prevStart
+                PrevStatus     = $prevStatus
+                RestoreCommand = ('Set-Service -Name {0} -StartupType {1}' -f $svcName, $prevStart)
+            })
         }
         catch [Microsoft.PowerShell.Commands.ServiceCommandException] {
             # Servicio no existe en este sistema — comun en Windows Sandbox,
@@ -74,6 +102,9 @@ function Disable-BloatServices {
         Failed          = $failed
         Errors          = $errors.ToArray()
         TotalTargeted   = $targetServices.Count
+        # Estado previo de cada servicio efectivamente tocado, con el comando exacto
+        # para restaurarlo. Va al audit via -Details -> queda en el JSONL del bundle.
+        Rollback        = $rollback.ToArray()
     }
 }
 
