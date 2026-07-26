@@ -492,7 +492,6 @@ function Invoke-ClientReport {
                     Sort-Object LastWriteTime -Descending)
                 if ($preFiles.Count -gt 0) {
                     $postSnap = Get-Content -LiteralPath $preFiles[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-                    $isPreFallback = $true
                     Write-PctkHint '  [i] Sin snapshot POST: la ficha del equipo sale del PRE (estado actual).'
                 }
             }
@@ -500,7 +499,6 @@ function Invoke-ClientReport {
     } catch {
         Write-PctkHint ('  [i] Snapshot no encontrado: {0}' -f $_.Exception.Message)
     }
-    $null = $isPreFallback
 
     try {
         $r = New-ClientReport `
@@ -1976,14 +1974,25 @@ function Invoke-ActionDefenderScan {
     if ($dsub -eq 'B' -or [string]::IsNullOrEmpty($dsub)) { return }
 
     if ($dsub -eq 'V') {
-        [object[]] $ex = @(Get-CustomDefenderExclusions)
-        if ($ex.Count -eq 0) {
-            Write-PctkHint '  Sin exclusiones personalizadas (o Defender no disponible).'
-        } else {
-            Write-PctkSection ('  Exclusiones actuales ({0}):' -f $ex.Count)
-            foreach ($e in $ex) { Write-PctkValue ('    {0}' -f $e) }
+        # Get-CustomDefenderExclusions devuelve un OBJETO { Available; Paths[] },
+        # no un array de strings. Iterar el objeto imprimia
+        # "@{Available=True; Paths=System.String[]}" en la cara del operador.
+        $exObj = Get-CustomDefenderExclusions
+        [bool] $exAvail = ($null -ne $exObj -and $exObj.PSObject.Properties['Available'] -and [bool]$exObj.Available)
+        [object[]] $exPaths = @()
+        if ($null -ne $exObj -and $exObj.PSObject.Properties['Paths'] -and $null -ne $exObj.Paths) {
+            $exPaths = @($exObj.Paths)
         }
-        Write-ActionAudit -Action 'Defender.Exclusions.List' -Status 'Success' -Summary ('{0} exclusiones' -f $ex.Count)
+
+        if (-not $exAvail) {
+            Write-PctkHint '  Defender no disponible (AV de terceros o administrado por politica).'
+        } elseif ($exPaths.Count -eq 0) {
+            Write-PctkHint '  Sin exclusiones personalizadas configuradas.'
+        } else {
+            Write-PctkSection ('  Exclusiones actuales ({0}):' -f $exPaths.Count)
+            foreach ($e in $exPaths) { Write-PctkValue ('    {0}' -f [string]$e) }
+        }
+        Write-ActionAudit -Action 'Defender.Exclusions.List' -Status 'Success' -Summary ('{0} exclusiones' -f $exPaths.Count)
         return
     }
 

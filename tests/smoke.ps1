@@ -2522,6 +2522,47 @@ Test-SmokeFunction 'Router' 'Menu [I] informe tecnico cableado a Invoke-RawAudit
     }
 }
 
+Test-SmokeFunction 'Router' 'Invoke-ClientReport corre bajo StrictMode sin snapshots (handler, no renderer)' {
+    # POR QUE ESTE TEST: el de '#30 fallback al PRE' probaba New-ClientReport (el
+    # renderer) y dejaba pasar un crash en Invoke-ClientReport (el HANDLER del [8]).
+    # Real: quedo un `$null = $isPreFallback` leyendo una variable que solo se
+    # asignaba dentro de un if -> sin snapshots, StrictMode tiraba VariableIsUndefined
+    # y el [8] moria. Lo cazo Mateo probando a mano, no el smoke.
+    # Este test ejercita el handler COMPLETO con StrictMode y sin snapshots (el peor
+    # caso: ninguna rama del if se ejecuta).
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+
+    # Shadowear el renderer y la apertura: nos interesa la logica del handler.
+    function New-ClientReport {
+        [CmdletBinding()] param(
+            [object] $PostSnapshot, [object] $Compare, [object] $Result,
+            [string] $OutputPath, [switch] $OpenAfter
+        )
+        return [PSCustomObject]@{ Success = $true; FilePath = 'fake.html' }
+    }
+    function Compare-Snapshot { throw 'sin snapshots' }
+
+    [PSCustomObject] $mp = [PSCustomObject]@{
+        IsLaptop = $false; RamMB = 8192; Tier = 'Mid'; IsHome = $true
+    }
+    # No debe tirar. Si vuelve a aparecer una variable leida sin asignar, explota aca.
+    Invoke-ClientReport -MachineProfile $mp | Out-Null
+}
+
+Test-SmokeFunction 'Router' 'Defender [V]: lee .Paths del objeto, no imprime el objeto crudo' {
+    # Get-CustomDefenderExclusions devuelve { Available; Paths[] }. Iterarlo como si
+    # fuera un array de strings imprimia "@{Available=True; Paths=System.String[]}"
+    # en pantalla (cazado por Mateo probando a mano, 2026-07-26).
+    [string] $router = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'core\Router.ps1') -Raw -Encoding UTF8
+    if ($router -match '@\(Get-CustomDefenderExclusions\)') {
+        throw 'El handler vuelve a envolver el objeto en @(): imprime el objeto crudo'
+    }
+    if ($router -notmatch "Properties\['Paths'\]") {
+        throw 'El handler no lee la propiedad Paths'
+    }
+}
+
 Test-SmokeFunction 'ClientReport' 'Datos del tecnico salen de data\tecnico.json (no hardcodeados)' {
     $ErrorActionPreference = 'Stop'
     [string] $tecPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'data\tecnico.json'
