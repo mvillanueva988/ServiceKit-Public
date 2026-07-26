@@ -497,11 +497,17 @@ function Invoke-ResearchPrompt {
     [string] $tplKey = $templates[$idx - 1].Key
 
     [string] $useCase = (Read-Host '  Use-case del cliente (opcional, Enter para skip)').Trim()
-    [bool] $includeId = $false
-    if ($MachineProfile.PSObject.Properties['IsHome'] -and -not [bool] $MachineProfile.IsHome) {
-        Write-PctkHint '  Privacy: identificadores se scrubean por default (OS no-Home).'
-        [string] $ans = (Read-Host '  Incluir identificadores reales? [s/N]').Trim().ToUpperInvariant()
-        $includeId = ($ans -eq 'S')
+    # Privacidad: este prompt sale de la PC del CLIENTE y termina pegado en un LLM
+    # de terceros (ademas del archivo, se copia al portapapeles). Lleva datos reales
+    # del equipo. Hasta 2026-07-25 solo se preguntaba si el OS NO era Home -- o sea,
+    # en la mayoria de las PCs de cliente (Home) el nombre del equipo salia en claro
+    # SIN avisar. Ahora se pregunta SIEMPRE y el default es scrubear.
+    Write-PctkWarn '  Este prompt se copia al portapapeles para pegarlo en un LLM externo.'
+    Write-PctkHint '  Incluye datos reales del equipo del cliente (hardware, programas, antivirus).'
+    [string] $ans = (Read-Host '  Incluir identificadores del equipo (nombre de PC)? [s/N]').Trim().ToUpperInvariant()
+    [bool] $includeId = ($ans -eq 'S')
+    if (-not $includeId) {
+        Write-PctkHint '  Identificadores scrubeados.'
     }
 
     Write-ActionAudit -Action 'Research.Prompt' -Status 'Started' -Summary $tplKey
@@ -910,6 +916,21 @@ function Invoke-ActionCleanup {
         return
     }
     if ($sub -eq 'R') {
+        # Confirmacion obligatoria: este es el unico path del toolkit que borra
+        # archivos del usuario de forma IRREVERSIBLE (no va a la papelera), y
+        # hasta 2026-07-25 no pedia confirmacion -- todas las demas acciones
+        # destructivas (debloat, apps, disco, BitLocker) si lo hacen.
+        if (-not (Confirm-Action -Title 'Borrar temporales y caches? (NO va a la papelera)' -Lines @(
+            'Windows: Temp, Prefetch, SoftwareDistribution\Download',
+            'Temp de TODOS los perfiles de usuario de esta PC',
+            'Caches de Chrome / Edge / Brave / Opera / Firefox (todos los perfiles)',
+            'IRREVERSIBLE: se borra directo, sin papelera',
+            'Tip: [P]review primero para ver cuanto espacio libera'
+        ) -DefaultYes:$false)) {
+            Write-PctkHint '  Cancelado.'
+            Write-ActionAudit -Action 'Cleanup.Run' -Status 'Cancelled'
+            return
+        }
         Write-ActionAudit -Action 'Cleanup.Run' -Status 'Started'
         Write-PctkWork '  Limpiando temporales y caches...'
         $job = Start-CleanupProcess

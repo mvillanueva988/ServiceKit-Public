@@ -319,6 +319,16 @@ function Set-UltimatePowerPlan {
         [Nullable[bool]] $IsLaptop = $null
     )
 
+    # EAP local: esta funcion llama a `powercfg` (exe nativo) 7 veces y decide por
+    # $LASTEXITCODE, no por excepciones. Bajo el EAP='Stop' de main.ps1, el stderr
+    # de un exe nativo se vuelve NativeCommandError TERMINANTE (y el redirect NO
+    # salva: 2>&1 y 2>$null tiran igual). Ver CLAUDE.md "powercfg / exe nativo".
+    # Hoy el bug esta latente porque el unico caller entra por Start-Job (runspace
+    # nuevo, EAP=Continue), pero la linea del branch laptop no tiene ni try/catch:
+    # cualquier caller in-process la haria crashear. Los cmdlets de PowerShell de
+    # abajo usan -ErrorAction explicito, que prevalece sobre esta preferencia.
+    $ErrorActionPreference = 'Continue'
+
     [string] $balancedGuid = '381b4222-f694-41f0-9685-ff5bb260df2e'
     [string] $highPerfGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
     [string] $ultimateGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
@@ -386,7 +396,22 @@ function Set-UltimatePowerPlan {
                 Skipped      = $false
             }
         }
-    } catch { }
+    } catch {
+        # ANTE LA DUDA, NO APLICAR ULTIMATE. Si no se pudo leer la CPU no sabemos si
+        # es un X3D de dos chiplets, y Ultimate en esos CUESTA fps (impide parkear el
+        # CCD sin V-Cache). Hasta 2026-07-25 este catch estaba VACIO: se caia en
+        # silencio a la rama Ultimate, justo lo que la guarda existe para evitar.
+        # Mismo criterio que Resolve-VolumeMaintenanceOp ("duda -> Skip").
+        return [PSCustomObject]@{
+            Success      = $false
+            PlanName     = ''
+            PlanGuid     = ''
+            PreviousGuid = $previousGuid
+            PreviousName = $previousName
+            Reason       = ('No se pudo identificar la CPU ({0}). No se cambia el plan de energia: si fuera un X3D de dos chiplets, Ultimate le costaria fps. Revisar a mano.' -f $_.Exception.Message)
+            Skipped      = $true
+        }
+    }
 
     # -- Desktop: intentar Ultimate, fallback a High Performance ---------------
     try {
