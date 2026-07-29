@@ -103,8 +103,22 @@ Log ''
 # ─── G1: la instalacion carga ─────────────────────────────────────────────────
 # Bajo EAP=Stop y desde la copia INSTALADA (no el repo de desarrollo). Caza de una
 # la clase entera "BOM / parse / Execution Policy" en su contexto real.
-Invoke-GateCheck -Id 'G1' -Name 'El toolkit instalado dot-sourcea completo bajo EAP=Stop' {
-    [int] $n = 0
+#
+# EL DOT-SOURCE VA ACA, A NIVEL DE SCRIPT, Y NO ADENTRO DE Invoke-GateCheck.
+# `Invoke-GateCheck` corre el body con `& $Body`, y el operador de llamada ejecuta
+# el scriptblock en un scope HIJO: todo lo que se dot-sourcea ahi adentro muere
+# cuando el scriptblock termina. Con el dot-source dentro del check, G1 pasaba
+# feliz ("38 archivos cargados", sin un solo error) y de G2 en adelante NINGUNA
+# funcion existia -- el reporte acusaba a la release de no definir handlers que en
+# la maquina estaban perfectamente definidos. Medido en el gate de v2.5.0
+# (2026-07-29): 1 PASS / 4 FAIL, todos falsos, mientras PCTk corria al lado.
+#
+# La leccion es la de siempre en este repo, en otra forma: el canario tiene que
+# ejercitar el mismo camino que corre en produccion. `main.ps1` dot-sourcea a
+# nivel de script; el gate lo hacia adentro de una funcion.
+[int]    $archivosCargados = 0
+[string] $errorDeCarga     = ''
+try {
     foreach ($folder in @('utils', 'core', 'modules')) {
         [string] $dir = Join-Path $RepoRoot $folder
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
@@ -112,10 +126,17 @@ Invoke-GateCheck -Id 'G1' -Name 'El toolkit instalado dot-sourcea completo bajo 
         }
         foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter '*.ps1' -File)) {
             . $f.FullName
-            $n++
+            $archivosCargados++
         }
     }
-    return ('{0} archivos cargados' -f $n)
+}
+catch {
+    $errorDeCarga = $_.Exception.Message
+}
+
+Invoke-GateCheck -Id 'G1' -Name 'El toolkit instalado dot-sourcea completo bajo EAP=Stop' {
+    if ($errorDeCarga -ne '') { throw $errorDeCarga }
+    return ('{0} archivos cargados' -f $archivosCargados)
 }
 
 Invoke-GateCheck -Id 'G2' -Name 'Los handlers del service estan definidos' {
