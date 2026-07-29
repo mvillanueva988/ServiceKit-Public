@@ -41,7 +41,34 @@ try {
     $f = "$env:TEMP\PCTk-Launch.ps1"
     $url = "https://raw.githubusercontent.com/mvillanueva988/ServiceKit-Public/$tag/Launch.ps1"
     Write-Host "Bajando $url"
-    Invoke-WebRequest -Uri $url -OutFile $f -UseBasicParsing
+
+    # REINTENTAR: la Sandbox NO tiene red cuando arranca este script. El
+    # LogonCommand se dispara apenas loguea el usuario, antes de que el adaptador
+    # consiga IP, asi que la primera descarga sale contra un stack sin red y tira
+    # "Unable to connect to the remote server". Medido 2026-07-29: el gate murio
+    # ahi y desde el host el fallo era INVISIBLE -- la Sandbox quedaba abierta y
+    # vacia, como si estuviera trabajando.
+    #
+    # Se reintenta la descarga REAL en vez de pinguear algo primero: es la misma
+    # operacion que hay que lograr, no un proxy de ella, y de paso cubre el caso
+    # de que la red aparezca a medias (DNS antes que ruta, por ejemplo).
+    $intentos = 0
+    $bajado   = $false
+    while (-not $bajado -and $intentos -lt 45) {
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $f -UseBasicParsing -TimeoutSec 20
+            $bajado = $true
+        }
+        catch {
+            $intentos++
+            if ($intentos -eq 1) { Write-Host '  sin red todavia; reintentando cada 2s...' }
+            Start-Sleep -Seconds 2
+        }
+    }
+    if (-not $bajado) {
+        throw "no se pudo bajar $url despues de $intentos intentos (~$($intentos * 2)s sin red)"
+    }
+    if ($intentos -gt 0) { Write-Host "  red lista tras ~$($intentos * 2)s" }
 
     Write-Host 'Ejecutando el instalador (desprendido)...'
     Start-Process -FilePath 'powershell.exe' `
