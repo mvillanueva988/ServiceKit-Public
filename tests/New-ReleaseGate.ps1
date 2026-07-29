@@ -25,15 +25,20 @@
 .PARAMETER SkipPreflight
     No correr el pre-flight (util si ya lo corriste y estas re-armando el .wsb).
 
+.PARAMETER NoLaunch
+    No abrir la Sandbox ni la carpeta de resultados: solo dejar el .wsb armado.
+
 .EXAMPLE
     .\tests\New-ReleaseGate.ps1
     .\tests\New-ReleaseGate.ps1 -Version 2.5.0
+    .\tests\New-ReleaseGate.ps1 -NoLaunch
 #>
 
 [CmdletBinding()]
 param(
     [string] $Version = '',
-    [switch] $SkipPreflight
+    [switch] $SkipPreflight,
+    [switch] $NoLaunch
 )
 
 Set-StrictMode -Version Latest
@@ -115,7 +120,7 @@ if ($preflightExit -ne 0 -and -not $SkipPreflight) {
     Write-Host '      Conviene corregirlos ANTES de gastar la corrida de Sandbox.' -ForegroundColor Red
     Write-Host ''
 }
-Write-Host ('  Doble clic en:  {0}' -f $wsbPath) -ForegroundColor White
+Write-Host ('  .wsb armado en:  {0}' -f $wsbPath) -ForegroundColor White
 Write-Host ''
 Write-Host '  La Sandbox va a:' -ForegroundColor DarkGray
 Write-Host ('    1. instalar {0} con el one-liner REAL del README' -f $tag) -ForegroundColor DarkGray
@@ -128,3 +133,32 @@ Write-Host ''
 Write-Host '  RECORDATORIO: un PASS automatizado NO declara la release lista.' -ForegroundColor Yellow
 Write-Host '  El render de la consola y el criterio de "esto se ve bien" son tuyos.' -ForegroundColor Yellow
 Write-Host ''
+
+# ─── Abrir la carpeta de resultados y arrancar la Sandbox ─────────────────────
+if (-not $NoLaunch) {
+    # La carpeta primero: queda abierta esperando el reporte, asi no hay que ir a
+    # buscarla a mano cuando la Sandbox termina.
+    try { Start-Process explorer.exe -ArgumentList $outDir } catch { }
+
+    # Windows Sandbox se registra como handler de .wsb; Start-Process lo despacha
+    # por asociacion de archivo (mismo efecto que el doble clic).
+    [bool] $lanzada = $false
+    try {
+        Start-Process -FilePath $wsbPath -ErrorAction Stop
+        $lanzada = $true
+    } catch {
+        Write-Host ('  [!] No se pudo abrir la Sandbox automaticamente: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host '      Windows Sandbox se habilita en "Caracteristicas de Windows".' -ForegroundColor DarkGray
+        Write-Host ('      Mientras tanto: doble clic en {0}' -f $wsbPath) -ForegroundColor DarkGray
+        Write-Host ''
+    }
+
+    if ($lanzada) {
+        Write-Host '  Sandbox arrancando. Tarda ~1 min en levantar y otro tanto en instalar.' -ForegroundColor Cyan
+        Write-Host '  El reporte va a aparecer solo en la carpeta que se abrio.' -ForegroundColor Cyan
+        Write-Host ''
+    }
+} else {
+    Write-Host ('  (-NoLaunch) Doble clic en: {0}' -f $wsbPath) -ForegroundColor DarkGray
+    Write-Host ''
+}

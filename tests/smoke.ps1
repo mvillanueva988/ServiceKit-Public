@@ -21,7 +21,16 @@ param(
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Continue'
+
+# ESPEJO DE main.ps1. Estuvo en 'Continue' hasta 2026-07-29, y ese desfasaje tiene
+# un muerto conocido: el crash de [A][16] USB (powercfg, exe nativo) paso el smoke
+# en verde y lo cazo recien el gate Sandbox #11. Bajo EAP=Stop el stderr de un exe
+# nativo se vuelve NativeCommandError TERMINANTE, y el redirect no salva.
+# CLAUDE.md ya prescribia "los tests que ejercitan handlers deben fijar EAP=Stop";
+# esto lo hace global en vez de test por test.
+# Medido antes de cambiarlo: 242/0 con 'Continue' y 242/0 con 'Stop' -- cerrar el
+# desfasaje no costo un solo test.
+$ErrorActionPreference = 'Stop'
 
 [string] $repoRoot = Split-Path -Parent $PSScriptRoot
 [string] $modulesDir = Join-Path $repoRoot 'modules'
