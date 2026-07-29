@@ -103,6 +103,87 @@ function Test-SmokeFunction {
 # ─── static checks ────────────────────────────────────────────────────────────
 Test-SmokeFunction 'StaticCheck' 'BomRegression' { Test-BomRegression }
 
+# Los scripts de tests\ NO los cubre Test-BomRegression (mira core/modules/utils/
+# tools + los .ps1 de la raiz) y nadie los dot-sourcea, asi que un error de
+# sintaxis vive ahi sin que nada lo grite hasta que alguien los corre a mano.
+# Justo donde menos conviene: son las herramientas del gate.
+Test-SmokeFunction 'StaticCheck' 'Los .ps1 de tests\ parsean (incluye las herramientas del gate)' {
+    [System.Collections.Generic.List[string]] $rotos = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File -ErrorAction SilentlyContinue)) {
+        $perr = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref] $null, [ref] $perr)
+        if ($null -ne $perr -and @($perr).Count -gt 0) {
+            [void] $rotos.Add(('{0} (linea {1}): {2}' -f $f.Name, $perr[0].Extent.StartLineNumber, $perr[0].Message))
+        }
+    }
+    if ($rotos.Count -gt 0) { throw ($rotos -join ' ;; ') }
+}
+
+# Las herramientas del gate tienen que EXISTIR y estar completas: si alguien
+# borra una mitad, el gate deja de correr y "no corrio" se ve como "no fallo".
+Test-SmokeFunction 'StaticCheck' 'Las herramientas del gate de release estan completas' {
+    foreach ($f in @('release-preflight.ps1', 'release-gate-validate.ps1',
+                     'release-gate-launcher.ps1', 'New-ReleaseGate.ps1')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $f) -PathType Leaf)) {
+            throw ('falta tests\{0}: el gate de release no se puede armar' -f $f)
+        }
+    }
+    # El validate DEBE correr con EAP=Stop para espejar main.ps1. Con 'Continue'
+    # (como el smoke) deja pasar los crashes de exe nativo -- fue lo que dejo
+    # pasar el crash de [A][16] USB hasta el gate Sandbox.
+    [string] $val = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release-gate-validate.ps1') -Raw -Encoding UTF8
+    if ($val -notmatch "ErrorActionPreference\s*=\s*'Stop'") {
+        throw 'release-gate-validate.ps1 no fija EAP=Stop: no espejaria main.ps1'
+    }
+}
+
+# ─── `if` usado como sub-expresion: el bug que NO es de parseo ────────────────
+# MEDIDO en PS5.1 (5.1.19041): `('{0}' -f (if ...))` y `Cmd (if ...)` PARSEAN
+# PERFECTO. Revientan en RUNTIME con "El termino 'if' no se reconoce como nombre
+# de un cmdlet" -- PowerShell busca un comando llamado `if`. Y bajo el
+# $ErrorActionPreference='Stop' de main.ps1 eso es TERMINANTE: se lleva puesto el
+# toolkit entero.
+#
+# Por eso ni el parser ni el smoke lo cazan: sale a la luz solo cuando ESA rama
+# se ejecuta. El panel de bateria del reporte [8] vivio asi hasta v2.4.0, y solo
+# se rompia en laptops (una PC de escritorio no tiene bateria -> la rama nunca
+# corria). Un chequeo estatico de texto es la unica red barata.
+#
+# Legal y muy usado: `$x = if (c) {...} else {...}` (asignacion) y `$(if ...)`
+# (operador de sub-expresion).
+#
+# COMO SE DETECTA: por AST, no por texto. Cuando PowerShell ve `(if ...)` lo
+# parsea como un CommandAst cuyo nombre de comando es literalmente "if" -- por
+# eso el error en runtime es "no se reconoce el termino 'if'". Buscar ese
+# CommandAst es exacto: la asignacion queda como IfStatementAst y `$(if ...)` como
+# SubExpressionAst, asi que ninguna de las dos formas legales se marca.
+# (Un primer intento con regex sobre el texto crudo marcaba los COMENTARIOS que
+# describen la trampa -- incluido este. El AST no tiene ese problema.)
+Test-SmokeFunction 'StaticCheck' 'Palabras clave usadas como comando (CommandNotFound en runtime)' {
+    [string] $rRoot = Split-Path -Parent $PSScriptRoot
+    [string[]] $patterns = @('core\*.ps1', 'modules\*.ps1', 'utils\*.ps1', 'tests\*.ps1',
+                             'main.ps1', 'Launch.ps1', 'Release.ps1', 'Bootstrap-Tools.ps1')
+    [string[]] $keywords = @('if', 'foreach', 'while', 'switch', 'do', 'try')
+    [System.Collections.Generic.List[string]] $hits = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($p in $patterns) {
+        foreach ($f in @(Get-ChildItem -Path (Join-Path $rRoot $p) -File -ErrorAction SilentlyContinue)) {
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref] $null, [ref] $null)
+            if ($null -eq $ast) { continue }
+            foreach ($c in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))) {
+                [string] $name = ''
+                try { $name = [string] $c.GetCommandName() } catch { }
+                if (-not [string]::IsNullOrEmpty($name) -and $keywords -contains $name.ToLowerInvariant()) {
+                    [void] $hits.Add(('{0}:{1} -> {2}' -f $f.Name, $c.Extent.StartLineNumber, $name))
+                }
+            }
+        }
+    }
+    if ($hits.Count -gt 0) {
+        throw ('Palabra clave usada como comando (parsea, pero revienta en runtime bajo EAP=Stop) en: {0}. Usar variable temporal o $(...).' -f ($hits -join ', '))
+    }
+}
+
 # --- #26-A1: red de cierre de serializacion a background jobs ---
 # Caza la clase de bug que rompio v2.3.0: un Start-*Process que serializa una
 # funcion entry al job sin embeber una funcion que llama transitivamente ->
