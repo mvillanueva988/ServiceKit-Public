@@ -140,17 +140,30 @@ if (-not $NoLaunch) {
     # buscarla a mano cuando la Sandbox termina.
     try { Start-Process explorer.exe -ArgumentList $outDir } catch { }
 
-    # Windows Sandbox se registra como handler de .wsb; Start-Process lo despacha
-    # por asociacion de archivo (mismo efecto que el doble clic).
+    # Invocar el EXE directo, no la asociacion de archivo.
+    # Primera version de esto hacia `Start-Process $wsbPath` asumiendo que
+    # Windows Sandbox se registra como handler de .wsb. En la maquina de Mateo
+    # NO hay asociacion para .wsb en HKLM aunque WindowsSandbox.exe exista, asi
+    # que el despacho por extension no tenia a donde ir y no abria nada (sin
+    # error). `WindowsSandbox.exe <config.wsb>` es la invocacion documentada y
+    # no depende del registro.
     [bool] $lanzada = $false
-    try {
-        Start-Process -FilePath $wsbPath -ErrorAction Stop
-        $lanzada = $true
-    } catch {
-        Write-Host ('  [!] No se pudo abrir la Sandbox automaticamente: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
-        Write-Host '      Windows Sandbox se habilita en "Caracteristicas de Windows".' -ForegroundColor DarkGray
-        Write-Host ('      Mientras tanto: doble clic en {0}' -f $wsbPath) -ForegroundColor DarkGray
+    [string] $sandboxExe = Join-Path $env:SystemRoot 'System32\WindowsSandbox.exe'
+
+    if (-not (Test-Path -LiteralPath $sandboxExe)) {
+        Write-Host '  [!] Windows Sandbox no esta instalado en esta maquina.' -ForegroundColor Yellow
+        Write-Host '      Se habilita en "Activar o desactivar las caracteristicas de Windows"' -ForegroundColor DarkGray
+        Write-Host '      -> "Espacio aislado de Windows" (pide reinicio).' -ForegroundColor DarkGray
         Write-Host ''
+    } else {
+        try {
+            Start-Process -FilePath $sandboxExe -ArgumentList $wsbPath -ErrorAction Stop
+            $lanzada = $true
+        } catch {
+            Write-Host ('  [!] No se pudo abrir la Sandbox: {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+            Write-Host ('      Probar a mano: & "{0}" "{1}"' -f $sandboxExe, $wsbPath) -ForegroundColor DarkGray
+            Write-Host ''
+        }
     }
 
     if ($lanzada) {
