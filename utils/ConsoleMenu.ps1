@@ -85,6 +85,39 @@ function Get-NamedProfileRows {
     return $rows
 }
 
+function Test-PctkConsoleResized {
+    <#
+    .SYNOPSIS
+        Cambio de geometria de la consola desde el ultimo redibujo completo.
+
+    .DESCRIPTION
+        Defensiva por dos lados, y los dos importan:
+
+        1. Si la consola no expone geometria (host raro), devuelve $false. Nunca
+           reporta "cambio" cuando no puede saberlo.
+        2. Si los valores de referencia son negativos -- o sea que el redibujo
+           completo NUNCA logro leer la geometria -- tambien devuelve $false.
+           Sin esa guarda, comparar contra -1 daria "cambio" en cada vuelta y el
+           menu entraria en un bucle de redibujo infinito sin consumir teclas:
+           un cuelgue, no un bug cosmetico.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [int] $LastWidth,
+        [Parameter(Mandatory)] [int] $LastHeight,
+        [Parameter(Mandatory)] [int] $LastBufferWidth
+    )
+
+    if ($LastWidth -lt 0 -or $LastHeight -lt 0 -or $LastBufferWidth -lt 0) { return $false }
+    try {
+        return ([Console]::WindowWidth  -ne $LastWidth -or
+                [Console]::WindowHeight -ne $LastHeight -or
+                [Console]::BufferWidth  -ne $LastBufferWidth)
+    }
+    catch { return $false }
+}
+
 function Read-PctkMenuChoice {
     <#
     .SYNOPSIS
@@ -196,27 +229,50 @@ function Read-PctkMenuChoice {
             $full = $false
         }
 
+        # --- Espera de tecla CON deteccion de resize (#43) -----------------------
+        # Antes esto era un [Console]::ReadKey($true) bloqueante y el chequeo de
+        # resize corria DESPUES, o sea recien cuando llegaba una tecla. Resultado:
+        # el operador maximizaba y la pantalla quedaba con el highlight estirado a
+        # todo el ancho nuevo y con restos del dibujo viejo en los bordes, hasta
+        # que apretaba algo. Sintoma textual de Mateo en el gate de v2.5.0: "se
+        # buguea un poquito, si entro a un menu y salgo se arregla" -- eso era la
+        # guarda disparandose tarde, no un problema de dibujo.
+        #
+        # Ahora se sondea, asi el redibujo llega solo. 80 ms es imperceptible al
+        # tipear (nadie nota 80 ms entre tecla y highlight) y no mueve la CPU: la
+        # regla del repo es que nada de UX puede agregar carga en la PC del cliente.
         $key = $null
+        [bool] $resized = $false
         try {
-            $key = [Console]::ReadKey($true)
+            while (-not [Console]::KeyAvailable) {
+                if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
+                    $resized = $true
+                    break
+                }
+                Start-Sleep -Milliseconds 80
+            }
+            if (-not $resized) { $key = [Console]::ReadKey($true) }
         } catch {
-            # ReadKey fallo (host sin consola real) -> fallback a Read-Host
+            # KeyAvailable/ReadKey fallaron (host sin consola real) -> fallback a
+            # Read-Host, igual que antes.
             & $RenderHeader
             foreach ($row in $Rows) { Write-RowLine -Row $row -Hi $false }
             Write-Host ''
             return (Read-Host $Prompt).Trim().ToUpperInvariant()
         }
+
+        # Resize mientras se esperaba: las Y cacheadas en $itemY quedaron obsoletas,
+        # asi que redibujo completo en vez de pintar el highlight en coordenadas
+        # viejas. No se consumio ninguna tecla.
+        if ($resized) { $full = $true; continue }
         if ($null -eq $key) { continue }
 
-        # Resize detectado (ej. el operador maximizo a mitad de menu): las posiciones
-        # Y cacheadas en $itemY quedaron obsoletas -> redibujo completo este frame en
-        # vez de pintar el highlight en coordenadas viejas (bug del highlight "mal cargado").
-        try {
-            if ([Console]::WindowWidth -ne $lastW -or [Console]::WindowHeight -ne $lastH -or [Console]::BufferWidth -ne $lastBW) {
-                $full = $true
-                continue
-            }
-        } catch { }
+        # Y el resize que entra JUNTO con la tecla (o entre el poll y el ReadKey):
+        # mismo tratamiento. Este es el camino que ya existia y se conserva.
+        if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
+            $full = $true
+            continue
+        }
 
         if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
             $buffer = ''
@@ -369,18 +425,34 @@ function Read-PctkMultiChoice {
             $full = $false
         }
 
+        # Misma espera sondeada que Read-PctkMenuChoice (#43): con el ReadKey
+        # bloqueante, la guarda de resize de abajo no se evaluaba hasta que llegara
+        # una tecla, asi que maximizar dejaba el menu mal dibujado hasta que el
+        # operador apretaba algo. Este menu tenia el bug identico -- arreglar solo
+        # el principal habria dejado la mitad, y el [T] es el que mas se mira con
+        # la ventana agrandada (23 herramientas en lista).
         $key = $null
-        try { $key = [Console]::ReadKey($true) }
+        [bool] $resized = $false
+        try {
+            while (-not [Console]::KeyAvailable) {
+                if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
+                    $resized = $true
+                    break
+                }
+                Start-Sleep -Milliseconds 80
+            }
+            if (-not $resized) { $key = [Console]::ReadKey($true) }
+        }
         catch { return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx } }
+
+        if ($resized) { $full = $true; continue }
         if ($null -eq $key) { continue }
 
-        # Resize (ej. maximizar a mitad de menu) -> Y cacheadas obsoletas -> redibujo completo.
-        try {
-            if ([Console]::WindowWidth -ne $lastW -or [Console]::WindowHeight -ne $lastH -or [Console]::BufferWidth -ne $lastBW) {
-                $full = $true
-                continue
-            }
-        } catch { }
+        # Resize que entra junto con la tecla -> Y cacheadas obsoletas -> redibujo.
+        if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
+            $full = $true
+            continue
+        }
 
         if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
             $buffer = ''

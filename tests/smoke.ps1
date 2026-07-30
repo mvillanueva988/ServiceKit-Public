@@ -232,6 +232,63 @@ Test-SmokeFunction 'MachineProfile' 'Get-NormalizedManufacturer 1-word off-brand
     if ((Get-NormalizedManufacturer -RawManufacturer '') -ne 'Unknown')                   { throw 'vacío -> Unknown rompió' }
 }
 
+# ─── #43: el menú se entera del resize sin esperar una tecla ──────────────────
+Test-SmokeFunction 'ConsoleMenu' 'Test-PctkConsoleResized: guarda anti-cuelgue con refs inválidas' {
+    # Si el redibujo completo nunca logró leer la geometría, las refs quedan en -1.
+    # Comparar contra -1 daría "cambió" en cada vuelta -> redibujo infinito sin
+    # consumir teclas, o sea un CUELGUE del menú. Tiene que devolver $false.
+    foreach ($caso in @(
+        @{ W = -1; H = 40; B = 120 },
+        @{ W = 80; H = -1; B = 120 },
+        @{ W = 80; H = 40; B = -1  },
+        @{ W = -1; H = -1; B = -1  }
+    )) {
+        if (Test-PctkConsoleResized -LastWidth $caso.W -LastHeight $caso.H -LastBufferWidth $caso.B) {
+            throw ("refs inválidas (W={0} H={1} B={2}) reportaron resize -> riesgo de bucle" -f $caso.W, $caso.H, $caso.B)
+        }
+    }
+}
+Test-SmokeFunction 'ConsoleMenu' 'Test-PctkConsoleResized: detecta el cambio y no da falsos' {
+    # Con la geometría REAL de esta consola no debe reportar cambio; con valores
+    # que no pueden coincidir, sí. Si el host no expone geometría, la función
+    # devuelve $false por diseño y el test no puede distinguir -> se saltea.
+    [int] $w = -1; [int] $h = -1; [int] $b = -1
+    try { $w = [Console]::WindowWidth; $h = [Console]::WindowHeight; $b = [Console]::BufferWidth } catch { }
+    if ($w -lt 0 -or $h -lt 0 -or $b -lt 0) { return 'sin geometría de consola en este host: no aplica' }
+
+    if (Test-PctkConsoleResized -LastWidth $w -LastHeight $h -LastBufferWidth $b) {
+        throw 'la geometría actual reportó cambio (falso positivo -> redibujaría de gratis)'
+    }
+    if (-not (Test-PctkConsoleResized -LastWidth ($w + 7) -LastHeight $h -LastBufferWidth $b)) {
+        throw 'un ancho distinto NO reportó cambio (el bug de #43 volvería)'
+    }
+}
+# RED DE REGRESIÓN DE LA CLASE DEL BUG. Los dos menús interactivos tienen que
+# SONDEAR (KeyAvailable) en vez de bloquearse en ReadKey: con el ReadKey detenido,
+# la guarda de resize no se evalúa hasta que llega una tecla, y maximizar deja el
+# menú mal dibujado hasta que el operador aprieta algo. Eso es #43, y estaba en
+# los DOS menús. Por AST: se busca la llamada real, no la palabra en un comentario.
+Test-SmokeFunction 'ConsoleMenu' 'los dos menús sondean el teclado, no se bloquean (#43)' {
+    [string] $f = Join-Path (Split-Path -Parent $PSScriptRoot) 'utils\ConsoleMenu.ps1'
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$null)
+    foreach ($nombre in @('Read-PctkMenuChoice', 'Read-PctkMultiChoice')) {
+        [object[]] $fn = @($ast.FindAll({
+            param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]
+        }, $true) | Where-Object { $_.Name -eq $nombre })
+        if ($fn.Count -ne 1) { throw ("no encontré la función {0}" -f $nombre) }
+
+        # KeyAvailable es una propiedad estática -> MemberExpressionAst, no CommandAst.
+        [object[]] $polls = @($fn[0].FindAll({
+            param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst]
+        }, $true) | Where-Object {
+            $_.Member.Extent.Text -eq 'KeyAvailable'
+        })
+        if ($polls.Count -eq 0) {
+            throw ("{0} no sondea KeyAvailable: volvió al ReadKey bloqueante y el resize se vuelve a notar tarde" -f $nombre)
+        }
+    }
+}
+
 # ─── #34: estado de HAGS ──────────────────────────────────────────────────────
 Test-SmokeFunction 'MachineProfile' 'Get-HagsMode: read-only y siempre un valor conocido' {
     [string] $m = Get-HagsMode
