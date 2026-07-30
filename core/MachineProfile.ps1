@@ -310,6 +310,77 @@ function Get-RamAdvisories {
     return $advisories
 }
 
+function Get-HagsMode {
+    <#
+    .SYNOPSIS
+        Estado de Hardware-Accelerated GPU Scheduling. Read-only, smoke-safe.
+
+    .DESCRIPTION
+        Lee `HwSchMode` del registro DIRECTO, y NO llama a `Get-HagsStatus` de
+        `modules\Hags.ps1` aunque exista y haga lo mismo mejor.
+
+        La razon es el limite de job: `Get-MachineProfile` se serializa a
+        background jobs, y ahi ese modulo NO esta cargado. Llamarlo desde aca
+        seria exactamente el bug #24 -- `CommandNotFound` al EJECUTARSE el job,
+        no al armarlo, o sea invisible para el smoke y para cualquier prueba de
+        la funcion suelta. Es el mismo motivo por el que este archivo ya tiene su
+        propio `Get-MachineVmInfo` en vez de usar `Test-IsVirtualMachine`.
+
+        Valores: 1 = off, 2 = on. Ausente = Windows nunca lo seteo explicito
+        (default del driver), que NO es lo mismo que apagado.
+
+    .OUTPUTS
+        'Off' | 'On' | 'Default' | 'Unknown'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    try {
+        $reg = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' `
+                                -Name 'HwSchMode' -ErrorAction SilentlyContinue
+        if ($null -eq $reg -or $null -eq $reg.PSObject.Properties['HwSchMode']) { return 'Default' }
+        switch ([int] $reg.HwSchMode) {
+            1       { return 'Off' }
+            2       { return 'On' }
+            default { return 'Unknown' }
+        }
+    }
+    catch { return 'Unknown' }
+}
+
+function Get-HagsAdvisory {
+    <#
+    .SYNOPSIS
+        Aviso de HAGS, SOLO para el caso accionable. Funcion pura.
+
+    .DESCRIPTION
+        HAGS es de los pocos toggles que mueven la aguja de verdad, pero su signo
+        DEPENDE DEL EQUIPO: ayuda en algunos y mete stutter en otros. Por eso acá
+        no se recomienda prender ni apagar -- eso es juicio por PC (misma regla
+        que el power plan de Ryzen: un caso no hace una regla universal).
+
+        Se avisa UN solo caso, que no es opinion sino limitacion tecnica: HAGS
+        encendido en una maquina con GPU integrada nada mas. HAGS necesita
+        WDDM 2.7+ y reserva ~1 GB para el scheduler; en una iGPU que comparte la
+        RAM del sistema eso sale del mismo pozo del que ya se queja el usuario.
+        El resto de los estados se reportan como DATO (campo `Hags` del perfil),
+        no como aviso: el operador quiere verlo al diagnosticar, no que el toolkit
+        opine.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Mode,
+        [Parameter()] [bool] $HasIGpuOnly = $false
+    )
+
+    if ($Mode -eq 'On' -and $HasIGpuOnly) {
+        return 'HAGS encendido con GPU integrada: reserva ~1GB de la RAM compartida y necesita WDDM 2.7+. Revisar si aporta o conviene apagarlo ([A][13]).'
+    }
+    return ''
+}
+
 function Get-UmaAdvisory {
     <#
     .SYNOPSIS
@@ -445,6 +516,16 @@ function Get-MachineProfile {
         }
     } catch { }
 
+    # HAGS (#34): el estado va como DATO al perfil -- así viaja al snapshot, al
+    # bundle y al research prompt -- y sólo se convierte en aviso en el caso que
+    # es limitación técnica y no opinión. Ver Get-HagsAdvisory.
+    [string] $hagsMode = 'Unknown'
+    try {
+        $hagsMode = Get-HagsMode
+        [string] $hagsAdv = Get-HagsAdvisory -Mode $hagsMode -HasIGpuOnly $hasIGpuOnly
+        if (-not [string]::IsNullOrEmpty($hagsAdv)) { $advisories += $hagsAdv }
+    } catch { }
+
     return [PSCustomObject]@{
         IsLaptop         = $isLaptop
         RamMB            = $ramMB
@@ -471,6 +552,13 @@ function Get-MachineProfile {
         # el Service Tag de 7 caracteres.
         Model            = if ($null -ne $cs   -and $cs.PSObject.Properties['Model']        -and $null -ne $cs.Model)          { ([string]$cs.Model).Trim() }          else { '' }
         SerialNumber     = if ($null -ne $bios -and $bios.PSObject.Properties['SerialNumber'] -and $null -ne $bios.SerialNumber) { ([string]$bios.SerialNumber).Trim() } else { '' }
+        # ── #34: estado de HAGS (2026-07-29) ──────────────────────────────────
+        # Va como dato y no sólo como aviso: el operador quiere VERLO al
+        # diagnosticar (pedido que salió del service de Ignacio), y así viaja al
+        # snapshot, al bundle y al research prompt sin correr nada a mano.
+        # 'Default' NO es lo mismo que 'Off': significa que Windows nunca lo seteó
+        # explícito y manda el default del driver.
+        Hags             = [string] $hagsMode
         # ── Campos nuevos snapshot-vm-plan §5 ─────────────────────────────────
         IsVirtualMachine = [bool]   $vmInfo.IsVirtual
         VmVendor         = [string] $vmInfo.Vendor

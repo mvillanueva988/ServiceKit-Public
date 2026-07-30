@@ -232,6 +232,63 @@ Test-SmokeFunction 'MachineProfile' 'Get-NormalizedManufacturer 1-word off-brand
     if ((Get-NormalizedManufacturer -RawManufacturer '') -ne 'Unknown')                   { throw 'vacío -> Unknown rompió' }
 }
 
+# ─── #34: estado de HAGS ──────────────────────────────────────────────────────
+Test-SmokeFunction 'MachineProfile' 'Get-HagsMode: read-only y siempre un valor conocido' {
+    [string] $m = Get-HagsMode
+    if ($m -notin @('Off', 'On', 'Default', 'Unknown')) {
+        throw ("modo inesperado: '{0}'" -f $m)
+    }
+}
+# Fixtures de las 4 combinaciones: el aviso sale SÓLO en On+iGPU. Los otros tres
+# estados son dato, no aviso — el signo de HAGS depende del equipo y el toolkit
+# no opina (misma regla que el power plan de Ryzen).
+Test-SmokeFunction 'MachineProfile' 'Get-HagsAdvisory avisa sólo en On + GPU integrada' {
+    if ([string]::IsNullOrEmpty((Get-HagsAdvisory -Mode 'On' -HasIGpuOnly $true))) {
+        throw 'On + iGPU tendría que avisar y no avisó'
+    }
+    foreach ($caso in @(
+        @{ M = 'On';      I = $false },   # dGPU: HAGS on es normal
+        @{ M = 'Off';     I = $true  },   # apagado: nada que avisar
+        @{ M = 'Default'; I = $true  },   # Windows nunca lo seteó
+        @{ M = 'Unknown'; I = $true  }
+    )) {
+        [string] $r = Get-HagsAdvisory -Mode $caso.M -HasIGpuOnly $caso.I
+        if (-not [string]::IsNullOrEmpty($r)) {
+            throw ("Mode={0} iGpuOnly={1} no debía avisar; dijo: {2}" -f $caso.M, $caso.I, $r)
+        }
+    }
+}
+# El HANDLER, no la función pura: es Get-MachineProfile lo que corre en producción.
+Test-SmokeFunction 'MachineProfile' 'Hags field: el perfil expone el estado (handler)' {
+    $p = Get-MachineProfile
+    if ($null -eq $p.PSObject.Properties['Hags']) { throw 'falta el campo Hags en el perfil' }
+    if ([string]$p.Hags -notin @('Off', 'On', 'Default', 'Unknown')) {
+        throw ("Hags='{0}' no es un valor conocido" -f $p.Hags)
+    }
+}
+# RED ANTI-REGRESIÓN DEL LÍMITE DE JOB. `modules\Hags.ps1` tiene un Get-HagsStatus
+# que hace esto mismo y mejor, pero Get-MachineProfile se serializa a background
+# jobs donde ese módulo NO está cargado: usarlo desde acá sería CommandNotFound al
+# EJECUTARSE el job — invisible para el smoke y para cualquier prueba de la función
+# suelta (el bug #24, exacto). Si alguien "simplifica" el código llamándolo, este
+# test lo caza. Por AST y no por texto, para no marcar los comentarios que lo
+# explican (misma lección que el canario de `if` como comando).
+Test-SmokeFunction 'MachineProfile' 'no llama a funciones de modules\ (límite de job)' {
+    [string] $f = Join-Path (Split-Path -Parent $PSScriptRoot) 'core\MachineProfile.ps1'
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$null)
+    [string[]] $prohibidas = @('Get-HagsStatus', 'Test-IsVirtualMachine')
+    [object[]] $malas = @($ast.FindAll({
+        param($n) $n -is [System.Management.Automation.Language.CommandAst]
+    }, $true) | Where-Object {
+        [string] $nom = $_.GetCommandName()
+        (-not [string]::IsNullOrEmpty($nom)) -and ($prohibidas -contains $nom)
+    })
+    if ($malas.Count -gt 0) {
+        throw ("MachineProfile.ps1 llama a {0} de modules\, que no existe dentro de un background job" -f
+            (($malas | ForEach-Object { $_.GetCommandName() }) -join ', '))
+    }
+}
+
 # ─── modules: solo funciones read-only / preview ──────────────────────────────
 Test-SmokeFunction 'Apps' 'Get-InstalledWin32Apps' { Get-InstalledWin32Apps }
 Test-SmokeFunction 'Apps' 'Get-InstalledUwpApps'   { Get-InstalledUwpApps }
