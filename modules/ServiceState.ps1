@@ -379,3 +379,94 @@ function Test-BundleAlreadyTaken {
     if ($null -eq $marker.PSObject.Properties['hostname']) { return $false }
     return ([string]$marker.hostname -eq $env:COMPUTERNAME)
 }
+
+# ─── Si el paquete ya viajo al CRM ────────────────────────────────────────────
+# POR QUE EXISTE (backlog #41, cazado en campo 2026-08-01): el marcador decia
+# que el paquete se HIZO, pero no si se SUBIO. Sin ese dato, la unica forma de
+# reintentar una subida que fallo era apretar el [L] otra vez -- y eso arma un
+# paquete NUEVO, con otro nombre y otra hora. Consecuencias medidas en la
+# notebook de Mateo: dos ZIP a 41 segundos uno del otro en el Escritorio, y la
+# proteccion anti-duplicados del CRM sin poder ayudar, porque el identificador
+# sale del nombre del archivo y el archivo era otro.
+
+function Set-BundleUploadedMarker {
+    <#
+    .SYNOPSIS
+        Anota en el marcador que ESE paquete ya esta en el CRM.
+
+        Lee y reescribe conservando lo que habia: el marcador tambien es lo que
+        usa el [U] para no re-empaquetar, asi que pisarlo con un objeto nuevo
+        romperia esa otra funcion desde el costado.
+    .OUTPUTS
+        [bool] $true si quedo anotado.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [string] $OutputRootOverride = '',
+        [string] $UploadedAtOverride = ''
+    )
+
+    $marker = Get-LastBundleMarker -OutputRootOverride $OutputRootOverride
+    if ($null -eq $marker) { return $false }
+
+    [string] $cuando = ''
+    if ([string]::IsNullOrEmpty($UploadedAtOverride)) {
+        $cuando = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
+    } else {
+        $cuando = $UploadedAtOverride
+    }
+
+    try {
+        $marker | Add-Member -NotePropertyName 'subido_en' -NotePropertyValue $cuando -Force
+        [string] $path = Get-LastBundleMarkerPath -OutputRootOverride $OutputRootOverride
+        ($marker | ConvertTo-Json -Depth 3) | Out-File -FilePath $path -Encoding UTF8 -ErrorAction Stop
+        return $true
+    } catch {
+        # Perder esta anotacion no pierde nada: el paquete YA se subio. Lo peor
+        # que pasa es que la proxima vez se vuelva a ofrecer subirlo, y el CRM
+        # conteste "ya lo tenia" sin duplicar.
+        return $false
+    }
+}
+
+function Get-BundlePendienteDeSubir {
+    <#
+    .SYNOPSIS
+        El paquete de ESTA PC que existe en disco y todavia NO viajo al CRM.
+        $null si no hay ninguno.
+
+        LAS TRES CONDICIONES SON LAS TRES NECESARIAS:
+        · de esta PC   -- un marcador de otro cliente no se ofrece jamas;
+        · el ZIP existe -- si el operador ya se lo llevo y lo borro, ofrecer
+                          subir un archivo que no esta seria una promesa vacia;
+        · sin subir     -- si ya viajo, no hay nada que reintentar.
+    .OUTPUTS
+        [PSCustomObject] con ZipPath y ClosedAt, o $null.
+    #>
+    [CmdletBinding()]
+    param(
+        [string] $OutputRootOverride = ''
+    )
+
+    $marker = Get-LastBundleMarker -OutputRootOverride $OutputRootOverride
+    if ($null -eq $marker) { return $null }
+
+    if ($null -eq $marker.PSObject.Properties['hostname']) { return $null }
+    if ([string]$marker.hostname -ne $env:COMPUTERNAME) { return $null }
+
+    if ($null -ne $marker.PSObject.Properties['subido_en'] -and
+        -not [string]::IsNullOrWhiteSpace([string]$marker.subido_en)) {
+        return $null
+    }
+
+    if ($null -eq $marker.PSObject.Properties['zip_path']) { return $null }
+    [string] $zip = [string]$marker.zip_path
+    if ([string]::IsNullOrWhiteSpace($zip)) { return $null }
+    if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { return $null }
+
+    [string] $closedAt = ''
+    if ($null -ne $marker.PSObject.Properties['closed_at']) { $closedAt = [string]$marker.closed_at }
+
+    return [PSCustomObject]@{ ZipPath = $zip; ClosedAt = $closedAt }
+}

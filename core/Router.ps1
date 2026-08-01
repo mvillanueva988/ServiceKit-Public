@@ -204,6 +204,41 @@ function Invoke-ServiceClose {
     [OutputType([bool])]
     param()
 
+    # ── Backlog #41: reintentar la subida SIN armar otro paquete ──────────────
+    #
+    # EL CASO REAL, medido en la notebook de Mateo el 2026-08-01: la subida no
+    # salio (todavia no estaba el codigo de conexion pegado), y para reintentar
+    # apreto el [L] de nuevo. Eso arma un paquete NUEVO -> dos ZIP a 41 segundos
+    # uno del otro en el Escritorio del cliente. Y peor: la proteccion
+    # anti-duplicados del CRM no puede ayudar, porque el identificador sale del
+    # nombre del archivo y el archivo es otro.
+    #
+    # Asi que antes de empaquetar se mira si ya hay un paquete de ESTA PC sin
+    # subir. Si lo hay, se ofrece subir ESE. Re-empaquetar sigue disponible
+    # contestando que no: no se decide por el operador, se le muestra la opcion
+    # barata primero.
+    if ((Get-Command -Name 'Get-BundlePendienteDeSubir' -CommandType Function -ErrorAction SilentlyContinue) -and
+        (Get-Command -Name 'Invoke-CrmUploadOffer' -CommandType Function -ErrorAction SilentlyContinue)) {
+
+        $pendiente = Get-BundlePendienteDeSubir
+        if ($null -ne $pendiente) {
+            Write-Host ''
+            Write-PctkWarn '  Hay un paquete de esta PC que todavia no subiste al CRM.'
+            Write-PctkHint ('  {0}' -f (Split-Path -Leaf ([string]$pendiente.ZipPath)))
+            [string] $ansPend = (Read-Host '  Subir ESE en vez de armar otro? [S/n]').Trim().ToUpperInvariant()
+
+            if ($ansPend -ne 'N') {
+                $null = Invoke-CrmUploadOffer -ZipPath ([string]$pendiente.ZipPath)
+
+                Write-Host ''
+                Write-PctkHint '  Podes dejar la PC del cliente limpia ahora.'
+                [string] $ansU = (Read-Host '  Dejar PCTk instalado en esta PC? [S/n]').Trim().ToUpperInvariant()
+                if ($ansU -ne 'N') { return $false }
+                return (Invoke-UninstallToolkit)
+            }
+        }
+    }
+
     $result = $null
     if (Get-Command -Name 'Invoke-CloseService' -CommandType Function -ErrorAction SilentlyContinue) {
         $result = Invoke-CloseService

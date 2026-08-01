@@ -559,6 +559,14 @@ function Invoke-CrmUploadOffer {
             } else {
                 Write-PctkOk '  [OK] El paquete ya esta en el CRM.'
             }
+
+            # Queda anotado que ESTE paquete viajo. Es lo que evita que el [L]
+            # vuelva a ofrecerlo y, sobre todo, lo que hace posible reintentar
+            # SIN re-empaquetar cuando la subida falla.
+            if (Get-Command -Name 'Set-BundleUploadedMarker' -CommandType Function -ErrorAction SilentlyContinue) {
+                $null = Set-BundleUploadedMarker -OutputRootOverride $OutputRootOverride
+            }
+
             Write-ActionAudit -Action 'Crm.Upload' -Status 'Success' -Summary ([string]$r.Key)
         } else {
             $salida.Motivo = 'fallo'

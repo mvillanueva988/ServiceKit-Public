@@ -3272,29 +3272,117 @@ Test-SmokeFunction 'CrmUpload' 'el HANDLER del [L] ofrece subir y no desinstala 
     # que corre cuando el operador aprieta [L]. Probar Invoke-CrmUploadOffer suelta
     # dejaria sin ejercitar el cableado, que es donde viven los bugs que llegan a
     # produccion (leccion del [A][5] D de v2.3.0: helpers verdes, wiring roto).
-    # Se shadowea solo lo que MUTA: el cierre real y el desinstalador.
+    #
+    # SE SHADOWEA Send-BundleToCrm, Y NO ES OPCIONAL. Sin eso este test SUBE UN
+    # PAQUETE AL CRM DE VERDAD en cuanto la PC donde corre el smoke tenga la
+    # conexion configurada -- que es justo lo que pasa en la PC de Mateo desde el
+    # 2026-08-01. El dia que se escribio, su PC todavia no la tenia y el test
+    # pasaba por el camino de "codigo invalido"; el mismo test, sin tocar una
+    # linea, se volvio peligroso solo. Un test que muta produccion segun el estado
+    # de la maquina donde corre no es un test.
     [string] $zip = Join-Path $env:TEMP ('pctk-smoke-41-{0}.zip' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
-    [string] $tmp = Join-Path $env:TEMP ('pctk-smoke-41r-{0}' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
     try {
         Set-Content -LiteralPath $zip -Value 'contenido' -Encoding ASCII
-        $null = New-Item -ItemType Directory -Path $tmp -Force
 
         function Invoke-CloseService { [PSCustomObject]@{ Status = 'OK'; ZipPath = $zip } }
         function Test-PctkInteractiveConsole { $true }
         function Invoke-UninstallToolkit { throw 'el handler lanzo el DESINSTALADOR en el smoke' }
-        # 'S' a todo. Como codigo de conexion, 'S' es invalido -> avisa y vuelve
-        # SIN tocar la red. Despues 'S' a "dejar PCTk instalado" -> no desinstala.
+        # Sin paquete pendiente: se ejercita el camino normal (empaquetar y ofrecer).
+        function Get-BundlePendienteDeSubir { $null }
+        function Send-BundleToCrm { throw 'el smoke intento SUBIR ALGO A LA RED' }
         function Read-Host { param([string] $Prompt) 'S' }
 
         [bool] $r = Invoke-ServiceClose
         if ($r) { throw 'Invoke-ServiceClose devolvio $true: habria cerrado PCTk para desinstalar' }
+    } finally {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    }
+}
 
-        # Un codigo invalido no puede dejar configuracion escrita.
-        if (Test-Path -LiteralPath (Get-CrmConfigPath -OutputRootOverride $tmp)) {
-            throw 'guardo una conexion a partir de un codigo invalido'
+Test-SmokeFunction 'CrmUpload' 'con un paquete sin subir, el [L] ofrece ESE y no arma otro' {
+    # El caso de campo del 2026-08-01: la subida no salio, el operador apreto [L]
+    # otra vez y quedaron dos ZIP a 41 segundos uno del otro en el Escritorio del
+    # cliente -- con la proteccion anti-duplicados del CRM sin poder ayudar,
+    # porque el identificador sale del nombre del archivo.
+    [string] $zip = Join-Path $env:TEMP ('pctk-smoke-41p-{0}.zip' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    try {
+        Set-Content -LiteralPath $zip -Value 'el paquete que quedo sin subir' -Encoding ASCII
+        $script:subidoDe = ''
+
+        function Get-BundlePendienteDeSubir { [PSCustomObject]@{ ZipPath = $zip; ClosedAt = '2026-08-01T02:54:30-03:00' } }
+        function Invoke-CrmUploadOffer { param([string] $ZipPath, [string] $OutputRootOverride = '')
+            $script:subidoDe = $ZipPath
+            return [PSCustomObject]@{ Intentado = $true; Ok = $true; Motivo = '' } }
+        function Invoke-CloseService { throw 'RE-EMPAQUETO teniendo un paquete sin subir' }
+        function Invoke-ExportClientLogs { throw 'RE-EMPAQUETO teniendo un paquete sin subir' }
+        function Invoke-UninstallToolkit { throw 'el handler lanzo el DESINSTALADOR en el smoke' }
+        function Read-Host { param([string] $Prompt) 'S' }
+
+        [bool] $r = Invoke-ServiceClose
+        if ($r) { throw 'Invoke-ServiceClose devolvio $true' }
+        if ($script:subidoDe -ne $zip) {
+            throw ('subio otra cosa (o nada): "{0}"' -f $script:subidoDe)
         }
     } finally {
         Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'CrmUpload' 'decir que NO al pendiente vuelve a empaquetar (no se decide por el operador)' {
+    [string] $zip = Join-Path $env:TEMP ('pctk-smoke-41n-{0}.zip' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    try {
+        Set-Content -LiteralPath $zip -Value 'viejo' -Encoding ASCII
+        $script:empaqueto = $false
+
+        function Get-BundlePendienteDeSubir { [PSCustomObject]@{ ZipPath = $zip; ClosedAt = '' } }
+        function Invoke-CloseService { $script:empaqueto = $true; [PSCustomObject]@{ Status = 'OK'; ZipPath = $zip } }
+        function Test-PctkInteractiveConsole { $false }   # sin preguntas de subida
+        function Invoke-UninstallToolkit { throw 'lanzo el DESINSTALADOR' }
+        function Send-BundleToCrm { throw 'el smoke intento SUBIR ALGO A LA RED' }
+        # 'N' al pendiente, y despues 'N' a "dejar PCTk instalado" seria desinstalar:
+        # por eso el segundo prompt responde 'S'. El contador dice cual es cual.
+        $script:prompts = 0
+        function Read-Host { param([string] $Prompt) $script:prompts++; if ($script:prompts -eq 1) { 'N' } else { 'S' } }
+
+        $null = Invoke-ServiceClose
+        if (-not $script:empaqueto) { throw 'dijo que no al pendiente y tampoco empaqueto: se quedo sin hacer nada' }
+    } finally {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'el marcador distingue "hecho" de "subido"' {
+    [string] $tmp = Join-Path $env:TEMP ('pctk-smoke-mk-{0}' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    [string] $zip = Join-Path $tmp 'paquete.zip'
+    try {
+        $null = New-Item -ItemType Directory -Path (Join-Path $tmp 'output\state') -Force
+        Set-Content -LiteralPath $zip -Value 'x' -Encoding ASCII
+
+        $null = Set-LastBundleMarker -ZipPath $zip -OutputRootOverride $tmp
+        $p = Get-BundlePendienteDeSubir -OutputRootOverride $tmp
+        if ($null -eq $p) { throw 'un paquete recien hecho y sin subir tiene que figurar como pendiente' }
+        if ($p.ZipPath -ne $zip) { throw 'devolvio otra ruta' }
+
+        if (-not (Set-BundleUploadedMarker -OutputRootOverride $tmp)) { throw 'no pudo anotar la subida' }
+        if ($null -ne (Get-BundlePendienteDeSubir -OutputRootOverride $tmp)) {
+            throw 'sigue figurando como pendiente despues de subirlo'
+        }
+
+        # Anotar la subida NO puede romper lo que el [U] lee del mismo archivo.
+        $m = Get-LastBundleMarker -OutputRootOverride $tmp
+        if ([string]$m.zip_path -ne $zip)                { throw 'se perdio zip_path' }
+        if ([string]$m.hostname -ne $env:COMPUTERNAME)   { throw 'se perdio hostname' }
+        if ([string]::IsNullOrWhiteSpace([string]$m.closed_at)) { throw 'se perdio closed_at' }
+        if (-not (Test-BundleAlreadyTaken -OutputRootOverride $tmp)) { throw 'el [U] dejo de ver el marcador' }
+
+        # Si el ZIP ya no esta (el operador se lo llevo y lo borro), no se ofrece
+        # subir un archivo que no existe.
+        $null = Set-LastBundleMarker -ZipPath $zip -OutputRootOverride $tmp
+        Remove-Item -LiteralPath $zip -Force
+        if ($null -ne (Get-BundlePendienteDeSubir -OutputRootOverride $tmp)) {
+            throw 'ofrecio subir un ZIP que ya no esta'
+        }
+    } finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
