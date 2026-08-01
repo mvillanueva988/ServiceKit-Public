@@ -2,6 +2,38 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.6.0] - 2026-08-01
+
+Release: **el paquete del cierre viaja solo al CRM**. Hasta acá el `[L]` dejaba el ZIP en el Escritorio del cliente y de ahí en adelante lo movía el operador a mano — abrir el WhatsApp del cliente, o su mail, o pendrive. Ahora se sube desde la misma PC, con una llave que sólo sirve para eso.
+
+Va como *minor* y no como parche porque agrega funcionalidad: SemVer, igual que el resto del changelog.
+
+### Added
+
+- **#41 — el `[L]` sube el paquete al CRM (`modules/CrmUpload.ps1`, `core/Router.ps1`)**: después de armar el ZIP, el cierre pregunta *"¿Subir el paquete al CRM?"* y lo manda. La conexión se pide **una sola vez por PC** y se pega en una línea (dirección y token juntos), porque esto se tipea en la casa de un cliente y muchas veces por AnyDesk, donde cada pegado del portapapeles es un viaje. Vive en `output\state\`, así que **muere con el desinstalador**.
+
+  **Esto nunca traba el cierre de un service.** Sin internet, sin token, con el servidor caído o detrás de un proxy raro: el ZIP ya está hecho y sigue en el Escritorio, no se perdió nada, y el `[L]` termina igual. Todo error de acá es un aviso, jamás una excepción.
+
+  El token del CRM es de **sólo subir** —no lee, no lista, no borra— y tiene tope diario. Si se filtra de la PC de un cliente, lo peor que hace el que lo tenga es mandar basura hasta que se corte. Y es **uno por PC**: cortar el de una no toca a las demás.
+
+  El identificador de la subida sale del **nombre del ZIP** y no de un azar. Eso es lo que hace que reintentar sea gratis: el mismo paquete manda siempre el mismo identificador y el servidor contesta "ya lo tenía" en vez de guardar una segunda copia.
+
+- **#34 — estado de HAGS en el escaneo (`core/MachineProfile.ps1`)**: se lee `HwSchMode` del registro y viaja al perfil, al snapshot, al bundle y al `[R]`. El aviso sale en **un solo caso** —HAGS encendido con GPU integrada y nada más—, donde no es opinión sino limitación técnica. En todo lo demás el signo depende del equipo, así que se informa y no se recomienda.
+
+### Changed
+
+- **Reintentar la subida ya no arma otro paquete (`modules/ServiceState.ps1`, `core/Router.ps1`)**: el marcador del bundle decía que el paquete se **hizo**, pero no si se **subió**. Sin ese dato, la única forma de reintentar una subida fallida era apretar el `[L]` de nuevo — y eso arma un paquete nuevo, con otro nombre y otra hora. Medido en campo el 2026-08-01: **dos ZIP a 41 segundos uno del otro** en el Escritorio, y la protección anti-duplicados del servidor sin poder ayudar, porque el identificador sale del nombre del archivo y el archivo era otro. Ahora el `[L]`, antes de empaquetar, mira si hay un paquete de esa PC sin subir y ofrece subir **ése**. Re-empaquetar sigue disponible contestando que no: se muestra la opción barata primero, no se decide por el operador.
+
+### Fixed
+
+- **#43 — el menú se entera del resize sin esperar una tecla (`utils/ConsoleMenu.ps1`)**: maximizar la ventana con el menú abierto dejaba la barra de selección desalineada hasta que se apretaba algo.
+
+- **La subida podía reportar éxito sin haber subido nada (`modules/CrmUpload.ps1`)**: .NET sigue las redirecciones por su cuenta, así que si la ruta de subida quedara detrás del login de Cloudflare, el 302 se seguía hasta la pantalla de acceso — que contesta **200 con HTML** — y eso se tomaba como subida exitosa. Le habría dicho al operador *"el paquete ya está en el CRM"* sin que el paquete estuviera. Ahora no se siguen redirecciones y un 2xx **no alcanza**: hace falta que el servidor lo confirme con todas las letras. Verificado contra una ruta realmente protegida.
+
+### Security
+
+- **La llave de subida no viaja en el paquete ni en el repo.** Vive sólo en `output\state\` de la PC donde se configuró, y esa carpeta la borra el desinstalador. La dirección del CRM tampoco está en el código: se la pega el operador, así que este repo público no dice dónde vive el CRM de nadie.
+
 ## [2.5.0] - 2026-07-26
 
 Release: cierre del ciclo de bugs de campo. El `[L]` y el `[U]` dejan de duplicar el paquete, la clave de recuperación de BitLocker deja de morir con la desinstalación, el `[6]` deja de mezclar BSOD con apagones, y se enciende una tanda de código que estaba escrito y sin cablear (`[I]` informe técnico, submenú de Defender, Autoruns).
