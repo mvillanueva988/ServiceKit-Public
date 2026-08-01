@@ -3114,6 +3114,208 @@ Test-SmokeFunction 'ResearchPrompt' '#28: el prompt [R] lleva el modelo y NUNCA 
     }
 }
 
+# ─── #41: el bundle del [L] sube solo al CRM ──────────────────────────────────
+# La regla que estos tests protegen es UNA: esto nunca traba el cierre de un
+# service. Por eso casi todos afirman "no tiro y devolvio algo", no "funciono".
+
+Test-SmokeFunction 'CrmUpload' 'el codigo de conexion se parsea y se rechaza lo dudoso' {
+    $ok = ConvertFrom-CrmConnectionString -Text 'https://pctk-crm.ejemplo.workers.dev|UNTOKEN'
+    if (-not $ok.Ok) { throw ('un codigo valido fue rechazado: {0}' -f $ok.Error) }
+    if ($ok.Url -ne 'https://pctk-crm.ejemplo.workers.dev') { throw ('url mal parseada: {0}' -f $ok.Url) }
+    if ($ok.Token -ne 'UNTOKEN') { throw 'token mal parseado' }
+
+    # La barra de sobra se saca: si no, el endpoint queda con doble barra.
+    $conBarra = ConvertFrom-CrmConnectionString -Text 'https://x.dev/|T'
+    if ($conBarra.Url -ne 'https://x.dev') { throw ('no limpio la barra final: {0}' -f $conBarra.Url) }
+
+    # http NO: el token viaja en una cabecera y en la casa de un cliente el que
+    # esta en el medio puede ser cualquiera.
+    if ((ConvertFrom-CrmConnectionString -Text 'http://x.dev|T').Ok) { throw 'acepto http' }
+    if ((ConvertFrom-CrmConnectionString -Text 'https://x.dev').Ok)  { throw 'acepto un codigo sin token' }
+    if ((ConvertFrom-CrmConnectionString -Text 'https://x.dev|').Ok) { throw 'acepto token vacio' }
+    if ((ConvertFrom-CrmConnectionString -Text '').Ok)               { throw 'acepto vacio' }
+}
+
+Test-SmokeFunction 'CrmUpload' 'el id del bundle sale del nombre del ZIP y es estable' {
+    # Estable = reintentar sube el MISMO id y el CRM contesta "ya lo tenia" en vez
+    # de guardar una segunda copia. Con un id al azar, decir que no y subirlo
+    # despues dejaria dos bundles iguales.
+    [string] $a = Get-BundleUploadId -ZipPath 'C:\x\HOST_20260801-021500_cierre.zip'
+    [string] $b = Get-BundleUploadId -ZipPath 'C:\otra\ruta\HOST_20260801-021500_cierre.zip'
+    if ($a -ne $b) { throw 'el mismo nombre dio dos ids distintos' }
+    if ($a -ne 'HOST_20260801-021500_cierre') { throw ('id inesperado: {0}' -f $a) }
+
+    # Lo que el CRM descartaria de un id no puede quedar acá: si se fuera del
+    # lado del servidor, dos ZIP distintos podrian colapsar en el mismo id.
+    [string] $raro = Get-BundleUploadId -ZipPath 'C:\x\..\PC del cliente (1).zip'
+    if ($raro -match '[^A-Za-z0-9._-]') { throw ('quedaron caracteres que el CRM tira: {0}' -f $raro) }
+    if ($raro -match '\.\.')            { throw ('quedo un ".." adentro: {0}' -f $raro) }
+}
+
+Test-SmokeFunction 'CrmUpload' 'la config va y vuelve, y un JSON roto no tira' {
+    [string] $tmp = Join-Path $env:TEMP ('pctk-smoke-crm-{0}' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    try {
+        $null = New-Item -ItemType Directory -Path $tmp -Force
+
+        if ($null -ne (Get-CrmConfig -OutputRootOverride $tmp)) { throw 'devolvio config donde no hay nada' }
+
+        if (-not (Save-CrmConfig -Url 'https://x.dev' -Token 'TOK' -OutputRootOverride $tmp)) {
+            throw 'Save-CrmConfig dijo que no pudo guardar'
+        }
+        $leida = Get-CrmConfig -OutputRootOverride $tmp
+        if ($null -eq $leida)          { throw 'no releyo lo que acababa de guardar' }
+        if ($leida.Token -ne 'TOK')    { throw 'el token no sobrevivio la vuelta' }
+
+        # Un archivo corrupto tiene que dar $null y seguir, no tirar: si tirara,
+        # un crm.json roto impediria cerrar un service.
+        Set-Content -LiteralPath (Get-CrmConfigPath -OutputRootOverride $tmp) -Value '{ esto no es json' -Encoding UTF8
+        if ($null -ne (Get-CrmConfig -OutputRootOverride $tmp)) { throw 'un JSON roto paso como config valida' }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'CrmUpload' 'Send-BundleToCrm nunca tira: ni sin archivo ni sin servidor' {
+    $sinArchivo = Send-BundleToCrm -ZipPath 'C:\no\existe\nada.zip' -Url 'https://x.dev' -Token 'T'
+    if ($null -eq $sinArchivo)  { throw 'devolvio $null en vez de un resultado' }
+    if ($sinArchivo.Ok)         { throw 'dijo que subio un archivo que no existe' }
+
+    # Servidor inalcanzable (puerto 1 de loopback = conexion rechazada al toque).
+    # Es el caso de la PC de un cliente sin internet, que tiene que terminar en un
+    # aviso legible y no en una excepcion que corte el cierre del service.
+    [string] $zip = Join-Path $env:TEMP ('pctk-smoke-41-{0}.zip' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    try {
+        Set-Content -LiteralPath $zip -Value 'contenido de prueba' -Encoding ASCII
+        $sinRed = Send-BundleToCrm -ZipPath $zip -Url 'https://127.0.0.1:1' -Token 'T' -TimeoutSeconds 5
+        if ($null -eq $sinRed) { throw 'devolvio $null con el servidor caido' }
+        if ($sinRed.Ok)        { throw 'dijo que subio con el servidor caido' }
+        if ([string]::IsNullOrWhiteSpace($sinRed.Message)) { throw 'fallo sin decir por que' }
+    } finally {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'CrmUpload' 'un 200 con HTML NO cuenta como subido (falso exito)' {
+    # LA REGRESION QUE ESTE TEST CUIDA, cazada el 2026-08-01 probando contra el
+    # CRM real: .NET sigue las redirecciones solo. Si la ruta de subida quedara
+    # detras de Cloudflare Access, el 302 al login se seguiria hasta la pantalla
+    # de Cloudflare, que contesta 200 con HTML -- y la version anterior de esto
+    # tomaba cualquier 2xx como exito. O sea que le habria dicho al operador
+    # "el paquete ya esta en el CRM" sin haber subido nada. Decir que algo se
+    # guardo cuando no se guardo es peor que fallar: se descubre cuando vas a
+    # buscar el bundle y no esta.
+    $login = ConvertFrom-CrmRespuesta -Code 200 -Cuerpo '<html><body>Sign in with Google</body></html>'
+    if ($login.Confirmado) { throw 'una pantalla de login paso como subida exitosa' }
+
+    $vacio = ConvertFrom-CrmRespuesta -Code 200 -Cuerpo ''
+    if ($vacio.Confirmado) { throw 'una respuesta vacia paso como subida exitosa' }
+
+    $sinOk = ConvertFrom-CrmRespuesta -Code 200 -Cuerpo '{"algo":"otra cosa"}'
+    if ($sinOk.Confirmado) { throw 'un JSON sin ok paso como subida exitosa' }
+
+    $redir = ConvertFrom-CrmRespuesta -Code 302 -Cuerpo '{"ok":true}'
+    if ($redir.Confirmado) { throw 'un 302 paso como subida exitosa' }
+
+    # Y lo que SI tiene que pasar, con su detalle.
+    $bueno = ConvertFrom-CrmRespuesta -Code 201 -Cuerpo '{"ok":true,"clave":"bundles/2026/08/x.zip","duplicado":false}'
+    if (-not $bueno.Confirmado)                        { throw 'una subida buena no se reconocio' }
+    if ($bueno.Key -ne 'bundles/2026/08/x.zip')        { throw 'perdio la clave' }
+    if ($bueno.Duplicate)                              { throw 'marco duplicado una subida nueva' }
+
+    $rep = ConvertFrom-CrmRespuesta -Code 200 -Cuerpo '{"ok":true,"clave":"k","duplicado":true}'
+    if (-not $rep.Confirmado) { throw 'un reintento valido no se reconocio' }
+    if (-not $rep.Duplicate)  { throw 'no marco el reintento como duplicado' }
+}
+
+Test-SmokeFunction 'CrmUpload' 'el aviso de "quedo detras del login" se entiende' {
+    # El error mas confuso posible: parece del toolkit y es del servidor.
+    [string] $m = Get-CrmMensajeDeRespuestaRara -Code 302 -Cuerpo ''
+    if ($m -notmatch 'login')  { throw ('el mensaje no nombra el login: {0}' -f $m) }
+    if ($m -notmatch 'Access') { throw ('el mensaje no dice donde mirar: {0}' -f $m) }
+
+    # Si el CRM se tomo el trabajo de explicar el rechazo, gana su mensaje.
+    [string] $propio = Get-CrmMensajeDeRespuestaRara -Code 401 -Cuerpo '{"error":"Token de subida invalido o dado de baja."}'
+    if ($propio -ne 'Token de subida invalido o dado de baja.') { throw ('piso el mensaje del CRM: {0}' -f $propio) }
+}
+
+Test-SmokeFunction 'CrmUpload' 'decir que NO no intenta nada' {
+    [string] $zip = Join-Path $env:TEMP ('pctk-smoke-41-{0}.zip' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    try {
+        Set-Content -LiteralPath $zip -Value 'contenido' -Encoding ASCII
+        function Test-PctkInteractiveConsole { $true }
+        function Read-Host { param([string] $Prompt) 'n' }
+
+        $r = Invoke-CrmUploadOffer -ZipPath $zip
+        if ($r.Intentado) { throw 'intento subir despues de que el operador dijo que no' }
+    } finally {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'CrmUpload' 'en consola no interactiva se saltea sin preguntar' {
+    # Un Read-Host en un gate automatizado cuelga el proceso esperando a nadie.
+    [string] $zip = Join-Path $env:TEMP ('pctk-smoke-41-{0}.zip' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    try {
+        Set-Content -LiteralPath $zip -Value 'contenido' -Encoding ASCII
+        function Test-PctkInteractiveConsole { $false }
+        function Read-Host { param([string] $Prompt) throw 'pregunto en una consola no interactiva' }
+
+        $r = Invoke-CrmUploadOffer -ZipPath $zip
+        if ($r.Motivo -ne 'no-interactiva') { throw ('motivo inesperado: {0}' -f $r.Motivo) }
+    } finally {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'CrmUpload' 'el HANDLER del [L] ofrece subir y no desinstala nada' {
+    # Este es el test que importa: entra por Invoke-ServiceClose, el mismo camino
+    # que corre cuando el operador aprieta [L]. Probar Invoke-CrmUploadOffer suelta
+    # dejaria sin ejercitar el cableado, que es donde viven los bugs que llegan a
+    # produccion (leccion del [A][5] D de v2.3.0: helpers verdes, wiring roto).
+    # Se shadowea solo lo que MUTA: el cierre real y el desinstalador.
+    [string] $zip = Join-Path $env:TEMP ('pctk-smoke-41-{0}.zip' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    [string] $tmp = Join-Path $env:TEMP ('pctk-smoke-41r-{0}' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    try {
+        Set-Content -LiteralPath $zip -Value 'contenido' -Encoding ASCII
+        $null = New-Item -ItemType Directory -Path $tmp -Force
+
+        function Invoke-CloseService { [PSCustomObject]@{ Status = 'OK'; ZipPath = $zip } }
+        function Test-PctkInteractiveConsole { $true }
+        function Invoke-UninstallToolkit { throw 'el handler lanzo el DESINSTALADOR en el smoke' }
+        # 'S' a todo. Como codigo de conexion, 'S' es invalido -> avisa y vuelve
+        # SIN tocar la red. Despues 'S' a "dejar PCTk instalado" -> no desinstala.
+        function Read-Host { param([string] $Prompt) 'S' }
+
+        [bool] $r = Invoke-ServiceClose
+        if ($r) { throw 'Invoke-ServiceClose devolvio $true: habria cerrado PCTk para desinstalar' }
+
+        # Un codigo invalido no puede dejar configuracion escrita.
+        if (Test-Path -LiteralPath (Get-CrmConfigPath -OutputRootOverride $tmp)) {
+            throw 'guardo una conexion a partir de un codigo invalido'
+        }
+    } finally {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'CrmUpload' 'el [L] sigue cableado a la subida (no se desconecto sin querer)' {
+    # Chequeo por AST, no por texto: busca la llamada de verdad adentro de
+    # Invoke-ServiceClose. Si alguien saca esa linea, el [L] vuelve a dejar el ZIP
+    # en el Escritorio y nadie se entera hasta que Mateo lo note en un cliente.
+    [string] $routerPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'core\Router.ps1'
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($routerPath, [ref]$null, [ref]$null)
+    $fn = $ast.Find({ param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -eq 'Invoke-ServiceClose' }, $true)
+    if ($null -eq $fn) { throw 'no encontre Invoke-ServiceClose en Router.ps1' }
+
+    $llamada = $fn.Find({ param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'Invoke-CrmUploadOffer' }, $true)
+    if ($null -eq $llamada) { throw 'Invoke-ServiceClose ya no llama a Invoke-CrmUploadOffer' }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

@@ -219,6 +219,28 @@ function Invoke-ServiceClose {
     # Ofrecer desinstalar ahi seria ofrecer perder el service.
     if ($status -ne 'OK') { return $false }
 
+    # Backlog #41: ofrecer subir el paquete al CRM antes de preguntar por la
+    # desinstalacion. El orden importa -- si se preguntara despues, el operador
+    # que dice "no dejes PCTk instalado" se llevaria la PC sin la chance de subir,
+    # y la configuracion del CRM vive en output\state\, que el [U] borra.
+    #
+    # POR QUE ACA Y NO ADENTRO DE Invoke-CloseService: por lo mismo que la
+    # pregunta de la desinstalacion (ver el SYNOPSIS). El [U] llama a
+    # Invoke-CloseService para armar su paquete; si la subida viviera ahi,
+    # preguntaria en medio de una desinstalacion.
+    #
+    # Todo lo que puede salir mal adentro es un aviso, nunca un throw: el ZIP ya
+    # esta hecho y el cierre del service no se negocia por un problema de red.
+    if (Get-Command -Name 'Invoke-CrmUploadOffer' -CommandType Function -ErrorAction SilentlyContinue) {
+        [string] $zipPath = ''
+        if ($null -ne $result -and $null -ne $result.PSObject.Properties['ZipPath']) {
+            $zipPath = [string]$result.ZipPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($zipPath)) {
+            $null = Invoke-CrmUploadOffer -ZipPath $zipPath
+        }
+    }
+
     Write-Host ''
     Write-PctkHint '  El paquete ya esta hecho. Podes dejar la PC del cliente limpia ahora.'
     [string] $ans = (Read-Host '  Dejar PCTk instalado en esta PC? [S/n]').Trim().ToUpperInvariant()
