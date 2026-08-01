@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 
 param(
     [string] $Version    = '',
@@ -84,12 +84,19 @@ Write-Host "      $shaPath" -ForegroundColor DarkGray
 # entrena a ignorar la verificacion.
 # Medido en v2.4.0: working tree 4A8C5F... vs blob servido 8D138E... (181 bytes de
 # diferencia = los 181 CR). Normalizar a LF reproduce EXACTO lo que sirve GitHub.
+#
+# 2026-08-01: el hash se calculaba bien y se IMPRIMIA para pegarlo a mano en las
+# notas. Eso dependia de que el operador se acordara, y en v2.6.0 no pasó: las
+# notas salieron sin ningun SHA-256 mientras el README manda a compararlo contra
+# ellas. Lo cazó el pre-flight (T7). Un paso manual que hay que recordar en cada
+# release no es un procedimiento, es una deuda: ahora el hash se EMBEBE en las
+# notas y el paso desaparece.
+[string] $launchSha = ''
 [string] $launchPs1 = Join-Path $PSScriptRoot 'Launch.ps1'
 if (Test-Path $launchPs1) {
     [byte[]] $launchBytes = [System.IO.File]::ReadAllBytes($launchPs1)
     [byte[]] $launchLf    = @($launchBytes | Where-Object { $_ -ne 13 })
 
-    [string] $launchSha = ''
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
         $launchSha = ([BitConverter]::ToString($sha256.ComputeHash($launchLf)) -replace '-', '').ToUpperInvariant()
@@ -134,12 +141,40 @@ if ($Publish) {
         Accept        = 'application/vnd.github+json'
     }
 
+    # Notas de la release: llevan los hashes ADENTRO.
+    #
+    # El README manda a comparar el SHA-256 de Launch.ps1 "contra el valor
+    # publicado en las release notes". Si las notas no lo traen, ese paso del
+    # README apunta a la nada y el usuario que quiso verificar se queda sin poder.
+    # Publicar un hash equivocado entrena a ignorar la verificacion (leccion de
+    # #38); no publicar ninguno la vuelve imposible, que es igual de malo.
+    [string[]] $notas = @("Release $Version", '')
+    if (-not [string]::IsNullOrWhiteSpace($launchSha)) {
+        $notas += @(
+            '## Verificacion de integridad',
+            '',
+            'SHA-256 de `Launch.ps1` (lo que sirve raw.githubusercontent.com, el archivo del one-liner):',
+            '',
+            '```',
+            $launchSha,
+            '```',
+            ''
+        )
+    }
+    $notas += @(
+        "SHA-256 de ``$zipName``:",
+        '',
+        '```',
+        $zipSha256,
+        '```'
+    )
+
     # Crear release
     Write-Host "  Creando release v$Version en GitHub..." -ForegroundColor Cyan
     [hashtable] $body = @{
         tag_name         = "v$Version"
         name             = "v$Version"
-        body             = "Release $Version"
+        body             = ($notas -join "`n")
         draft            = $false
         prerelease       = $false
     }
