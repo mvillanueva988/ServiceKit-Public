@@ -3047,6 +3047,122 @@ Test-SmokeFunction 'Router' 'Huerfanas cableadas: Autoruns, exclusiones dev, gra
 #  v2.5.0 - unificacion [L]/[U] + #40 claves BitLocker + remate #28
 # ═══════════════════════════════════════════════════════════════════════════════
 
+Test-SmokeFunction 'ServiceState' 'el bundle se lleva la comparacion COMPLETA, no solo el puntaje' {
+    # Compare-Snapshot arma la lista de mejoras en criollo. Hasta v2.7.0 se
+    # corria, se tomaba SOLO el numero para el meta y la lista se tiraba -- asi
+    # que del otro lado (el CRM) no habia con que armar el cajon "lo que mejoro"
+    # y habria habido que RECALCULARLO en otro lenguaje. Dos definiciones de lo
+    # mismo divergiendo en silencio, que es lo que ya paso con los mutex.
+    #
+    # Entra por Invoke-CloseService, el handler que corre cuando se aprieta [L].
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot  = Join-Path $env:TEMP ('pctk-cmp-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest  = Join-Path $env:TEMP ('pctk-cmpd-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpRoot 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-08-07.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Start-TelemetryJob { param([string]$Phase); return $null }
+        function Invoke-JobWithProgress { param([object[]]$Jobs, [string]$Activity, [int]$TimeoutSeconds); return @() }
+        function Compare-Snapshot {
+            [PSCustomObject]@{
+                Score        = 2
+                ScoreMax     = 6
+                Improvements = @('Espacio liberado: 12,4 GB', 'Programas de inicio removidos: 3')
+                TotalFreedGb = 12.4
+            }
+        }
+
+        $r = Invoke-CloseService -OutputRootOverride $tmpRoot -DestDirOverride $tmpDest `
+                                 -TimestampOverride '20260807-100000'
+        if ($r.Status -ne 'OK') { throw ('esperaba Status OK; got {0}' -f $r.Status) }
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [string] $contenido = ''
+        [bool]   $tieneCompare = $false
+        $za = [System.IO.Compression.ZipFile]::OpenRead($r.ZipPath)
+        try {
+            foreach ($e in $za.Entries) {
+                if ($e.FullName -match 'compare\.json$') {
+                    $tieneCompare = $true
+                    $sr = New-Object System.IO.StreamReader($e.Open())
+                    try { $contenido = $sr.ReadToEnd() } finally { $sr.Dispose() }
+                }
+            }
+        } finally { $za.Dispose() }
+
+        if (-not $tieneCompare) { throw 'el ZIP no lleva compare.json: la lista de mejoras se sigue tirando' }
+        if ($contenido -notmatch 'Espacio liberado') {
+            throw 'compare.json no trae las mejoras en criollo, que es el punto'
+        }
+        # Y que sea JSON de verdad, no texto que parece.
+        $obj = $contenido | ConvertFrom-Json
+        if ($obj.Score -ne 2) { throw ('el Score no viajo bien; got {0}' -f $obj.Score) }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'sin comparacion NO se escribe un compare.json vacio' {
+    # Un diagnostico sin cierre no tiene antes/despues. Escribir el archivo igual
+    # se leeria del otro lado como "no mejoro nada", que es distinto de "no habia
+    # con que comparar". Es el caso de Guille Voss (03/08): compare_score N/A.
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot  = Join-Path $env:TEMP ('pctk-cmpn-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest  = Join-Path $env:TEMP ('pctk-cmpnd-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpRoot 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-08-07.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Start-TelemetryJob { param([string]$Phase); return $null }
+        function Invoke-JobWithProgress { param([object[]]$Jobs, [string]$Activity, [int]$TimeoutSeconds); return @() }
+        function Compare-Snapshot { return $null }
+
+        $r = Invoke-CloseService -OutputRootOverride $tmpRoot -DestDirOverride $tmpDest `
+                                 -TimestampOverride '20260807-110000'
+        if ($r.Status -ne 'OK') { throw ('esperaba Status OK; got {0}' -f $r.Status) }
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [bool] $tieneCompare = $false
+        $za = [System.IO.Compression.ZipFile]::OpenRead($r.ZipPath)
+        try { foreach ($e in $za.Entries) { if ($e.FullName -match 'compare\.json$') { $tieneCompare = $true } } }
+        finally { $za.Dispose() }
+
+        if ($tieneCompare) { throw 'sin comparacion no tendria que haber compare.json' }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'ServiceState' 'si la comparacion falla, el cierre NO se cae' {
+    # Nunca traba el cierre de un service: es la misma regla que la subida al CRM.
+    # Sin esto el bundle sale igual, sin el detalle.
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpRoot  = Join-Path $env:TEMP ('pctk-cmpf-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest  = Join-Path $env:TEMP ('pctk-cmpfd-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $auditDir = Join-Path $tmpRoot 'audit'
+    New-Item -Path $auditDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest  -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $auditDir '2026-08-07.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Start-TelemetryJob { param([string]$Phase); return $null }
+        function Invoke-JobWithProgress { param([object[]]$Jobs, [string]$Activity, [int]$TimeoutSeconds); return @() }
+        function Compare-Snapshot { throw 'la comparacion se rompio (simulado)' }
+
+        $r = Invoke-CloseService -OutputRootOverride $tmpRoot -DestDirOverride $tmpDest `
+                                 -TimestampOverride '20260807-120000'
+        if ($r.Status -ne 'OK') { throw ('el cierre se cayo por la comparacion; Status={0}' -f $r.Status) }
+        if (-not (Test-Path -LiteralPath $r.ZipPath)) { throw 'no quedo el ZIP' }
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Test-SmokeFunction 'ServiceState' 'Marcador de bundle: round-trip, otro host no cuenta, JSON roto no tira' {
     $ErrorActionPreference = 'Stop'
     [string] $tmpRoot = Join-Path $env:TEMP ('pctk-lb-' + [System.Guid]::NewGuid().ToString('N'))

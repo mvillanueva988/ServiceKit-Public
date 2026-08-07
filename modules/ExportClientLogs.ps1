@@ -383,6 +383,50 @@ function Invoke-CloseService {
         $metaTmpPath = $null
     }
 
+    # ── Paso 3b: guardar la comparacion COMPLETA, no solo su puntaje ─────────
+    # Compare-Snapshot arma la lista de mejoras en criollo ("Espacio liberado:
+    # 12,4 GB", "Programas de inicio removidos: 3") mas el puntaje sobre 6 areas.
+    # Hasta aca se corria, se tomaba SOLO el numero para el meta y la lista se
+    # tiraba -- asi que del otro lado, en el CRM, no habia con que armar el cajon
+    # "lo que mejoro" y habria habido que RECALCULARLO en TypeScript.
+    #
+    # Eso serian DOS definiciones de "que mejoro", en dos lenguajes, divergiendo
+    # en silencio. La comparacion se decide en UN solo lugar -- aca, que es donde
+    # ya estaba -- y viaja escrita.
+    #
+    # Si no hay PRE y POST no se escribe nada: un diagnostico sin cierre no tiene
+    # comparacion, y un archivo vacio se leeria como "no mejoro nada", que es
+    # distinto de "no habia con que comparar".
+    [string] $comparePath = $null
+    try {
+        if (Get-Command -Name 'Compare-Snapshot' -CommandType Function -ErrorAction SilentlyContinue) {
+            [object] $cmpObj = Compare-Snapshot
+            if ($null -ne $cmpObj) {
+                [string] $stateDir2 = Join-Path $outputRoot 'state'
+                if (-not (Test-Path -LiteralPath $stateDir2 -PathType Container)) {
+                    $null = New-Item -ItemType Directory -Path $stateDir2 -Force -ErrorAction Stop
+                }
+                $comparePath = Join-Path $stateDir2 'compare.json'
+                # Depth 5: VolumeDiff es una lista de objetos y es lo mas anidado.
+                ($cmpObj | ConvertTo-Json -Depth 5) | Out-File -FilePath $comparePath -Encoding UTF8 -ErrorAction Stop
+                $null = Get-Content -LiteralPath $comparePath -Raw -Encoding UTF8 | ConvertFrom-Json
+                Write-PctkOk '  [OK] Comparacion antes/despues guardada.'
+            }
+        }
+    } catch {
+        # Nunca traba el cierre: sin esto el bundle sale igual, sin el detalle.
+        #
+        # Y NO se avisa cuando la razon es que no hay snapshots: un diagnostico
+        # sin cierre no tiene antes/despues, eso es lo NORMAL y no un problema.
+        # Gritarlo en pantalla seria ruido justo cuando el operador esta con el
+        # cliente delante, y ruido repetido es como se aprende a ignorar los
+        # avisos que si importan.
+        if ($_.Exception.Message -notmatch '(?i)snapshot') {
+            Write-PctkWarn ('  [!] No se pudo guardar la comparacion: {0}' -f $_.Exception.Message)
+        }
+        $comparePath = $null
+    }
+
     # ── Paso 4: incluir clients/ si existe (run-dir de [1] si se uso) ────────
     [string] $clientsDir = Join-Path $outputRoot 'clients'
     [string] $clientsDirOk = ''
@@ -421,6 +465,9 @@ function Invoke-CloseService {
     [object[]] $extras = @()
     if (-not [string]::IsNullOrEmpty($metaTmpPath) -and (Test-Path -LiteralPath $metaTmpPath)) {
         $extras += $metaTmpPath
+    }
+    if (-not [string]::IsNullOrEmpty($comparePath) -and (Test-Path -LiteralPath $comparePath)) {
+        $extras += $comparePath
     }
     if (-not [string]::IsNullOrEmpty($clientsDirOk)) {
         $extras += $clientsDirOk
