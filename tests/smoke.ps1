@@ -588,6 +588,129 @@ Test-SmokeFunction 'Telemetry' 'Snapshot has IsVirtualMachine field' {
     }
 }
 
+# ─── #37: salud de bateria ────────────────────────────────────────────────────
+# Win32_Battery devuelve DesignCapacity y FullChargeCapacity VACIAS en la mayoria
+# de las notebooks (limitacion de esa clase WMI, no bug de PCTk), asi que la fila
+# "Salud" del reporte [8] no salia nunca. Get-BatteryHealth encadena
+# root\wmi -> powercfg /XML -> Win32_Battery.
+
+Test-SmokeFunction 'Telemetry' '#37 _BatteryPercent: calculo normal' {
+    # Medido en HW real (notebook de Mateo, 2026-08-07): 35380/45000 = 78.6%.
+    $r = _BatteryPercent -Designed 45000 -Charged 35380
+    if ($r -ne 78.6) { throw ('esperaba 78.6; got {0}' -f $r) }
+}
+
+Test-SmokeFunction 'Telemetry' '#37 _BatteryPercent: sin dato da null, NUNCA un numero' {
+    # El guardrail de #37: si no hay dato, la fila se omite. Jamas un 100% por
+    # defecto ni un numero inventado. El caso 'strings vacios' es literalmente lo
+    # que devuelve Win32_Battery en la notebook de Mateo.
+    foreach ($caso in @(
+        @{ D = $null; C = 35380; Que = 'diseno null' },
+        @{ D = 45000; C = $null; Que = 'carga null' },
+        @{ D = 0;     C = 35380; Que = 'diseno cero' },
+        @{ D = 45000; C = 0;     Que = 'carga cero' },
+        @{ D = '';    C = '';    Que = 'strings vacios (lo que da Win32_Battery)' },
+        @{ D = 'ab';  C = 'cd';  Que = 'no numerico' },
+        @{ D = 100;   C = 900;   Que = 'ratio absurdo: unidades que no cierran' }
+    )) {
+        $r = _BatteryPercent -Designed $caso.D -Charged $caso.C
+        if ($null -ne $r) { throw ('{0}: esperaba null; got {1}' -f $caso.Que, $r) }
+    }
+}
+
+Test-SmokeFunction 'Telemetry' '#37 _BatteryPercent: bateria nueva se acota a 100' {
+    # Una bateria que carga MAS que su diseno esta sana al 100%. Un "103%" en el
+    # reporte del cliente se lee como error del toolkit.
+    $r = _BatteryPercent -Designed 45000 -Charged 46500
+    if ($r -ne 100) { throw ('esperaba 100; got {0}' -f $r) }
+}
+
+Test-SmokeFunction 'Telemetry' '#37 Get-BatteryHealth: shape o null, bajo EAP=Stop' {
+    # EAP=Stop espeja main.ps1. powercfg es exe NATIVO y ahi su stderr es
+    # TERMINANTE (ver CLAUDE.md); si la neutralizacion local se cae, esto lo caza.
+    # En desktop o Sandbox no hay bateria: $null es una respuesta valida.
+    $ErrorActionPreference = 'Stop'
+    [object] $h = Get-BatteryHealth -TimeoutSeconds 2
+    if ($null -eq $h) { return }
+
+    foreach ($campo in @('Percent', 'Source', 'DesignedMwh', 'FullChargedMwh', 'CycleCount')) {
+        if ($null -eq $h.PSObject.Properties[$campo]) { throw ('falta el campo {0}' -f $campo) }
+    }
+    if ($h.Percent -le 0 -or $h.Percent -gt 100) { throw ('Percent fuera de rango: {0}' -f $h.Percent) }
+    if ($h.Source -notin @('root\wmi', 'powercfg', 'Win32_Battery')) {
+        throw ('Source desconocido: {0}' -f $h.Source)
+    }
+}
+
+Test-SmokeFunction 'Telemetry' '#37 el snapshot expone HealthSource y CycleCount' {
+    if ($null -eq $script:_snapshotResult) { throw 'Snapshot no disponible (test previo fallo)' }
+    [object] $bat = $script:_snapshotResult.Battery
+    if ($null -eq $bat) { return }   # desktop sin bateria: valido
+
+    foreach ($campo in @('ChargePercent', 'HealthPercent', 'HealthSource', 'CycleCount', 'Status')) {
+        if ($null -eq $bat.PSObject.Properties[$campo]) {
+            throw ('falta el campo {0} en Battery' -f $campo)
+        }
+    }
+}
+
+Test-SmokeFunction 'RawAudit' '#37 snapshot VIEJO (sin los campos nuevos) no rompe bajo StrictMode' {
+    # Pasa de verdad: el toolkit se actualiza entre el PRE y el POST de un mismo
+    # service, o se abre un snapshot guardado hace semanas. Ese Battery tiene
+    # SOLO 3 campos, y leer HealthSource/CycleCount directo sobre el bajo
+    # StrictMode tira PropertyNotFoundStrict. Se ejercita el HANDLER que arma el
+    # informe, no la lectura suelta de la propiedad.
+    $ErrorActionPreference = 'Stop'
+    if ($null -eq $script:_snapshotResult) { $script:_snapshotResult = Get-SystemSnapshot -Phase Pre }
+
+    [PSCustomObject] $viejo = $script:_snapshotResult.PSObject.Copy()
+    $viejo.Battery = [PSCustomObject]@{
+        ChargePercent = 59
+        HealthPercent = $null
+        Status        = 'AC'
+    }
+
+    [object] $r = New-RawAuditReport -Snapshot $viejo
+    try {
+        if (-not $r.Success) { throw 'New-RawAuditReport fallo con un snapshot viejo' }
+        [string] $body = Get-Content -LiteralPath $r.FilePath -Raw
+        if ($body -notmatch 'Charge %')  { throw 'no renderizo la seccion BATTERY' }
+        if ($body -match 'Health src')   { throw 'inventó "Health src" en un snapshot que no lo trae' }
+        if ($body -match 'Ciclos')       { throw 'inventó "Ciclos" en un snapshot que no lo trae' }
+    } finally {
+        if ($r.FilePath -and (Test-Path -LiteralPath $r.FilePath)) {
+            Remove-Item -LiteralPath $r.FilePath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Test-SmokeFunction 'RawAudit' '#37 snapshot NUEVO muestra la fuente y los ciclos' {
+    $ErrorActionPreference = 'Stop'
+    if ($null -eq $script:_snapshotResult) { $script:_snapshotResult = Get-SystemSnapshot -Phase Pre }
+
+    [PSCustomObject] $nuevo = $script:_snapshotResult.PSObject.Copy()
+    $nuevo.Battery = [PSCustomObject]@{
+        ChargePercent = 99
+        HealthPercent = 78.6
+        HealthSource  = 'powercfg'
+        CycleCount    = 817
+        Status        = 'AC'
+    }
+
+    [object] $r = New-RawAuditReport -Snapshot $nuevo
+    try {
+        if (-not $r.Success) { throw 'New-RawAuditReport fallo con un snapshot nuevo' }
+        [string] $body = Get-Content -LiteralPath $r.FilePath -Raw
+        if ($body -notmatch '78[.,]6')  { throw 'no renderizo la salud (78.6)' }
+        if ($body -notmatch 'powercfg') { throw 'no renderizo la fuente del dato' }
+        if ($body -notmatch '817')      { throw 'no renderizo los ciclos' }
+    } finally {
+        if ($r.FilePath -and (Test-Path -LiteralPath $r.FilePath)) {
+            Remove-Item -LiteralPath $r.FilePath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Test-SmokeFunction 'ToolkitSupport' 'Get-WindowsUpdateStatus' {
     Get-WindowsUpdateStatus -IsLtsc $false
 }

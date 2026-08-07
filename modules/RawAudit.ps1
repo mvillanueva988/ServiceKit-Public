@@ -158,6 +158,18 @@ function New-RawAuditReport {
         _Kv 'Charge %' $Snapshot.Battery.ChargePercent
         _Kv 'Health %' $Snapshot.Battery.HealthPercent
         _Kv 'Status'   $Snapshot.Battery.Status
+
+        # Campos agregados en #37: un snapshot PRE guardado por una version
+        # anterior NO los tiene, y bajo StrictMode leerlos directo tira
+        # PropertyNotFoundStrict. Se preguntan por PSObject.Properties.
+        # Probado por mutacion: con la lectura ingenua, el test se pone rojo.
+        [object] $batProps = $Snapshot.Battery.PSObject.Properties
+        if ($null -ne $batProps['HealthSource'] -and $null -ne $batProps['HealthSource'].Value) {
+            _Kv 'Health src' $batProps['HealthSource'].Value
+        }
+        if ($null -ne $batProps['CycleCount'] -and $null -ne $batProps['CycleCount'].Value) {
+            _Kv 'Ciclos'     $batProps['CycleCount'].Value
+        }
     }
 
     # ── Network: adapters + DNS ──────────────────────────────────────────────

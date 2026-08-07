@@ -149,6 +149,219 @@ function Test-IsVirtualMachine {
     }
 }
 
+# ─── Get-BatteryHealth ────────────────────────────────────────────────────────
+# Helpers internos (T-N1): DEBEN vivir en Telemetry.ps1 porque el runspace del
+# job de telemetría solo dot-sourcea este archivo. NO mover a ToolkitSupport.
+
+function _BatteryProp {
+    <#
+    .SYNOPSIS
+        Lee una propiedad que puede no existir, sin romper bajo StrictMode.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object] $Instance,
+        [Parameter(Mandatory)] [string] $Name
+    )
+
+    if ($null -eq $Instance) { return $null }
+    [object] $prop = $Instance.PSObject.Properties[$Name]
+    if ($null -eq $prop) { return $null }
+    return $prop.Value
+}
+
+function _BatteryPercent {
+    <#
+    .SYNOPSIS
+        Convierte capacidades (diseño / actual) en un porcentaje de salud, o
+        $null si el par no da un dato creíble.
+    .NOTES
+        El resultado se ACOTA a 100. Una batería que carga más que su capacidad
+        de diseño (pasa con las nuevas) está sana al 100%, y un "103%" en el
+        reporte del cliente se lee como error del toolkit. Acotar un dato real
+        no es lo mismo que inventar uno que falta: si no hay dato, esto
+        devuelve $null y la fila se omite.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object] $Designed,
+        [Parameter()] [object] $Charged
+    )
+
+    if ($null -eq $Designed -or $null -eq $Charged) { return $null }
+
+    [double] $d = 0
+    [double] $c = 0
+    if (-not [double]::TryParse([string]$Designed, [ref] $d)) { return $null }
+    if (-not [double]::TryParse([string]$Charged,  [ref] $c)) { return $null }
+    if ($d -le 0 -or $c -le 0) { return $null }
+
+    [double] $pct = ($c / $d) * 100
+    if ($pct -gt 200) { return $null }   # basura evidente: unidades que no cierran
+    if ($pct -gt 100) { $pct = 100 }
+    return [double] [math]::Round($pct, 1)
+}
+
+function Get-BatteryHealth {
+    <#
+    .SYNOPSIS
+        Salud real de la batería (%), con las capacidades que la sustentan.
+        Devuelve $null cuando no hay dato confiable — NUNCA un número inventado.
+    .DESCRIPTION
+        Win32_Battery expone DesignCapacity y FullChargeCapacity VACÍAS en la
+        mayoría de las notebooks (limitación conocida de esa clase WMI, no un
+        bug de PCTk), así que la fila "Salud" del reporte [8] no salía nunca.
+        Medido en la notebook de Mateo el 2026-08-07: las dos propiedades
+        vienen vacías con la batería sana al 78,6%.
+
+        Fuentes encadenadas, en orden:
+
+          1. root\wmi — BatteryStaticData.DesignedCapacity emparejada con
+             BatteryFullChargedCapacity.FullChargedCapacity por InstanceName.
+             Es de donde lee powercfg.
+             OJO, medido: las dos clases NO tienen los mismos permisos.
+             BatteryFullChargedCapacity responde SIN elevar; BatteryStaticData
+             exige elevación ("Error genérico" sin ella). PCTk corre elevado,
+             pero por eso hace falta la fuente 2.
+
+          2. powercfg /batteryreport /XML — anda SIN elevación y trae las dos
+             capacidades más CycleCount. El /XML es lo que la hace confiable:
+             sin él habría que parsear texto localizado, que es lo que volvía
+             "frágil" a esta vía. Medida: 176 ms.
+
+          3. Win32_Battery — la vía histórica, por si algún equipo sí la llena.
+
+        Las fuentes 1 y 2 se validaron cruzadas en HW real: las dos dieron
+        FullCharged = 35.380 mWh sobre un diseño de 45.000 mWh.
+    .OUTPUTS
+        [PSCustomObject] @{ Percent; Source; DesignedMwh; FullChargedMwh; CycleCount }
+        o $null si ninguna fuente dio un dato creíble.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [int] $TimeoutSeconds = 2
+    )
+
+    # ── Fuente 1: root\wmi ────────────────────────────────────────────────────
+    [object[]] $staticData = @()
+    [object[]] $fullData   = @()
+
+    try {
+        $staticData = @(Get-CimInstance -Namespace 'root\wmi' -ClassName 'BatteryStaticData' `
+            -OperationTimeoutSec $TimeoutSeconds -ErrorAction Stop)
+    } catch { $staticData = @() }
+
+    try {
+        $fullData = @(Get-CimInstance -Namespace 'root\wmi' -ClassName 'BatteryFullChargedCapacity' `
+            -OperationTimeoutSec $TimeoutSeconds -ErrorAction Stop)
+    } catch { $fullData = @() }
+
+    foreach ($sd in $staticData) {
+        [object] $designed = _BatteryProp -Instance $sd -Name 'DesignedCapacity'
+        if ($null -eq $designed) { continue }
+
+        [string] $inst = [string] (_BatteryProp -Instance $sd -Name 'InstanceName')
+
+        foreach ($fd in $fullData) {
+            [string] $fdInst = [string] (_BatteryProp -Instance $fd -Name 'InstanceName')
+            if ($fdInst -ne $inst) { continue }
+
+            [object] $charged = _BatteryProp -Instance $fd -Name 'FullChargedCapacity'
+            [object] $pct     = _BatteryPercent -Designed $designed -Charged $charged
+            if ($null -eq $pct) { continue }
+
+            return [PSCustomObject]@{
+                Percent        = [double] $pct
+                Source         = 'root\wmi'
+                DesignedMwh    = [int] $designed
+                FullChargedMwh = [int] $charged
+                CycleCount     = $null
+            }
+        }
+    }
+
+    # ── Fuente 2: powercfg /batteryreport /XML ────────────────────────────────
+    # powercfg es un exe NATIVO y main.ps1 corre con $ErrorActionPreference =
+    # 'Stop', donde cualquier escritura suya a stderr se vuelve un
+    # NativeCommandError TERMINANTE — y el redirect NO salva (2>&1 y 2>$null
+    # tiran igual). Por eso la invocación va adentro de Invoke-WithTimeout, que
+    # la corre en un runspace propio con EAP='Continue' explícito.
+    # Ver CLAUDE.md, "powercfg / exe nativo + EAP=Stop = crash".
+    [string] $xmlPath = Join-Path $env:TEMP ('pctk-bat-' + [System.IO.Path]::GetRandomFileName() + '.xml')
+    try {
+        [object] $run = Invoke-WithTimeout -TimeoutSeconds ($TimeoutSeconds * 3) `
+            -ArgumentList @($xmlPath) -ScriptBlock {
+                param([string] $Path)
+                $ErrorActionPreference = 'Continue'
+                & powercfg /batteryreport /XML /OUTPUT $Path 2>&1 | Out-Null
+                return $LASTEXITCODE
+            }
+
+        if ($run.Ok -and (Test-Path -LiteralPath $xmlPath)) {
+            [xml] $doc = Get-Content -LiteralPath $xmlPath -Raw -ErrorAction Stop
+
+            [object[]] $batteries = @()
+            try { $batteries = @($doc.BatteryReport.Batteries.Battery) } catch { $batteries = @() }
+
+            foreach ($b in $batteries) {
+                if ($null -eq $b) { continue }
+
+                [object] $designed = _BatteryProp -Instance $b -Name 'DesignCapacity'
+                [object] $charged  = _BatteryProp -Instance $b -Name 'FullChargeCapacity'
+                [object] $pct      = _BatteryPercent -Designed $designed -Charged $charged
+                if ($null -eq $pct) { continue }
+
+                [object] $cycles    = _BatteryProp -Instance $b -Name 'CycleCount'
+                [object] $cycleOut  = $null
+                [int]    $cycleTmp  = 0
+                if ($null -ne $cycles -and [int]::TryParse([string]$cycles, [ref] $cycleTmp) -and $cycleTmp -gt 0) {
+                    $cycleOut = $cycleTmp
+                }
+
+                return [PSCustomObject]@{
+                    Percent        = [double] $pct
+                    Source         = 'powercfg'
+                    DesignedMwh    = [int] $designed
+                    FullChargedMwh = [int] $charged
+                    CycleCount     = $cycleOut
+                }
+            }
+        }
+    } catch {
+        # Sin dato por esta vía; se sigue a la fuente 3.
+    } finally {
+        if (Test-Path -LiteralPath $xmlPath) {
+            Remove-Item -LiteralPath $xmlPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # ── Fuente 3: Win32_Battery (la vía histórica) ────────────────────────────
+    try {
+        [object[]] $w32 = @(Get-CimInstance -ClassName Win32_Battery `
+            -OperationTimeoutSec $TimeoutSeconds -ErrorAction Stop)
+
+        foreach ($b in $w32) {
+            [object] $designed = _BatteryProp -Instance $b -Name 'DesignCapacity'
+            [object] $charged  = _BatteryProp -Instance $b -Name 'FullChargeCapacity'
+            [object] $pct      = _BatteryPercent -Designed $designed -Charged $charged
+            if ($null -eq $pct) { continue }
+
+            return [PSCustomObject]@{
+                Percent        = [double] $pct
+                Source         = 'Win32_Battery'
+                DesignedMwh    = [int] $designed
+                FullChargedMwh = [int] $charged
+                CycleCount     = $null
+            }
+        }
+    } catch {
+        # Sin dato por ninguna vía.
+    }
+
+    return $null
+}
+
 # ─── Get-SystemSnapshot ───────────────────────────────────────────────────────
 function Get-SystemSnapshot {
     <#
@@ -412,14 +625,28 @@ function Get-SystemSnapshot {
     if (-not $isVM -and $chassisType -in @(8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32)) {
         try {
             $sw.Restart()
-            [object] $bat = Get-CimInstance -ClassName Win32_Battery -OperationTimeoutSec 2 -ErrorAction Stop
+            # [object[]] + indexado: con DOS baterias (ThinkPad con interna +
+            # externa) Get-CimInstance devuelve un ARRAY, y el cast [int] de
+            # EstimatedChargeRemaining sobre un array revienta.
+            [object[]] $batAll = @(Get-CimInstance -ClassName Win32_Battery -OperationTimeoutSec 2 -ErrorAction Stop)
             $qt['Win32_Battery'] = [int] $sw.ElapsedMilliseconds
+
+            [object] $bat = $null
+            if ($batAll.Count -gt 0) { $bat = $batAll[0] }
+
             if ($bat) {
+                # La salud NO sale de Win32_Battery: esa clase devuelve las
+                # capacidades vacias en la mayoria de las notebooks. Ver
+                # Get-BatteryHealth (root\wmi -> powercfg -> Win32_Battery).
+                $sw.Restart()
+                [object] $health = Get-BatteryHealth -TimeoutSeconds 2
+                $qt['BatteryHealth'] = [int] $sw.ElapsedMilliseconds
+
                 $battery = [PSCustomObject]@{
                     ChargePercent = [int] $bat.EstimatedChargeRemaining
-                    HealthPercent = if ($bat.DesignCapacity -gt 0) {
-                        [double] [math]::Round(($bat.FullChargeCapacity / $bat.DesignCapacity) * 100, 1)
-                    } else { $null }
+                    HealthPercent = $(if ($null -ne $health) { $health.Percent }    else { $null })
+                    HealthSource  = $(if ($null -ne $health) { $health.Source }     else { $null })
+                    CycleCount    = $(if ($null -ne $health) { $health.CycleCount } else { $null })
                     Status        = [string] $(switch ($bat.BatteryStatus) {
                         1 { 'Discharging' }  2 { 'AC' }  3 { 'FullyCharged' }
                         4 { 'Low' }          5 { 'Critical' }  default { 'Unknown' }
