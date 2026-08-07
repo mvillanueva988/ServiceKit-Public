@@ -109,6 +109,33 @@ function Test-SmokeFunction {
     })
 }
 
+function Get-CoreSourceText {
+    <#
+    .SYNOPSIS
+        El texto de TODA la capa core\, concatenado, para los guards estructurales.
+    .DESCRIPTION
+        #26-B: varios tests leian 'core\Router.ps1' por path para verificar que el
+        Router llama a tal funcion o que no usa tal patron. Cuando los handlers
+        salieron a core\ActionHandlers.ps1 esos guards se rompieron -- y uno de
+        ellos habria quedado VERDE POR VACUIDAD, que es peor: seguia mirando un
+        archivo del que el codigo ya se habia ido.
+
+        Un guard estructural atado a UN path deja de guardar en cuanto el codigo
+        se muda de archivo. Preguntandole a la carpeta entera, el proximo split
+        no lo rompe ni lo vacia.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    [string] $coreDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'core'
+    [System.Collections.Generic.List[string]] $partes = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in @(Get-ChildItem -LiteralPath $coreDir -Filter '*.ps1' -File | Sort-Object -Property Name)) {
+        [void] $partes.Add((Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8))
+    }
+    return ($partes -join "`r`n")
+}
+
 # ─── static checks ────────────────────────────────────────────────────────────
 Test-SmokeFunction 'StaticCheck' 'BomRegression' { Test-BomRegression }
 
@@ -1952,10 +1979,44 @@ Test-SmokeFunction 'ConsoleMenu' 'Invoke-ToolsMenuInteractive presente (handler 
 # El smoke NO lo reproduce funcionalmente (corre todo en un scope via -File), por eso
 # el guard es estructural. Fix = scriptblock plano + $script:var (lookup dinamico).
 Test-SmokeFunction 'Router' 'renderHeader sin GetNewClosure (sobrevive a "& main.ps1")' {
-    [string] $routerPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'core\Router.ps1'
-    [string[]] $hits = @(Get-Content -LiteralPath $routerPath | Where-Object { $_ -match '\.GetNewClosure\(' })
+    # #26-B: barre TODO core\, no solo Router.ps1. Cuando los handlers salieron a
+    # ActionHandlers.ps1 este canario quedaba verde por vacuidad -- seguia mirando
+    # un archivo del que el codigo se habia ido. Un guard estructural atado a UN
+    # path deja de guardar en cuanto el codigo se muda.
+    [string] $coreDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'core'
+    [string[]] $hits = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $coreDir -Filter '*.ps1' -File)) {
+        foreach ($linea in @(Get-Content -LiteralPath $f.FullName | Where-Object { $_ -match '\.GetNewClosure\(' })) {
+            $hits += ('{0}: {1}' -f $f.Name, $linea.Trim())
+        }
+    }
     if ($hits.Count -gt 0) {
-        throw ('Router.ps1 usa .GetNewClosure() ({0}): rompe el render con "& main.ps1" (el closure no ve Show-MachineBanner). Usar scriptblock plano + $script:var.' -f $hits.Count)
+        throw ('core\ usa .GetNewClosure() ({0}): rompe el render con "& main.ps1" (el closure no ve Show-MachineBanner). Usar scriptblock plano + $script:var. -> {1}' -f $hits.Count, ($hits -join ' | '))
+    }
+}
+
+Test-SmokeFunction 'StaticCheck' '#26-B: los handlers de accion no volvieron a Router.ps1' {
+    # El split existe para que Router.ps1 sea menu + dispatch y nada mas. Sin este
+    # guard el god-file vuelve de a poco: cada accion nueva definida "ahi nomas"
+    # y en un año son otras 1.400 lineas. Que se rompa es la señal de que el
+    # handler nuevo va a core\ActionHandlers.ps1.
+    [string] $coreDir    = Join-Path (Split-Path -Parent $PSScriptRoot) 'core'
+    [string] $routerPath = Join-Path $coreDir 'Router.ps1'
+    [string] $ahPath     = Join-Path $coreDir 'ActionHandlers.ps1'
+
+    if (-not (Test-Path -LiteralPath $ahPath)) { throw 'falta core\ActionHandlers.ps1' }
+
+    [string[]] $enRouter = @(
+        Select-String -Path $routerPath -Pattern '^function Invoke-Action' |
+            ForEach-Object { $_.Line.Trim() }
+    )
+    if ($enRouter.Count -gt 0) {
+        throw ('Router.ps1 volvio a definir handlers de accion ({0}): van a core\ActionHandlers.ps1 -> {1}' -f $enRouter.Count, ($enRouter -join ' | '))
+    }
+
+    [int] $enAh = @(Select-String -Path $ahPath -Pattern '^function Invoke-Action').Count
+    if ($enAh -lt 19) {
+        throw ('ActionHandlers.ps1 define {0} handlers de accion, esperaba al menos 19' -f $enAh)
     }
 }
 
@@ -2886,7 +2947,8 @@ Test-SmokeFunction 'Router' 'Defender [V]: lee .Paths del objeto, no imprime el 
     # Get-CustomDefenderExclusions devuelve { Available; Paths[] }. Iterarlo como si
     # fuera un array de strings imprimia "@{Available=True; Paths=System.String[]}"
     # en pantalla (cazado por Mateo probando a mano, 2026-07-26).
-    [string] $router = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'core\Router.ps1') -Raw -Encoding UTF8
+    # Lee core\ entero: el handler vive en ActionHandlers.ps1 desde #26-B.
+    [string] $router = Get-CoreSourceText
     if ($router -match '@\(Get-CustomDefenderExclusions\)') {
         throw 'El handler vuelve a envolver el objeto en @(): imprime el objeto crudo'
     }
@@ -2969,12 +3031,14 @@ Test-SmokeFunction 'Router' 'Huerfanas cableadas: Autoruns, exclusiones dev, gra
             throw ("{0} no esta definida" -f $fn)
         }
     }
-    # Que esten LLAMADAS desde el Router, no solo definidas: es justo lo que fallaba.
-    [string] $router = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'core\Router.ps1') -Raw -Encoding UTF8
+    # Que esten LLAMADAS desde la capa de router, no solo definidas: es justo lo
+    # que fallaba. Se lee core\ entero porque desde #26-B las llamadas viven en
+    # ActionHandlers.ps1, no en Router.ps1.
+    [string] $router = Get-CoreSourceText
     foreach ($fn in @('Open-Autoruns', 'Add-WslDefenderExclusions', 'Remove-WslDefenderExclusions',
                       'Get-CustomDefenderExclusions', 'Get-BufferbloatGrade')) {
         if ($router -notmatch [regex]::Escape($fn)) {
-            throw ("{0} sigue huerfana: el Router no la llama" -f $fn)
+            throw ("{0} sigue huerfana: la capa de router no la llama" -f $fn)
         }
     }
 }
