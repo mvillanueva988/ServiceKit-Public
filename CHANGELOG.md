@@ -2,6 +2,44 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.7.0] - 2026-08-07
+
+Release: **el equipo se identifica y la batería se mide**. Dos datos que el toolkit mostraba en blanco o a medias, y que en los dos casos se cobran: la salud de la batería decide un cambio de $85.000, y el modelo exacto es con lo que se entra al soporte del fabricante a sacar el despiece.
+
+Va como *minor* y no como parche porque agrega funcionalidad, igual que el resto del changelog.
+
+### Added
+
+- **#28 - el equipo se identifica por su nombre, no por un código (`core/MachineProfile.ps1`, `core/Router.ps1`, `modules/Telemetry.ps1`, `modules/ResearchPrompt.ps1`)**: el banner pasa de decir `Lenovo 82K2` a decir `Lenovo IdeaPad Gaming 3 15ACH6 (82K2)`.
+
+  En Lenovo y HP el modelo del SMBIOS viene enmascarado y no alcanza para identificar el equipo: Lenovo devuelve `82K2` y HP devuelve `HP Laptop 15-fd0xxx`, donde la `xxx` es literal. Ahora se leen también `SystemSKUNumber` y `SystemFamily`, que salen de la **misma consulta que ya se hacía**: cero consultas nuevas y cero milisegundos al escaneo.
+
+  **El código queda entre paréntesis a propósito**, porque ES lo que se tipea en el soporte del fabricante para sacar part-numbers. El nombre comercial es para saber qué equipo se tiene delante; el código, para buscar repuestos.
+
+  El research prompt `[R]` lleva las dos cosas: con "Lenovo 82K2" un LLM busca a ciegas, con el nombre comercial encuentra el manual y el despiece. **El número de serie sigue afuera** y hay dos canarios que fallan si vuelve a aparecer: el modelo lo comparten millones de equipos, el serial identifica el del cliente.
+
+- **Ciclos de carga de la batería en el informe técnico `[I]`**: vienen en la misma lectura que la salud, así que no cuestan nada. Van al informe técnico y **no** al reporte del cliente.
+
+### Fixed
+
+- **#37 - la salud de la batería sale de donde de verdad vive (`modules/Telemetry.ps1`)**: la fila "Salud" del reporte no salía **nunca** en la mayoría de las notebooks.
+
+  No era un bug de render: faltaba el dato de origen. `Win32_Battery` devuelve las capacidades **vacías** en casi cualquier notebook, y de ahí se calculaba la salud. Es una limitación conocida de esa clase de WMI, no algo que el toolkit estuviera haciendo mal.
+
+  Ahora se encadenan tres fuentes y se usa la primera que da un dato creíble: el namespace `root\wmi` (de donde lee `powercfg`), `powercfg /batteryreport` en su salida XML, y por último `Win32_Battery` por si algún equipo sí la completa. Medido en una notebook real: las dos primeras dieron el mismo número, 35.380 sobre 45.000 mWh.
+
+  **Se mantiene el degradado honesto**: si no hay dato, la fila se omite. Nunca un número inventado ni un 100% por defecto. El porcentaje se acota a 100 porque una batería que carga más que su diseño está sana al 100%, y un "103%" en el reporte del cliente se lee como error del toolkit.
+
+- **El escaneo podía romperse en equipos con dos baterías (`modules/Telemetry.ps1`)**: en una notebook con batería interna más externa, la consulta devuelve una lista y la conversión a número fallaba sobre la lista entera. Bug latente que nunca se vio en campo porque hace falta ese hardware.
+
+- **Las notas de la release salían sin ningún SHA-256 (`Release.ps1`)**: el README manda a comparar el hash de `Launch.ps1` contra el publicado en las notas, y las notas no lo traían, así que ese paso de verificación apuntaba a la nada. El cálculo estaba bien; el problema era que el hash se imprimía en pantalla para pegarlo a mano. Ahora las notas lo llevan embebido.
+
+### Changed
+
+- **Los handlers de las acciones individuales salieron a su propio archivo (`core/ActionHandlers.ps1`)**: `core/Router.ps1` había llegado a 2.737 líneas y 42 funciones, mezclando el dibujo del menú, el despacho y los handlers de las 19 acciones `[A]`. Los handlers eran más de la mitad, así que el archivo quedó en 1.303 líneas con lo que le corresponde -menú y despacho- y los handlers viven aparte.
+
+  **Sin cambio de comportamiento**: las funciones se movieron tal cual, sin tocarles una línea. Es higiene interna y no cambia nada de lo que se ve en pantalla.
+
 ## [2.6.0] - 2026-08-01
 
 Release: **el paquete del cierre viaja solo al CRM**. Hasta acá el `[L]` dejaba el ZIP en el Escritorio del cliente y de ahí en adelante lo movía el operador a mano — abrir el WhatsApp del cliente, o su mail, o pendrive. Ahora se sube desde la misma PC, con una llave que sólo sirve para eso.
