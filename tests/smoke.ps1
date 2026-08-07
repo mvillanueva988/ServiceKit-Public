@@ -3214,6 +3214,98 @@ Test-SmokeFunction 'Router' '#28: el banner muestra modelo y Service Tag (handle
     if ([string]$sn2[0].Value -ne 'N/A')   { throw ('sin serial deberia decir N/A; got {0}' -f $sn2[0].Value) }
 }
 
+# ─── #28 (remate): SystemSku + SystemFamily ──────────────────────────────────
+# En Lenovo y HP el Model del SMBIOS viene enmascarado ("82K2", "15-fd0xxx") y
+# no alcanza para identificar el equipo ni para auto-seleccionar un recipe.
+
+Test-SmokeFunction 'MachineProfile' '#28 Get-ModelDisplayName: Lenovo real, SystemFamily ya viene limpio' {
+    # Caso testigo MEDIDO en HW (notebook de Mateo, 2026-08-07).
+    [string] $r = Get-ModelDisplayName -Model '82K2' -Family 'IdeaPad Gaming 3 15ACH6' `
+                                       -Sku 'LENOVO_MT_82K2_BU_idea_FM_IdeaPad Gaming 3 15ACH6'
+    if ($r -ne 'IdeaPad Gaming 3 15ACH6') { throw ('esperaba el nombre comercial; got {0}' -f $r) }
+}
+
+Test-SmokeFunction 'MachineProfile' '#28 Get-ModelDisplayName: sin Family cae al _FM_ del SKU' {
+    [string] $r = Get-ModelDisplayName -Model '82K2' -Family '' `
+                                       -Sku 'LENOVO_MT_82K2_BU_idea_FM_IdeaPad Gaming 3 15ACH6'
+    if ($r -ne 'IdeaPad Gaming 3 15ACH6') { throw ('el respaldo del SKU no salio; got {0}' -f $r) }
+}
+
+Test-SmokeFunction 'MachineProfile' '#28 Get-ModelDisplayName: sin nada mejor devuelve el Model' {
+    foreach ($caso in @(
+        @{ M = 'Inspiron 15 3525'; F = '';                       S = ''; E = 'Inspiron 15 3525'; Q = 'Dell, sin family ni sku' },
+        @{ M = '82K2';             F = '82K2';                   S = ''; E = '82K2';             Q = 'family que repite el model' },
+        @{ M = 'Latitude 5420';    F = 'To Be Filled By O.E.M.'; S = ''; E = 'Latitude 5420';    Q = 'family placeholder del SMBIOS' },
+        @{ M = '';                 F = '';                       S = ''; E = '';                 Q = 'todo vacio' }
+    )) {
+        [string] $r = Get-ModelDisplayName -Model $caso.M -Family $caso.F -Sku $caso.S
+        if ($r -ne $caso.E) { throw ('{0}: esperaba "{1}"; got "{2}"' -f $caso.Q, $caso.E, $r) }
+    }
+}
+
+Test-SmokeFunction 'Router' '#28 el banner muestra el nombre comercial Y el codigo entre parentesis' {
+    # El nombre para que el operador sepa que equipo tiene delante; el codigo
+    # porque ES lo que se tipea en el soporte del fabricante para sacar despiece.
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $script:pctkBannerRows = $null
+    function Write-PctkMachineBanner { param([object[]]$Rows, [string]$Tier, [string]$VmLine = '')
+        $script:pctkBannerRows = $Rows }
+
+    [PSCustomObject] $mp = [PSCustomObject]@{
+        IsWin11 = $true; IsHome = $false; Build = 22631; RamMB = 16384
+        GpuNames = @('NVIDIA RTX 3050'); HasIGpuOnly = $false; HasDGpu = $true
+        Manufacturer = 'LENOVO'; Tier = 'Mid'; CpuClass = 'Modern'
+        Model = '82K2'; SerialNumber = 'PF3ABCDE'
+        SystemSku = 'LENOVO_MT_82K2_BU_idea_FM_IdeaPad Gaming 3 15ACH6'
+        Family    = 'IdeaPad Gaming 3 15ACH6'
+    }
+    Show-MachineBanner -MachineProfile $mp
+
+    [object[]] $rows = @($script:pctkBannerRows)
+    [object[]] $oem  = @($rows | Where-Object { $_.Label -eq 'OEM' })
+    if ($oem.Count -ne 1) { throw 'falta la fila OEM' }
+
+    [string] $v = [string] $oem[0].Value
+    if ($v -notmatch 'IdeaPad Gaming 3 15ACH6') { throw ('el banner no muestra el nombre comercial: {0}' -f $v) }
+    if ($v -notmatch '\(82K2\)') { throw ('el banner perdio el codigo, que es lo que se tipea en el soporte: {0}' -f $v) }
+}
+
+Test-SmokeFunction 'ResearchPrompt' '#28 el prompt lleva el nombre comercial y SIGUE sin el Service Tag' {
+    # Extiende el canario de arriba: al agregar campos nuevos al prompt, el
+    # serial tiene que seguir afuera.
+    $ErrorActionPreference = 'Stop'
+    [PSCustomObject] $mp = [PSCustomObject]@{
+        Manufacturer = 'LENOVO'; Model = '82K2'; SerialNumber = 'PF3ABCDE'
+        SystemSku = 'LENOVO_MT_82K2_BU_idea_FM_IdeaPad Gaming 3 15ACH6'
+        Family    = 'IdeaPad Gaming 3 15ACH6'
+        Tier = 'Mid'; IsLaptop = $true; IsWin11 = $true; IsHome = $false; Build = 22631
+    }
+    [PSCustomObject] $snap = [PSCustomObject]@{
+        ComputerName = 'PC-DEL-CLIENTE'; CPU = [PSCustomObject]@{ Name = 'i5' }
+    }
+    $r = New-ResearchPrompt -Template Optimization -Snapshot $snap -MachineProfile $mp
+    if ($null -eq $r -or -not $r.Success) { throw 'New-ResearchPrompt fallo' }
+    try {
+        [string] $txt = Get-Content -LiteralPath $r.FilePath -Raw -Encoding UTF8
+        if ($txt -notmatch 'IdeaPad Gaming 3 15ACH6') { throw 'el prompt no lleva el nombre comercial (#28)' }
+        if ($txt -notmatch '82K2')                    { throw 'el prompt perdio el codigo del modelo' }
+        if ($txt -match 'PF3ABCDE') { throw 'FUGA: el Service Tag salio en el prompt que se pega en un LLM externo' }
+    } finally {
+        Remove-Item -LiteralPath $r.FilePath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'MachineProfile' '#28 el perfil expone SystemSku y Family' {
+    $ErrorActionPreference = 'Stop'
+    [object] $mp = Get-MachineProfile
+    foreach ($campo in @('Model', 'SerialNumber', 'SystemSku', 'Family')) {
+        if ($null -eq $mp.PSObject.Properties[$campo]) {
+            throw ('falta el campo {0} en el machine profile' -f $campo)
+        }
+    }
+}
+
 Test-SmokeFunction 'ResearchPrompt' '#28: el prompt [R] lleva el modelo y NUNCA el Service Tag' {
     # El texto del [R] se copia al portapapeles para pegarlo en un LLM de terceros.
     # El modelo lo comparten millones de equipos; el serial identifica el del

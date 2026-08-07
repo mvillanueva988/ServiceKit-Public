@@ -118,7 +118,27 @@ function Show-MachineBanner {
     if ($MachineProfile.PSObject.Properties['Model']) {
         $model = Get-OemDisplayValue -Value ([string]$MachineProfile.Model) -Fallback ''
     }
-    [string] $oemLabel = if ([string]::IsNullOrWhiteSpace($model)) { $manufacturer } else { ('{0} {1}' -f $manufacturer, $model) }
+
+    # #28 (remate): "82K2" no le dice nada a nadie. Con SystemFamily / el tramo
+    # _FM_ del SKU el banner muestra el nombre comercial, y el codigo queda
+    # entre parentesis porque ES lo que se tipea en el soporte del fabricante
+    # para sacar el despiece. Un perfil viejo (sin estos campos) cae al Model de
+    # siempre: se preguntan por PSObject.Properties, no se leen directo.
+    [string] $family = ''
+    [string] $sku    = ''
+    if ($MachineProfile.PSObject.Properties['Family'])    { $family = [string] $MachineProfile.Family }
+    if ($MachineProfile.PSObject.Properties['SystemSku']) { $sku    = [string] $MachineProfile.SystemSku }
+
+    [string] $modelDisplay = Get-ModelDisplayName -Model $model -Family $family -Sku $sku
+
+    [string] $modelLabel = $modelDisplay
+    if (-not [string]::IsNullOrWhiteSpace($modelDisplay) -and
+        -not [string]::IsNullOrWhiteSpace($model) -and
+        $modelDisplay -ne $model) {
+        $modelLabel = ('{0} ({1})' -f $modelDisplay, $model)
+    }
+
+    [string] $oemLabel = if ([string]::IsNullOrWhiteSpace($modelLabel)) { $manufacturer } else { ('{0} {1}' -f $manufacturer, $modelLabel) }
 
     [string] $serialLabel = 'N/A'
     if ($MachineProfile.PSObject.Properties['SerialNumber']) {

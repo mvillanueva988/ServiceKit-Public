@@ -249,14 +249,34 @@ function New-ResearchPrompt {
     # al portapapeles para pegarlo en un LLM de terceros. El modelo lo comparten
     # millones de equipos; el serial identifica ESTE, el del cliente. Hay un
     # canario en el smoke que falla si el serial vuelve a aparecer en el prompt.
+    #
+    # #28 (remate): el SKU y la familia SI van. El LLM con "Lenovo 82K2" busca a
+    # ciegas; con "IdeaPad Gaming 3 15ACH6" encuentra el manual, el despiece y
+    # los hilos de foro de ESE equipo. Y no rompen la regla de arriba: el modelo
+    # lo comparten millones de equipos, el serial identifica el del cliente.
     [string] $oemModel = ''
     if ($MachineProfile.PSObject.Properties['Model']) {
         $oemModel = Get-OemDisplayValue -Value ([string] $MachineProfile.Model) -Fallback ''
     }
-    [string] $oemLine = if ([string]::IsNullOrWhiteSpace($oemModel)) {
+
+    [string] $oemFamily = ''
+    [string] $oemSku    = ''
+    if ($MachineProfile.PSObject.Properties['Family'])    { $oemFamily = [string] $MachineProfile.Family }
+    if ($MachineProfile.PSObject.Properties['SystemSku']) { $oemSku    = [string] $MachineProfile.SystemSku }
+
+    [string] $oemDisplay = Get-ModelDisplayName -Model $oemModel -Family $oemFamily -Sku $oemSku
+
+    [string] $oemLabel = $oemDisplay
+    if (-not [string]::IsNullOrWhiteSpace($oemDisplay) -and
+        -not [string]::IsNullOrWhiteSpace($oemModel) -and
+        $oemDisplay -ne $oemModel) {
+        $oemLabel = ('{0} ({1})' -f $oemDisplay, $oemModel)
+    }
+
+    [string] $oemLine = if ([string]::IsNullOrWhiteSpace($oemLabel)) {
         $manufacturer
     } else {
-        ('{0} {1}' -f $manufacturer, $oemModel)
+        ('{0} {1}' -f $manufacturer, $oemLabel)
     }
     $L.Add(('- **OEM**: {0}' -f $oemLine))
     $L.Add(('- **Tier resuelto**: {0}' -f $tier))

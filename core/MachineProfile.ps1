@@ -552,6 +552,13 @@ function Get-MachineProfile {
         # el Service Tag de 7 caracteres.
         Model            = if ($null -ne $cs   -and $cs.PSObject.Properties['Model']        -and $null -ne $cs.Model)          { ([string]$cs.Model).Trim() }          else { '' }
         SerialNumber     = if ($null -ne $bios -and $bios.PSObject.Properties['SerialNumber'] -and $null -ne $bios.SerialNumber) { ([string]$bios.SerialNumber).Trim() } else { '' }
+        # ── #28 (remate): lo que desambigua al equipo cuando Model viene
+        # enmascarado. Salen de $cs, la MISMA query que ya se hacia: costo cero,
+        # igual que Model y SerialNumber. A diferencia del SerialNumber, estos
+        # NO son identificatorios (los comparten todos los equipos del modelo),
+        # asi que pueden viajar al research prompt.
+        SystemSku        = if ($null -ne $cs   -and $cs.PSObject.Properties['SystemSKUNumber'] -and $null -ne $cs.SystemSKUNumber) { ([string]$cs.SystemSKUNumber).Trim() } else { '' }
+        Family           = if ($null -ne $cs   -and $cs.PSObject.Properties['SystemFamily']    -and $null -ne $cs.SystemFamily)    { ([string]$cs.SystemFamily).Trim() }    else { '' }
         # ── #34: estado de HAGS (2026-07-29) ──────────────────────────────────
         # Va como dato y no sólo como aviso: el operador quiere VERLO al
         # diagnosticar (pedido que salió del service de Ignacio), y así viaja al
@@ -598,4 +605,61 @@ function Get-OemDisplayValue {
     }
 
     return $v
+}
+
+function Get-ModelDisplayName {
+    <#
+    .SYNOPSIS
+        Nombre legible del equipo -- "IdeaPad Gaming 3 15ACH6" en vez de "82K2".
+        Funcion pura.
+
+    .DESCRIPTION
+        #28: en Lenovo y HP el Model del SMBIOS viene ENMASCARADO y no alcanza
+        para identificar el equipo. Dos casos testigo reales:
+          Lenovo -> Model = "82K2"
+          HP     -> Model = "HP Laptop 15-fd0xxx"   (la "xxx" es literal)
+        Sin identificacion confiable no se puede auto-seleccionar un recipe, y
+        el operador no puede entrar al soporte del fabricante a buscar despiece.
+
+        Fuentes, en orden (medido en HW real: Lenovo 82K2, 2026-08-07):
+
+          1. SystemFamily -- ya viene LIMPIO: "IdeaPad Gaming 3 15ACH6". Esto
+             es lo que hace innecesario parsear nada en el caso normal; la
+             entrada del backlog asumia que habia que sacarlo del SKU.
+          2. El tramo _FM_ del SystemSKUNumber, que es donde Lenovo repite ese
+             mismo nombre:
+             "LENOVO_MT_82K2_BU_idea_FM_IdeaPad Gaming 3 15ACH6".
+             Queda como respaldo para equipos donde SystemFamily venga vacio.
+          3. El Model crudo.
+
+        LIMITACION CONOCIDA, no verificada en HW: en algunos HP SystemFamily
+        trae el codigo interno del OEM ("103C_5335KV HP Notebook") en vez del
+        nombre comercial. En ese caso esto devuelve ese string, que no es peor
+        que el "15-fd0xxx" del Model pero tampoco mejor. NO se filtra por
+        patron porque seria adivinar sin un HP a mano: los tres campos crudos
+        viajan igual al snapshot, asi que el dato no se pierde y la regla se
+        puede afinar el dia que aparezca el equipo.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()] [string] $Model,
+        [AllowNull()] [string] $Family,
+        [AllowNull()] [string] $Sku
+    )
+
+    [string] $mod = Get-OemDisplayValue -Value $Model  -Fallback ''
+    [string] $fam = Get-OemDisplayValue -Value $Family -Fallback ''
+
+    # Family solo sirve si dice algo MAS que el Model: en varios equipos repite
+    # el mismo string y ahi no aporta nada.
+    if (-not [string]::IsNullOrWhiteSpace($fam) -and $fam -ne $mod) { return $fam }
+
+    [string] $sk = Get-OemDisplayValue -Value $Sku -Fallback ''
+    if ($sk -match '_FM_(.+)$') {
+        [string] $fm = ([string] $Matches[1]).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($fm) -and $fm -ne $mod) { return $fm }
+    }
+
+    return $mod
 }

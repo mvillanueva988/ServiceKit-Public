@@ -406,6 +406,11 @@ function Get-SystemSnapshot {
     [string] $machineModel  = if ($null -ne $csRaw   -and $csRaw.PSObject.Properties['Model']          -and $null -ne $csRaw.Model)            { ([string]$csRaw.Model).Trim() }            else { '' }
     [string] $machineVendor = if ($null -ne $csRaw   -and $csRaw.PSObject.Properties['Manufacturer']   -and $null -ne $csRaw.Manufacturer)     { ([string]$csRaw.Manufacturer).Trim() }     else { '' }
     [string] $machineSerial = if ($null -ne $biosRaw -and $biosRaw.PSObject.Properties['SerialNumber'] -and $null -ne $biosRaw.SerialNumber)   { ([string]$biosRaw.SerialNumber).Trim() }   else { '' }
+    # #28 (remate): SystemSKUNumber y SystemFamily desambiguan el equipo cuando
+    # Model viene enmascarado (Lenovo "82K2", HP "15-fd0xxx"). Salen del MISMO
+    # $csRaw que ya se consulto: cero queries nuevas.
+    [string] $machineSku    = if ($null -ne $csRaw   -and $csRaw.PSObject.Properties['SystemSKUNumber'] -and $null -ne $csRaw.SystemSKUNumber) { ([string]$csRaw.SystemSKUNumber).Trim() } else { '' }
+    [string] $machineFamily = if ($null -ne $csRaw   -and $csRaw.PSObject.Properties['SystemFamily']    -and $null -ne $csRaw.SystemFamily)    { ([string]$csRaw.SystemFamily).Trim() }    else { '' }
 
     $vmInfo = Test-IsVirtualMachine -ComputerSystem $csRaw -Bios $biosRaw
     [bool]   $isVM    = $vmInfo.IsVirtual
@@ -971,6 +976,8 @@ function Get-SystemSnapshot {
         Manufacturer      = [string]   $machineVendor
         Model             = [string]   $machineModel
         SerialNumber      = [string]   $machineSerial
+        SystemSku         = [string]   $machineSku
+        Family            = [string]   $machineFamily
         CPU               = $cpu
         GPU               = $gpus
         RamTotalGb        = [double]   $ramTotalGb
