@@ -2,6 +2,28 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.8.0] - 2026-08-17
+
+Release: **la clave de BitLocker deja de depender de una sola PC**. La clave de recuperación que el `[A][18][C]` captura quedaba en dos lugares frágiles: la pantalla (la foto del operador) y `output\recovery\` de la PC del cliente, que el desinstalador borra. Ahora se puede depositar, cifrada de punta a punta, en la bóveda del CRM.
+
+**Nota de versión**: v2.7.0 quedó como tag sin release publicada (el paso de publicación no llegó a correr y nadie la instaló; la última instalable fue v2.6.0). Esta release acumula también lo de v2.7.0 — quien venga de v2.6.0 encuentra las dos secciones acá abajo.
+
+Va como *minor* porque agrega funcionalidad, igual que el resto del changelog.
+
+### Added
+
+- **#41 (b) - la clave de BitLocker viaja a la bóveda del CRM (`modules/VaultUpload.ps1`, `core/ActionHandlers.ps1`, `data/vault-publica.json`)**: después de capturar la clave en `[A][18][C]`, el toolkit ofrece *"¿Depositar la clave en la bóveda del CRM? [S/n]"*.
+
+  **La clave se cifra ANTES de salir de la PC** (RSA-OAEP-SHA256 con la clave pública de la bóveda, que viaja versionada con el toolkit y no es secreta: sólo cierra sobres). El CRM recibe un sobre cerrado que no puede abrir — la privada está cifrada con una passphrase que no viaja nunca — y lo rechaza por forma si algún bug mandara la clave en claro. Mismo token write-only y misma cuota diaria que la subida de bundles: con ese token no se puede leer nada.
+
+  **La bóveda es una copia MÁS, no un reemplazo**: la pantalla y `output\recovery\` siguen exactamente igual, y si el depósito falla (sin internet, sin conexión configurada) el service cierra igual.
+
+- **El paquete se lleva la comparación completa, no sólo su puntaje (`modules/ExportClientLogs.ps1`)**: `compare.json` entra al bundle del `[L]`, así el CRM lee lo que mejoró en vez de recalcularlo — dos definiciones de "qué mejoró" divergiendo en silencio era el riesgo.
+
+### Fixed
+
+- **#48 - el paquete pendiente dice DE CUÁNDO es (`core/Router.ps1`, `modules/ServiceState.ps1`)**: el `[L]` ofrecía subir el paquete sin subir mostrando sólo el nombre del archivo, con la fecha embebida en un formato que hay que decodificar leyendo — así se subió un paquete de hacía una semana creyendo que era el de hoy. Ahora la pregunta dice *"Es del 01/08 (hace 7 días)."* y avisa que aceptar termina ahí (no se arma un paquete nuevo). Sin fecha legible no dice nada, en vez de inventar una edad.
+
 ## [2.7.0] - 2026-08-07
 
 Release: **el equipo se identifica y la batería se mide**. Dos datos que el toolkit mostraba en blanco o a medias, y que en los dos casos se cobran: la salud de la batería decide un cambio de $85.000, y el modelo exacto es con lo que se entra al soporte del fabricante a sacar el despiece.
