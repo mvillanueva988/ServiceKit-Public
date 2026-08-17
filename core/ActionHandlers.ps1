@@ -1038,6 +1038,10 @@ function Invoke-ActionEncryption {
         [string] $path = Save-BitLockerRecoveryKey -Keys $keys
         if ($path) { Write-PctkOk ('  [OK] Respaldo guardado: {0}' -f $path) }
         Write-ActionAudit -Action 'Encryption' -Status 'Success' -Summary ('captured {0} protector(s)' -f $keys.Count)
+        # La boveda del CRM es una copia MAS, no un reemplazo: la pantalla y
+        # output\recovery\ quedan igual, y si el deposito falla el service
+        # sigue (misma regla que la subida del [L]).
+        $null = Invoke-VaultDepositOffer -Keys $keys
         return
     }
 

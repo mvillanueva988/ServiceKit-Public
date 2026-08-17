@@ -1,0 +1,6 @@
+{
+  "_comentario": "Clave PUBLICA de la boveda del CRM (JWK RSA-2048). NO es secreta: solo CIERRA sobres, no los abre (la privada vive cifrada en el CRM y la abre la passphrase de Mateo). Sacada de la base de trabajo el 2026-08-16 (vault_clave activa). Si la boveda se regenera, actualizar n y e desde GET /api/boveda/clave -> publica_jwk.",
+  "kty": "RSA",
+  "n": "7L15ynXGTojjAy5aiOIULYY80ROSJdgmDhLKCie__PwuWdBaT1Ryi6U9xb56kFM1n6MG7FkTU2Y92BsYB94b6behsxEMfqbRnowBD_aZsdwAQgGv1wHbqtNMnUJnCCZuUEUZjnidfVTTAWBGNGy3TVnc4JNDI1ZDyeooNI86fxhKGxmOZCwhlNYRuoNcBwtNp170OU9o0qot5Q8FbQiohMZqXudPgLrzwsLCjTeFboc9gFuOhwf9w5yx2Dt9WXmyfVTzBvJIzuaKAAwvjaqJ-Te9DLNDowjs_xDorhbbGg4pzwOZAkd9KdKtIFt1oRIECSzsxBK3T-wWzHXc15GIYw",
+  "e": "AQAB"
+}

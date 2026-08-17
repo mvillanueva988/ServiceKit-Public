@@ -3799,6 +3799,225 @@ Test-SmokeFunction 'CrmUpload' 'el [L] sigue cableado a la subida (no se descone
     if ($null -eq $llamada) { throw 'Invoke-ServiceClose ya no llama a Invoke-CrmUploadOffer' }
 }
 
+# ─── VaultUpload: el deposito de la clave de BitLocker en la boveda ──────────
+
+Test-SmokeFunction 'VaultUpload' 'base64url de JWK -> bytes (el alfabeto con - y _)' {
+    # Vector conocido: el exponente RSA estandar 65537 viaja en JWK como AQAB.
+    [byte[]] $e = ConvertFrom-PctkBase64Url -Text 'AQAB'
+    if ($e.Length -ne 3 -or $e[0] -ne 1 -or $e[1] -ne 0 -or $e[2] -ne 1) { throw 'AQAB tiene que dar 01 00 01' }
+
+    # Y el alfabeto entero: 0..255 en base64 trae + y / seguro; la vuelta por
+    # base64url (con - y _, sin relleno) tiene que devolver los mismos bytes.
+    [byte[]] $todos = 0..255
+    [string] $b64url = [Convert]::ToBase64String($todos).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    [byte[]] $vuelta = ConvertFrom-PctkBase64Url -Text $b64url
+    if ($vuelta.Length -ne 256) { throw ('se perdieron bytes: {0}' -f $vuelta.Length) }
+    for ($i = 0; $i -lt 256; $i++) {
+        if ($vuelta[$i] -ne $todos[$i]) { throw ('byte {0} distinto' -f $i) }
+    }
+}
+
+Test-SmokeFunction 'VaultUpload' 'el sobre cierra con la publica JWK y abre con la privada (round-trip real)' {
+    # Criptografia de verdad, no un doble: el mismo camino que va a correr en la
+    # PC de un cliente. [RSA]::Create(2048) devuelve RSACng, que es el proveedor
+    # que soporta OAEP-SHA256 (el default legacy revienta recien al ejecutar).
+    $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    try {
+        $p = $rsa.ExportParameters($false)
+        $jwk = [PSCustomObject]@{
+            n = [Convert]::ToBase64String($p.Modulus).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+            e = [Convert]::ToBase64String($p.Exponent).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        }
+
+        [string] $clave = '484934-291043-113355-002211-887766-554433-221100-998877'
+        [string] $sobre = Protect-PctkSecret -Secret $clave -Publica $jwk
+
+        # Un sobre RSA-2048 mide SIEMPRE 344 en base64: es la forma que el CRM
+        # verifica para rechazar un secreto que llegue en claro.
+        if ($sobre.Length -ne 344) { throw ('el sobre mide {0}, no 344' -f $sobre.Length) }
+        if ($sobre.Contains($clave)) { throw 'el sobre contiene el secreto en claro' }
+
+        [byte[]] $abierto = $rsa.Decrypt([Convert]::FromBase64String($sobre), [System.Security.Cryptography.RSAEncryptionPadding]::OaepSHA256)
+        if ([System.Text.Encoding]::UTF8.GetString($abierto) -ne $clave) { throw 'el secreto no volvio igual' }
+    } finally {
+        $rsa.Dispose()
+    }
+}
+
+Test-SmokeFunction 'VaultUpload' 'un secreto de mas de 190 bytes falla CLARO, no se trunca' {
+    $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    try {
+        $p = $rsa.ExportParameters($false)
+        $jwk = [PSCustomObject]@{
+            n = [Convert]::ToBase64String($p.Modulus).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+            e = [Convert]::ToBase64String($p.Exponent).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        }
+
+        [bool] $tiro = $false
+        try {
+            $null = Protect-PctkSecret -Secret ('x' * 191) -Publica $jwk
+        } catch {
+            $tiro = $true
+            if ($_.Exception.Message -notmatch '190') { throw ('el error no dice el tope: {0}' -f $_.Exception.Message) }
+            if ($_.Exception.Message -notmatch 'cort') { throw ('el error no dice que NO trunca: {0}' -f $_.Exception.Message) }
+        }
+        if (-not $tiro) { throw 'un secreto que no entra tiene que tirar, no truncarse' }
+    } finally {
+        $rsa.Dispose()
+    }
+}
+
+Test-SmokeFunction 'VaultUpload' 'sin publica cargada no hay oferta (el archivo shippea en blanco)' {
+    # NO se mira el data\vault-publica.json del repo: el dia que se cargue la
+    # publica real, un test atado a ese archivo cambiaria de resultado solo.
+    # Se prueban las DOS variantes con fixtures propias.
+    [string] $tmp = Join-Path $env:TEMP ('pctk-smoke-vault-{0}' -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    try {
+        $null = New-Item -ItemType Directory -Path (Join-Path $tmp 'data') -Force
+        [string] $f = Join-Path $tmp 'data\vault-publica.json'
+
+        Set-Content -LiteralPath $f -Value '{"kty":"RSA","n":"","e":""}' -Encoding ASCII
+        if ($null -ne (Get-VaultPublica -RootOverride $tmp)) { throw 'con n y e vacios tiene que dar $null' }
+
+        Set-Content -LiteralPath $f -Value 'esto no es json' -Encoding ASCII
+        if ($null -ne (Get-VaultPublica -RootOverride $tmp)) { throw 'ilegible tiene que dar $null, no tirar' }
+
+        Set-Content -LiteralPath $f -Value '{"kty":"RSA","n":"abc123","e":"AQAB"}' -Encoding ASCII
+        $pub = Get-VaultPublica -RootOverride $tmp
+        if ($null -eq $pub -or $pub.n -ne 'abc123' -or $pub.e -ne 'AQAB') { throw 'una publica cargada tiene que volver' }
+
+        # Y con la publica ausente, la oferta se saltea SIN preguntar ni salir a
+        # la red -- la clave sigue en pantalla y en output\recovery\.
+        function Get-VaultPublica { param([string] $RootOverride = '') $null }
+        function Test-PctkInteractiveConsole { $true }
+        function Read-Host { param([string] $Prompt) throw 'pregunto sin tener boveda configurada' }
+        function Send-VaultSecretToCrm { throw 'salio a la red sin publica' }
+
+        $r = Invoke-VaultDepositOffer -Keys @([PSCustomObject]@{ KeyId8 = 'AAAA1111'; RecoveryPassword = 'x' })
+        if ($r.Motivo -ne 'sin-publica') { throw ('motivo inesperado: {0}' -f $r.Motivo) }
+        if ($r.Intentado) { throw 'no tenia que intentar nada' }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'VaultUpload' 'la respuesta del CRM se juzga con la MISMA vara que los bundles' {
+    # Send-VaultSecretToCrm reusa ConvertFrom-CrmRespuesta: un 2xx sin ok=true
+    # (pantalla de login, portal de wifi) NO cuenta como depositado. Chequeo por
+    # AST que la llamada siga ahi -- si alguien la reemplaza por un parseo
+    # propio, las dos definiciones divergen en silencio.
+    [string] $mod = Join-Path (Split-Path -Parent $PSScriptRoot) 'modules\VaultUpload.ps1'
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($mod, [ref]$null, [ref]$null)
+    $fn = $ast.Find({ param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -eq 'Send-VaultSecretToCrm' }, $true)
+    if ($null -eq $fn) { throw 'no encontre Send-VaultSecretToCrm' }
+
+    foreach ($compartida in @('ConvertFrom-CrmRespuesta', 'Get-CrmMensajeDeRespuestaRara')) {
+        $llamada = $fn.Find({ param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and
+            $n.GetCommandName() -eq $compartida }, $true)
+        if ($null -eq $llamada) { throw ('Send-VaultSecretToCrm dejo de usar {0}' -f $compartida) }
+    }
+}
+
+Test-SmokeFunction 'VaultUpload' 'el HANDLER del [A][18][C] deposita y LO QUE VIAJA VA CIFRADO' {
+    # El test que importa: entra por Invoke-ActionEncryption, el mismo camino que
+    # corre cuando el operador aprieta [C] (los helpers verdes con el wiring roto
+    # son la leccion repetida del repo). Y el assert central es el guard por
+    # mutacion del plan: si a Protect-PctkSecret le sacaran el cifrado, aca lo
+    # que viaja seria la clave pelada y este test se pone ROJO.
+    #
+    # SE SHADOWEA Send-VaultSecretToCrm, Y NO ES OPCIONAL: sin eso, en cuanto
+    # esta PC tenga la conexion al CRM configurada, el smoke DEPOSITARIA un
+    # sobre de verdad en la boveda (misma trampa que la subida de bundles).
+    $ErrorActionPreference = 'Stop'   # espejo de main.ps1; el smoke corre igual
+
+    $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    try {
+        $p = $rsa.ExportParameters($false)
+        $script:jwkPrueba = [PSCustomObject]@{
+            n = [Convert]::ToBase64String($p.Modulus).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+            e = [Convert]::ToBase64String($p.Exponent).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        }
+        [string] $script:claveReal = '111111-222222-333333-444444-555555-666666-777777-888888'
+        $script:sobreQueViajo = ''
+        $script:etiquetaQueViajo = ''
+
+        function Get-DiskEncryptionStatus { param([string] $DriveLetter = 'C:')
+            [PSCustomObject]@{
+                Encryptable = $true; IsEncrypted = $true; ConversionLabel = 'FullyEncrypted'
+                EncryptionPct = 100; EncryptionMethod = 'XtsAes128'; ProtectionOn = $true
+                HasRecoveryProtector = $true
+            } }
+        # OJO: sin coma adelante. La funcion real devuelve el array PLANO (el
+        # pipeline lo desenrolla y el @() del handler lo vuelve a juntar); un
+        # doble con `, @(...)` mete un array adentro de otro y el KeyId8 se
+        # pierde en PSObject.Properties aunque RecoveryPassword resuelva por
+        # enumeracion de miembros -- exactamente el FAIL que tuvo este test.
+        function Get-BitLockerRecoveryKey { param([string] $DriveLetter = 'C:')
+            @([PSCustomObject]@{ KeyProtectorId = '{ABCD}'; KeyId8 = 'ABCD1234'; RecoveryPassword = $script:claveReal }) }
+        function Save-BitLockerRecoveryKey { param([object[]] $Keys, [string] $OutputRootOverride = '', [string] $TimestampOverride = '') '' }
+        function Get-VaultPublica { param([string] $RootOverride = '') $script:jwkPrueba }
+        function Get-CrmConfig { param([string] $OutputRootOverride = '')
+            [PSCustomObject]@{ Url = 'https://crm.de.prueba'; Token = 'token-de-prueba' } }
+        function Test-PctkInteractiveConsole { $true }
+        function Send-VaultSecretToCrm { param([string] $Url, [string] $Token, [string] $Tipo, [string] $SobreB64, [string] $Etiqueta = '', [string] $ComputerNameOverride = '', [int] $TimeoutSeconds = 60)
+            $script:sobreQueViajo = $SobreB64
+            $script:etiquetaQueViajo = $Etiqueta
+            [PSCustomObject]@{ Ok = $true; Duplicate = $false; Message = 'Depositado.'; StatusCode = 201 } }
+        # Primer prompt: la opcion del submenu ([C]). Segundo: depositar? (S).
+        $script:prompts = 0
+        function Read-Host { param([string] $Prompt) $script:prompts++; if ($script:prompts -eq 1) { 'C' } else { 'S' } }
+
+        Invoke-ActionEncryption -MachineProfile ([PSCustomObject]@{ IsHome = $false }) | Out-Null
+
+        if ($script:sobreQueViajo -eq '') { throw 'el handler no ofrecio depositar (el wiring se corto)' }
+        if ($script:sobreQueViajo.Length -ne 344) {
+            throw ('lo que viajo NO es un sobre RSA-2048 (mide {0}, no 344)' -f $script:sobreQueViajo.Length)
+        }
+        if ($script:sobreQueViajo.Contains($script:claveReal)) { throw 'LA CLAVE VIAJO EN CLARO' }
+        if ($script:etiquetaQueViajo -notmatch 'ABCD1234') { throw 'la etiqueta perdio el Key ID' }
+
+        # Y el sobre abre con la privada del test: es EL secreto, cifrado, no
+        # cualquier cosa de 344 caracteres.
+        [byte[]] $abierto = $rsa.Decrypt([Convert]::FromBase64String($script:sobreQueViajo), [System.Security.Cryptography.RSAEncryptionPadding]::OaepSHA256)
+        if ([System.Text.Encoding]::UTF8.GetString($abierto) -ne $script:claveReal) { throw 'el sobre no contiene la clave capturada' }
+    } finally {
+        $rsa.Dispose()
+    }
+}
+
+Test-SmokeFunction 'VaultUpload' 'en consola no interactiva el deposito se saltea sin preguntar' {
+    function Test-PctkInteractiveConsole { $false }
+    function Read-Host { param([string] $Prompt) throw 'pregunto en una consola no interactiva' }
+    function Send-VaultSecretToCrm { throw 'el smoke intento salir a la red' }
+
+    $r = Invoke-VaultDepositOffer -Keys @([PSCustomObject]@{ KeyId8 = 'AAAA1111'; RecoveryPassword = 'x' })
+    if ($r.Motivo -ne 'no-interactiva') { throw ('motivo inesperado: {0}' -f $r.Motivo) }
+}
+
+Test-SmokeFunction 'VaultUpload' 'el [A][18][C] sigue cableado al deposito (no se desconecto sin querer)' {
+    # Chequeo por AST y preguntandole a la CARPETA, no a un archivo puntual: el
+    # guard atado a un path se vacia en silencio cuando el codigo se muda
+    # (leccion del split de Router.ps1).
+    [string] $coreDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'core'
+    $fn = $null
+    foreach ($f in (Get-ChildItem -Path (Join-Path $coreDir '*.ps1') -File)) {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$null)
+        $hit = $ast.Find({ param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $n.Name -eq 'Invoke-ActionEncryption' }, $true)
+        if ($null -ne $hit) { $fn = $hit; break }
+    }
+    if ($null -eq $fn) { throw 'no encontre Invoke-ActionEncryption en core\' }
+
+    $llamada = $fn.Find({ param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'Invoke-VaultDepositOffer' }, $true)
+    if ($null -eq $llamada) { throw 'Invoke-ActionEncryption ya no llama a Invoke-VaultDepositOffer' }
+}
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'
