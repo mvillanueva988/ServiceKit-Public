@@ -244,7 +244,17 @@ function Invoke-ServiceClose {
         if ($null -ne $pendiente) {
             Write-Host ''
             Write-PctkWarn '  Hay un paquete de esta PC que todavia no subiste al CRM.'
+            # #48: la EDAD a la vista, no solo el nombre del archivo (la fecha
+            # embebida en MATEO-NOTEBOOK_20260801-... hay que decodificarla
+            # leyendo, y asi se subio un paquete de hacia una semana creyendo
+            # que era el de hoy).
+            if (Get-Command -Name 'Get-BundlePendienteDescripcion' -CommandType Function -ErrorAction SilentlyContinue) {
+                [string] $edadPend = Get-BundlePendienteDescripcion -ClosedAt ([string]$pendiente.ClosedAt)
+                if (-not [string]::IsNullOrWhiteSpace($edadPend)) { Write-PctkWarn ('  {0}' -f $edadPend) }
+            }
             Write-PctkHint ('  {0}' -f (Split-Path -Leaf ([string]$pendiente.ZipPath)))
+            # Y decir que aceptar TERMINA ACA: subir el viejo no arma otro nuevo.
+            Write-PctkHint '  Si lo subis, el cierre termina aca: NO se arma un paquete nuevo de hoy.'
             [string] $ansPend = (Read-Host '  Subir ESE en vez de armar otro? [S/n]').Trim().ToUpperInvariant()
 
             if ($ansPend -ne 'N') {

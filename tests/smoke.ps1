@@ -3704,7 +3704,14 @@ Test-SmokeFunction 'CrmUpload' 'con un paquete sin subir, el [L] ofrece ESE y no
         Set-Content -LiteralPath $zip -Value 'el paquete que quedo sin subir' -Encoding ASCII
         $script:subidoDe = ''
 
-        function Get-BundlePendienteDeSubir { [PSCustomObject]@{ ZipPath = $zip; ClosedAt = '2026-08-01T02:54:30-03:00' } }
+        # #48: el paquete es de hace 7 dias, y ESO tiene que estar en pantalla
+        # (no solo el nombre del archivo con la fecha embebida).
+        $script:enPantalla = @()
+        [string] $hace7 = (Get-Date).AddDays(-7).ToString('yyyy-MM-ddTHH:mm:sszzz')
+
+        function Get-BundlePendienteDeSubir { [PSCustomObject]@{ ZipPath = $zip; ClosedAt = $hace7 } }
+        function Write-PctkWarn { param([string] $Message) $script:enPantalla += $Message }
+        function Write-PctkHint { param([string] $Message) $script:enPantalla += $Message }
         function Invoke-CrmUploadOffer { param([string] $ZipPath, [string] $OutputRootOverride = '')
             $script:subidoDe = $ZipPath
             return [PSCustomObject]@{ Intentado = $true; Ok = $true; Motivo = '' } }
@@ -3718,6 +3725,11 @@ Test-SmokeFunction 'CrmUpload' 'con un paquete sin subir, el [L] ofrece ESE y no
         if ($script:subidoDe -ne $zip) {
             throw ('subio otra cosa (o nada): "{0}"' -f $script:subidoDe)
         }
+
+        # #48 por el handler, no por el helper suelto (regla del repo).
+        [string] $todo = $script:enPantalla -join ' | '
+        if ($todo -notmatch 'hace 7 dias') { throw ('la edad del paquete no salio en pantalla: {0}' -f $todo) }
+        if ($todo -notmatch 'NO se arma un paquete nuevo') { throw ('no avisa que aceptar termina ahi: {0}' -f $todo) }
     } finally {
         Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     }
@@ -3780,6 +3792,24 @@ Test-SmokeFunction 'ServiceState' 'el marcador distingue "hecho" de "subido"' {
     } finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+Test-SmokeFunction 'ServiceState' '#48: la edad del paquete pendiente se dice en criollo' {
+    # Casos borde del helper (el camino por el handler ya se prueba arriba).
+    [datetime] $hoy = [datetime]'2026-08-08'
+
+    [string] $d = Get-BundlePendienteDescripcion -ClosedAt '2026-08-01T02:54:30-03:00' -Ahora $hoy
+    if ($d -notmatch 'del 01/08' -or $d -notmatch 'hace 7 dias') { throw ('7 dias: "{0}"' -f $d) }
+
+    $d = Get-BundlePendienteDescripcion -ClosedAt '2026-08-08T09:00:00-03:00' -Ahora $hoy
+    if ($d -notmatch 'HOY') { throw ('hoy: "{0}"' -f $d) }
+
+    $d = Get-BundlePendienteDescripcion -ClosedAt '2026-08-07T23:59:00-03:00' -Ahora $hoy
+    if ($d -notmatch 'AYER') { throw ('ayer: "{0}"' -f $d) }
+
+    # Sin fecha o con basura: NADA, no una edad inventada.
+    if ((Get-BundlePendienteDescripcion -ClosedAt '') -ne '')          { throw 'sin fecha tiene que callar' }
+    if ((Get-BundlePendienteDescripcion -ClosedAt 'no-es-fecha') -ne '') { throw 'con basura tiene que callar' }
 }
 
 Test-SmokeFunction 'CrmUpload' 'el [L] sigue cableado a la subida (no se desconecto sin querer)' {

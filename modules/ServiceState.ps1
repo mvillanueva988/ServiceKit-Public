@@ -470,3 +470,37 @@ function Get-BundlePendienteDeSubir {
 
     return [PSCustomObject]@{ ZipPath = $zip; ClosedAt = $closedAt }
 }
+
+function Get-BundlePendienteDescripcion {
+    <#
+    .SYNOPSIS
+        Cuando es el paquete pendiente, en criollo ("Es del 01/08, hace 7 dias").
+
+        Backlog #48, cazado en uso: la pregunta del [L] mostraba SOLO el nombre
+        del archivo (MATEO-NOTEBOOK_20260801-025514_...), con la fecha embebida
+        en un formato que hay que decodificar leyendo. Mateo subio un paquete de
+        hacia una semana creyendo que era el de hoy, y quedo pensando que la
+        subida estaba rota. Con la edad a la vista, la respuesta habria sido otra.
+
+        Devuelve '' si la fecha no se puede leer: mejor no decir nada que decir
+        una edad inventada.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowEmptyString()] [string] $ClosedAt,
+        [datetime] $Ahora = (Get-Date)
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ClosedAt)) { return '' }
+
+    $cuando = [System.DateTimeOffset]::MinValue
+    if (-not [System.DateTimeOffset]::TryParse($ClosedAt, [ref]$cuando)) { return '' }
+
+    [datetime] $dia = $cuando.ToLocalTime().Date
+    [int] $dias = ($Ahora.Date - $dia).Days
+
+    if ($dias -le 0) { return 'Es de HOY.' }
+    if ($dias -eq 1) { return ('Es de AYER ({0}).' -f $dia.ToString('dd/MM')) }
+    return ('Es del {0} (hace {1} dias).' -f $dia.ToString('dd/MM'), $dias)
+}
