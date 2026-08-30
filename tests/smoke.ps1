@@ -2983,6 +2983,40 @@ Test-SmokeFunction 'Router' '#52: un handler que tira NO cierra PCTk (guard del 
     }
 }
 
+Test-SmokeFunction 'Router' '#52: el guard tambien cubre el menu PRINCIPAL, no solo el submenu [A]' {
+    # Son dos loops distintos (Show-MainMenu y Show-IndividualActionsSubmenu) con dos
+    # guards distintos. Si alguien saca el del principal, el test del submenu sigue
+    # verde y no se entera nadie: por eso este cubre el otro loop aparte.
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+
+    # '8' = informe del cliente (lo hacemos tirar) y despues 'X' para salir del loop.
+    $script:PctkSmokeChoiceQueue = [System.Collections.Generic.Queue[string]]::new()
+    $script:PctkSmokeChoiceQueue.Enqueue('8')
+    $script:PctkSmokeChoiceQueue.Enqueue('X')
+    try {
+        function Read-PctkMenuChoice { param($Rows, $RenderHeader) return $script:PctkSmokeChoiceQueue.Dequeue() }
+        function Read-Host  { param([string]$Prompt) return '' }
+        function Write-Host { }
+        function Write-PctkErr  { }
+        function Write-PctkHint { }
+        function Write-PctkWork { }
+        function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+        function Invoke-ClientReport { param($MachineProfile) throw 'BOOM simulado del handler (#52)' }
+
+        [string] $salida = Show-MainMenu -MachineProfile ([PSCustomObject]@{ Dummy = $true })
+
+        if ($salida -ne 'X') { throw ('el loop no llego a la salida limpia; devolvio "{0}"' -f $salida) }
+        if ($script:PctkSmokeChoiceQueue.Count -ne 0) {
+            throw ('el loop no siguio despues del crash: quedaron {0} opciones sin consumir' -f
+                   $script:PctkSmokeChoiceQueue.Count)
+        }
+    }
+    finally {
+        Remove-Variable -Name 'PctkSmokeChoiceQueue' -Scope Script -ErrorAction SilentlyContinue
+    }
+}
+
 Test-SmokeFunction 'Apps' '#52: Invoke-ActionApps completo con el job REAL (handler, no la funcion pura)' {
     # POR QUE ESTE TEST: el smoke probaba Get-InstalledWin32Apps/UwpApps DIRECTO, que
     # es justo el camino que NO corre en produccion: el handler las manda a un
