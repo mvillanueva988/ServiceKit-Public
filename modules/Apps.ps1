@@ -49,15 +49,27 @@ function Get-InstalledWin32Apps {
             $pQUS = $item.PSObject.Properties['QuietUninstallString']
             $pES  = $item.PSObject.Properties['EstimatedSize']
 
+            # EstimatedSize es DWORD por convencion, pero el registro NO lo garantiza:
+            # un instalador puede dejar REG_SZ, REG_BINARY o REG_MULTI_SZ ahi. Con
+            # REG_BINARY/REG_MULTI_SZ la division tira ("no contiene op_Division") y con
+            # un REG_SZ no numerico tira al convertir a Double -> el job entero muere y
+            # el listado vuelve vacio. Se parsea a double explicito: lo que no parsea
+            # queda en $null, que es exactamente lo que ya significaba "sin dato".
+            [object] $sizeMB = $null
+            if ($null -ne $pES -and $null -ne $pES.Value) {
+                [double] $kb = 0
+                if ([double]::TryParse([string] $pES.Value, [ref] $kb) -and $kb -gt 0) {
+                    $sizeMB = [math]::Round($kb / 1024.0, 0)
+                }
+            }
+
             $list.Add([PSCustomObject]@{
                 Name                 = [string] (([string] $pDN.Value).Trim())
                 Version              = if ($null -ne $pDV)  { [string] $pDV.Value  } else { '' }
                 Publisher            = if ($null -ne $pPub) { [string] $pPub.Value } else { '' }
                 UninstallString      = if ($null -ne $pUS)  { [string] $pUS.Value  } else { '' }
                 QuietUninstallString = if ($null -ne $pQUS) { [string] $pQUS.Value } else { '' }
-                SizeMB               = if ($null -ne $pES -and $pES.Value -gt 0) {
-                                           [math]::Round($pES.Value / 1024.0, 0)
-                                       } else { $null }
+                SizeMB               = $sizeMB
             })
         }
     }

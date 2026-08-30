@@ -2943,6 +2943,82 @@ Test-SmokeFunction 'Router' 'Invoke-ClientReport corre bajo StrictMode sin snaps
     Invoke-ClientReport -MachineProfile $mp | Out-Null
 }
 
+Test-SmokeFunction 'Router' '#52: un handler que tira NO cierra PCTk (guard del dispatch)' {
+    # POR QUE ESTE TEST: hasta v2.8.0 ningun dispatch tenia try/catch y main.ps1
+    # corre con EAP='Stop' y un try/finally SIN catch -> cualquier excepcion de
+    # cualquier handler cerraba PCTk entero, sin dejar el texto del error. Por eso
+    # el crash del listado de apps (#52, campo 2026-08-24) se reporto "sin error":
+    # la consola se cerraba antes de poder leerlo.
+    # Se prueba por COMPORTAMIENTO (no buscando el try/catch en el texto del
+    # archivo): si el guard se cae o el codigo se muda de archivo, este test falla
+    # igual, en vez de quedar verde por vacuidad.
+    $ErrorActionPreference = 'Stop'   # espejar main.ps1 (el smoke corre en Continue)
+    Set-StrictMode -Version Latest
+
+    # Secuencia del menu: '8' (listado de apps, que va a tirar) y despues 'B' (volver).
+    $script:PctkSmokeChoiceQueue = [System.Collections.Generic.Queue[string]]::new()
+    $script:PctkSmokeChoiceQueue.Enqueue('8')
+    $script:PctkSmokeChoiceQueue.Enqueue('B')
+    try {
+        function Read-PctkMenuChoice { param($Rows, $RenderHeader) return $script:PctkSmokeChoiceQueue.Dequeue() }
+        function Read-Host  { param([string]$Prompt) return '' }
+        function Write-Host { }
+        function Write-PctkErr  { }
+        function Write-PctkHint { }
+        function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+        # El handler explota, igual que en la PC de Lucio.
+        function Invoke-ActionApps { param($MachineProfile) throw 'BOOM simulado del handler (#52)' }
+
+        # Si el guard NO esta, el throw escapa hasta aca y el test da FAIL.
+        Show-IndividualActionsSubmenu -MachineProfile ([PSCustomObject]@{ Dummy = $true })
+
+        # Y ademas el loop tiene que haber seguido vivo: la 'B' se consumio.
+        if ($script:PctkSmokeChoiceQueue.Count -ne 0) {
+            throw ('el loop no siguio despues del crash: quedaron {0} opciones sin consumir' -f
+                   $script:PctkSmokeChoiceQueue.Count)
+        }
+    }
+    finally {
+        Remove-Variable -Name 'PctkSmokeChoiceQueue' -Scope Script -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'Apps' '#52: Invoke-ActionApps completo con el job REAL (handler, no la funcion pura)' {
+    # POR QUE ESTE TEST: el smoke probaba Get-InstalledWin32Apps/UwpApps DIRECTO, que
+    # es justo el camino que NO corre en produccion: el handler las manda a un
+    # background job (lección del #24, CLAUDE.md "Testear el HANDLER, no solo la
+    # funcion pura"). Este corre el job de verdad y el handler entero.
+    $ErrorActionPreference = 'Stop'   # espejar main.ps1; el smoke corre en Continue
+    Set-StrictMode -Version Latest
+
+    function Read-Host { param([string]$Prompt) return 'V' }   # 'V' = volver; NO desinstala nada
+    function Write-Host { }
+    function Write-PctkWork { }
+    function Write-PctkHint { }
+    function Write-PctkWarn { }
+    function Write-PctkLine { }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+
+    # No debe tirar. Si el job muere o el formateo revienta, explota aca.
+    Invoke-ActionApps -MachineProfile ([PSCustomObject]@{ Dummy = $true })
+}
+
+Test-SmokeFunction 'Apps' '#52: SizeMB es numerico o null, nunca revienta por un EstimatedSize raro' {
+    # EstimatedSize es DWORD por convencion pero el registro no lo garantiza: con
+    # REG_BINARY / REG_MULTI_SZ la division tiraba ("no contiene op_Division") y con
+    # un REG_SZ no numerico tiraba al convertir a Double, matando el job entero.
+    # LIMITE CONOCIDO: no se puede inyectar un EstimatedSize corrupto sin escribir en
+    # el registro real, asi que esto verifica la invariante sobre las entradas de ESTA
+    # PC. Es una red que atrapa en la PC del cliente, no una prueba del caso raro.
+    $ErrorActionPreference = 'Stop'
+    foreach ($a in @(Get-InstalledWin32Apps)) {
+        if ($null -eq $a.SizeMB) { continue }
+        if (($a.SizeMB -isnot [double]) -and ($a.SizeMB -isnot [int]) -and ($a.SizeMB -isnot [decimal])) {
+            throw ('SizeMB de "{0}" no es numerico: {1}' -f $a.Name, $a.SizeMB.GetType().Name)
+        }
+    }
+}
+
 Test-SmokeFunction 'Router' 'Defender [V]: lee .Paths del objeto, no imprime el objeto crudo' {
     # Get-CustomDefenderExclusions devuelve { Available; Paths[] }. Iterarlo como si
     # fuera un array de strings imprimia "@{Available=True; Paths=System.String[]}"

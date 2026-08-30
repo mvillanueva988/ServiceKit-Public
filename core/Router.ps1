@@ -61,6 +61,97 @@ function Write-ActionAudit {
     }
 }
 
+# ─── Write-DispatchCrash (guard de los loops de menu) ─────────────────────────
+function Write-DispatchCrash {
+    <#
+    .SYNOPSIS
+        Reporta una excepcion que se escapo de un handler y la deja escrita en
+        el audit. La llaman los try/catch de Show-MainMenu y de
+        Show-IndividualActionsSubmenu.
+    .DESCRIPTION
+        Hasta v2.8.0 NINGUN dispatch tenia try/catch, y main.ps1 corre con
+        $ErrorActionPreference = 'Stop' y un try/finally SIN catch: cualquier
+        excepcion de cualquiera de los 20+ handlers CERRABA PCTk entero, en la
+        cara del cliente y sin dejar rastro del error.
+
+        Por eso el crash del listado de apps (#52, campo 2026-08-24) se
+        reporto "sin texto de error": no es que no se anoto, es que la consola
+        se cerraba antes de poder leerlo.
+
+        Esta funcion es el fix y el instrumento a la vez: imprime el detalle
+        completo Y lo persiste en output\audit\<fecha>.jsonl, asi el error
+        sobrevive al scroll de una sesion AnyDesk y se puede leer despues.
+
+        NUNCA lanza: si algo falla aca adentro, el loop del menu tiene que
+        seguir vivo igual. Por eso cada acceso al ErrorRecord va con guarda
+        (StrictMode: una prop ausente tira PropertyNotFoundStrict).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object] $ErrorRecord,
+        [Parameter()]          [string] $Choice    = '?',
+        [Parameter()]          [string] $MenuLabel = 'menu'
+    )
+
+    [string] $type  = 'Desconocido'
+    [string] $msg   = 'Sin mensaje'
+    [string] $fqeid = ''
+    [string] $pos   = ''
+    [string] $stack = ''
+    [string] $inner = ''
+
+    try {
+        if ($null -ne $ErrorRecord) {
+            [object] $ex = $ErrorRecord.Exception
+            if ($null -ne $ex) {
+                $type = [string] $ex.GetType().FullName
+                $msg  = [string] $ex.Message
+                if ($null -ne $ex.InnerException) { $inner = [string] $ex.InnerException.Message }
+            }
+            $fqeid = [string] $ErrorRecord.FullyQualifiedErrorId
+            if ($null -ne $ErrorRecord.InvocationInfo) {
+                $pos = [string] $ErrorRecord.InvocationInfo.PositionMessage
+            }
+            $stack = [string] $ErrorRecord.ScriptStackTrace
+        }
+    }
+    catch { }
+
+    try {
+        Write-Host ''
+        Write-PctkErr  ('  [!] La opcion [{0}] del {1} fallo y quedo cancelada.' -f $Choice, $MenuLabel)
+        Write-PctkHint  '      PCTk sigue abierto: podes seguir con otra opcion.'
+        Write-Host ''
+        Write-PctkHint  '      Detalle tecnico (copiar si hay que reportarlo):'
+        Write-PctkHint ('        Tipo:   {0}' -f $type)
+        Write-PctkHint ('        Error:  {0}' -f $msg)
+        if (-not [string]::IsNullOrWhiteSpace($inner)) { Write-PctkHint ('        Causa:  {0}' -f $inner) }
+        if (-not [string]::IsNullOrWhiteSpace($fqeid)) { Write-PctkHint ('        Id:     {0}' -f $fqeid) }
+        if (-not [string]::IsNullOrWhiteSpace($pos)) {
+            [string] $posFlat = ($pos -replace '[\r\n]+', ' ').Trim()
+            Write-PctkHint ('        Donde:  {0}' -f $posFlat)
+        }
+        Write-PctkHint  '      Queda registrado en output\audit del dia.'
+    }
+    catch { }
+
+    try {
+        Write-ActionAudit -Action 'Dispatch.Crash' -Status 'Failed' `
+            -Summary ('[{0}] {1}: {2}' -f $Choice, $type, $msg) `
+            -Details ([PSCustomObject]@{
+                Menu       = $MenuLabel
+                Choice     = $Choice
+                Type       = $type
+                Message    = $msg
+                Inner      = $inner
+                ErrorId    = $fqeid
+                Position   = $pos
+                StackTrace = $stack
+            })
+    }
+    catch { }
+}
+
 # ─── Show-MachineBanner ───────────────────────────────────────────────────────
 function Show-MachineBanner {
     [CmdletBinding()]
@@ -377,12 +468,19 @@ function Show-MainMenu {
         if ([string]::IsNullOrEmpty($choice)) { continue }
 
         if ($choice -eq 'X') {
-            Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
+            try {
+                Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
+            }
+            catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
             return 'X'
         }
 
         if ($choice -eq 'U') {
-            [bool] $ok = Invoke-UninstallToolkit
+            [bool] $ok = $false
+            try {
+                $ok = Invoke-UninstallToolkit
+            }
+            catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
             if ($ok) { return 'U' }
             Write-Host ''
             Read-Host '  [Enter] para continuar' | Out-Null
@@ -393,14 +491,21 @@ function Show-MainMenu {
         # puede terminar en desinstalacion, y ahi PCTk tiene que CERRARSE para que
         # el deleter pueda borrar la instalacion (espera al PID, max 30s).
         if ($choice -eq 'L') {
-            [bool] $okClose = Invoke-ServiceClose
+            [bool] $okClose = $false
+            try {
+                $okClose = Invoke-ServiceClose
+            }
+            catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
             if ($okClose) { return 'U' }
             Write-Host ''
             Read-Host '  [Enter] para continuar' | Out-Null
             continue
         }
 
-        Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
+        try {
+            Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
+        }
+        catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
         Write-Host ''
         Read-Host '  [Enter] para continuar' | Out-Null
     }
@@ -1006,7 +1111,10 @@ function Show-IndividualActionsSubmenu {
             return
         }
 
-        Invoke-IndividualActionDispatch -Choice $choice -MachineProfile $MachineProfile
+        try {
+            Invoke-IndividualActionDispatch -Choice $choice -MachineProfile $MachineProfile
+        }
+        catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'submenu [A]' }
         Write-Host ''
         Read-Host '  [Enter] para continuar' | Out-Null
     }
