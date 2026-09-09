@@ -2083,6 +2083,57 @@ Test-SmokeFunction 'ConsoleMenu' '#46 wiring: Read-PctkMenuChoice y Read-PctkMul
     }
 }
 
+# ─── #46 (auditoria 2026-09-09): el aviso de TooSmall tiene que poder LEERSE ──
+# Hallazgo de la auditoria del commit 9186063: el multi-select avisaba con
+# Write-PctkWarn y devolvia Action=fallback al toque. El caller hace `return`,
+# el menu de arriba redibuja con Clear-Host y el aviso se borra antes de que
+# alguien lo lea: el operador ve un flash y un [T] que aparenta no hacer nada
+# -- el mismo sintoma que el bug #46, justo en el camino que existe para
+# explicarlo. El aviso se movio a Show-PctkMenuTooSmallNotice, AFUERA del loop
+# de ReadKey, para poder probar el comportamiento de verdad (avisa + espera) en
+# vez de mirar el texto del archivo.
+Test-SmokeFunction 'ConsoleMenu' '#46 Show-PctkMenuTooSmallNotice: avisa Y ESPERA (si no, el Clear-Host de arriba se lo come)' {
+    $script:d7Avisos = @()
+    $script:d7Espero = $false
+    # sombreado local: el lookup de comandos de PowerShell es dinamico, asi que
+    # la funcion resuelve estas y no las reales (mismo patron que ya usa el
+    # smoke para Write-PctkWarn mas abajo).
+    function Write-PctkWarn { param([AllowEmptyString()][string] $Text) $script:d7Avisos += $Text }
+    function Read-Host      { param([string] $Prompt) $script:d7Espero = $true; return '' }
+
+    Show-PctkMenuTooSmallNotice '  [!] probe de auditoria'
+
+    if ($script:d7Avisos.Count -ne 1) { throw ('esperaba 1 aviso en pantalla; hubo {0}' -f $script:d7Avisos.Count) }
+    if ($script:d7Avisos[0] -notmatch 'probe de auditoria') { throw "el aviso no es el que se paso: $($script:d7Avisos[0])" }
+    if (-not $script:d7Espero) { throw 'no espero al operador -- el Clear-Host del menu de arriba borra el aviso antes de que se lea (regresion del hallazgo de auditoria)' }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 Show-PctkMenuTooSmallNotice: una consola sin input no convierte el aviso en crash' {
+    $script:d7Avisos2 = @()
+    function Write-PctkWarn { param([AllowEmptyString()][string] $Text) $script:d7Avisos2 += $Text }
+    function Read-Host      { param([string] $Prompt) throw 'no hay consola de entrada (headless)' }
+
+    # main.ps1 corre con $ErrorActionPreference='Stop': si el Read-Host de cortesia
+    # escapara, el aviso seria mas grave que lo que avisa. Espejar esa preferencia.
+    $ErrorActionPreference = 'Stop'
+    Show-PctkMenuTooSmallNotice '  [!] probe headless'
+
+    if ($script:d7Avisos2.Count -ne 1) { throw 'el aviso tiene que salir igual cuando no hay input real' }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 wiring: la rama TooSmall del multi-select usa el aviso CON pausa' {
+    # Guard del hallazgo: alcanza con que alguien vuelva a poner un Write-PctkWarn
+    # pelado ahi para que el aviso deje de leerse, y ningun test de comportamiento
+    # lo caza (la rama vive adentro del loop de ReadKey, que no se puede mockear).
+    [string] $path = Join-Path (Split-Path -Parent $PSScriptRoot) 'utils\ConsoleMenu.ps1'
+    [string] $src  = Get-Content -LiteralPath $path -Raw
+    [int] $start = $src.IndexOf('function Read-PctkMultiChoice ')
+    if ($start -lt 0) { throw 'Read-PctkMultiChoice no encontrada en ConsoleMenu.ps1' }
+    [int] $nextFn = $src.IndexOf("`nfunction ", $start + 10)
+    [string] $body = if ($nextFn -gt 0) { $src.Substring($start, $nextFn - $start) } else { $src.Substring($start) }
+    if ($body -notmatch 'Show-PctkMenuTooSmallNotice') {
+        throw 'Read-PctkMultiChoice no usa Show-PctkMenuTooSmallNotice -- el aviso de TooSmall se borra sin leerse (hallazgo de la auditoria de 9186063)'
+    }
+}
+
 # ─── Router: renderHeader robusto ante '& main.ps1' (regresion) ──────────────
 # Canary del bug del gate 2026-06-07: el renderHeader que dibuja el banner NO debe
 # usar .GetNewClosure(). Ese closure queda atado a un modulo dinamico que solo ve

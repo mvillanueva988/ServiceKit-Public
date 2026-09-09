@@ -195,6 +195,35 @@ function Get-PctkMenuViewport {
     return $viewTop
 }
 
+function Show-PctkMenuTooSmallNotice {
+    <#
+    .SYNOPSIS
+        Aviso de la opcion (c) del plan D7 cuando ni la vista paginada entra:
+        avisa Y ESPERA al operador antes de devolver el control.
+
+    .DESCRIPTION
+        La pausa es el punto de la funcion, no un adorno. El multi-select no
+        tiene un "render plano" propio: en TooSmall devuelve Action=fallback y
+        el caller (Invoke-ToolsMenuInteractive) hace `return`, con lo cual el
+        menu de arriba redibuja con Clear-Host y BORRA el aviso antes de que se
+        alcance a leer. Sin esperar, el operador ve un flash y un [T] que
+        aparenta no hacer nada -- el mismo sintoma que el bug #46 original,
+        justo en el camino que existe para explicarlo.
+
+        Esta afuera del loop de ReadKey a proposito: asi el comportamiento
+        (avisa + espera) se prueba de verdad en smoke sombreando Write-PctkWarn
+        y Read-Host, en vez de con un test estatico que mire el texto del
+        archivo. El Read-Host va en try/catch porque en una consola sin input
+        real (headless) tira, y el aviso no puede ser mas grave que lo que
+        avisa.
+    #>
+    [CmdletBinding()]
+    [OutputType([void])]
+    param([Parameter(Mandatory)] [string] $Message)
+    Write-PctkWarn $Message
+    try { Read-Host '  [Enter] para volver' | Out-Null } catch { }
+}
+
 function Read-PctkMenuChoice {
     <#
     .SYNOPSIS
@@ -617,7 +646,10 @@ function Read-PctkMultiChoice {
                 # trata Action=fallback como "salir con gracia", ver
                 # Invoke-ToolsMenuInteractive), asi que se reusa esa salida
                 # PERO con el aviso puesto, en vez de irse en silencio.
-                Write-PctkWarn '  [!] La consola es muy chica para esta lista -- agranda la ventana para ver las opciones.'
+                #
+                # La pausa NO es opcional: al volver, el menu de arriba redibuja
+                # con Clear-Host y borra el aviso. Ver Show-PctkMenuTooSmallNotice.
+                Show-PctkMenuTooSmallNotice '  [!] La consola es muy chica para esta lista -- agranda la ventana para ver las opciones.'
                 return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx }
             }
 
