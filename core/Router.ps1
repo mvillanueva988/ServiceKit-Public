@@ -152,6 +152,55 @@ function Write-DispatchCrash {
     catch { }
 }
 
+# ─── Get-PctkBannerCim ────────────────────────────────────────────────────────
+function Get-PctkBannerCim {
+    <#
+    .SYNOPSIS
+        Los dos objetos CIM que necesita el banner, cacheados por sesion.
+
+    .DESCRIPTION
+        #46 -- MEDIDO el 2026-09-09 en la maquina de Mateo (Ryzen 7 5800H), 3
+        corridas: Win32_OperatingSystem 165/28/28 ms, **Win32_Processor
+        1070/1041/1034 ms**. Total ~1122 ms de PROMEDIO por llamada.
+
+        Show-MachineBanner corre en el $RenderHeader de los tres menus, o sea en
+        CADA redibujo completo. Con el fix de paginacion de #46 el redibujo
+        completo dejo de ser raro (una vez, al entrar) y paso a ser rutina (uno
+        por deslizamiento de pagina): el costo ya existia, pero la frecuencia se
+        multiplico. Sintoma que reporto Mateo en la verificacion visual: bajando
+        de a una tecla "carga bien, quiza un poco lento"; apretando dos seguidas
+        la segunda se ENCOLA mientras corre el CIM de la primera, y con mas
+        teclas la cola crece mas rapido de lo que se drena -- se ve como un
+        bucle de redibujos, y en realidad es una cola vaciandose a ~1 frame por
+        segundo.
+
+        Lo que devuelve esta funcion es hardware ESTATICO: nombre del CPU, sus
+        nucleos e hilos, y la arquitectura del SO. Nada de eso cambia durante
+        una sesion, asi que cachearlo es seguro. Lo que SI cambia (RAM
+        disponible) no sale de aca: viene de $MachineProfile, que el caller
+        refresca por su cuenta.
+
+        Ojo: NO se cachea "el objeto vino null". Si la consulta falla (WMI roto,
+        servicio caido), la proxima llamada reintenta -- una falla transitoria no
+        deja el banner mutilado para el resto de la sesion.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+
+    if (-not (Test-Path 'variable:script:PctkBannerCimCache')) { $script:PctkBannerCimCache = $null }
+
+    [bool] $cacheOk = $null -ne $script:PctkBannerCimCache -and
+                      $null -ne $script:PctkBannerCimCache.Os -and
+                      $null -ne $script:PctkBannerCimCache.Cpu
+    if (-not $cacheOk) {
+        $osQuery  = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+        $cpuQuery = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+        $script:PctkBannerCimCache = [PSCustomObject]@{ Os = $osQuery; Cpu = $cpuQuery }
+    }
+    return $script:PctkBannerCimCache
+}
+
 # ─── Show-MachineBanner ───────────────────────────────────────────────────────
 function Show-MachineBanner {
     [CmdletBinding()]
@@ -160,8 +209,11 @@ function Show-MachineBanner {
         [PSCustomObject] $MachineProfile
     )
 
-    $osInfo  = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
-    $cpuInfo = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+    # #46: NO consultar CIM aca -- ver Get-PctkBannerCim (1122 ms medidos por
+    # llamada, y esto corre en cada redibujo completo del menu).
+    $bannerCim = Get-PctkBannerCim
+    $osInfo  = $bannerCim.Os
+    $cpuInfo = $bannerCim.Cpu
 
     [string] $osName = if ($MachineProfile.IsWin11) { 'Win11' } else { 'Windows' }
     if ($MachineProfile.IsHome) { $osName = "$osName Home" }

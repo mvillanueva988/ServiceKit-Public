@@ -2080,6 +2080,45 @@ Test-SmokeFunction 'ConsoleMenu' '#46 el dibujo NUNCA llega a la ultima fila (si
         }
     }
 }
+Test-SmokeFunction 'Router' '#46 Get-PctkBannerCim: consulta CIM UNA vez por sesion (1122 ms medidos por consulta)' {
+    # Medido 2026-09-09 en la maquina de Mateo: Win32_Processor tarda ~1040 ms y
+    # Win32_OperatingSystem ~28 ms. Eso corria en CADA redibujo completo del menu
+    # (Show-MachineBanner vive en el $RenderHeader de los tres menus), y con la
+    # paginacion de #46 el redibujo completo paso de raro a rutinario. Resultado:
+    # las teclas se encolaban mas rapido de lo que se dibujaba.
+    $script:PctkSmokeCimCount = 0
+    function Get-CimInstance {
+        param([string] $ClassName, $ErrorAction)
+        $script:PctkSmokeCimCount++
+        return [PSCustomObject]@{ OSArchitecture = '64 bits'; Name = 'CPU de prueba'; NumberOfCores = 8; NumberOfLogicalProcessors = 16 }
+    }
+    $script:PctkBannerCimCache = $null      # sesion limpia
+    $null = Get-PctkBannerCim
+    [int] $tras1 = $script:PctkSmokeCimCount
+    if ($tras1 -lt 1) { throw "la primera llamada deberia consultar CIM; conteo=$tras1" }
+    $null = Get-PctkBannerCim
+    $null = Get-PctkBannerCim
+    [int] $tras3 = $script:PctkSmokeCimCount
+    if ($tras3 -ne $tras1) {
+        throw "Get-PctkBannerCim re-consulto CIM: $tras1 consultas tras la 1ra llamada, $tras3 tras la 3ra. Cada consulta cuesta ~1 s y esto corre en cada redibujo del menu."
+    }
+    $script:PctkBannerCimCache = $null      # no contaminar los tests que siguen
+}
+Test-SmokeFunction 'Router' '#46 wiring: Show-MachineBanner NO consulta CIM directo (usa el cache)' {
+    # Guard estructural, house rule "testear el wiring, no solo la funcion pura":
+    # el cache de arriba no sirve de nada si el banner sigue llamando a
+    # Get-CimInstance por su cuenta. Se lee el CODIGO FUENTE, igual que el guard
+    # de #46 en ConsoleMenu.
+    $fn = Get-Command -Name 'Show-MachineBanner' -CommandType Function -ErrorAction SilentlyContinue
+    if ($null -eq $fn) { throw 'Show-MachineBanner no esta definida' }
+    [string] $body = $fn.Definition
+    if ($body -match 'Get-CimInstance') {
+        throw 'Show-MachineBanner llama a Get-CimInstance directo -- vuelve el costo de ~1122 ms por redibujo completo del menu (#46)'
+    }
+    if ($body -notmatch 'Get-PctkBannerCim') {
+        throw 'Show-MachineBanner no usa Get-PctkBannerCim -- el cache quedo desconectado'
+    }
+}
 Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuViewport: sigue la fila resaltada sin des-sincronizarse' {
     # target adelante del budget -> la ventana se desliza para que quede al fondo
     [int] $vt = Get-PctkMenuViewport -TargetPos 7 -CurrentViewTop 0 -Budget 5 -TotalCompactRows 20
