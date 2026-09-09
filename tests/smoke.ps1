@@ -1227,6 +1227,19 @@ Test-SmokeFunction 'ConsoleSetup' 'Disable-PctkQuickEdit + Restore-PctkConsoleMo
         if ($null -eq (Get-Command $fn -ErrorAction SilentlyContinue)) { throw "$fn no encontrado" }
     }
 }
+Test-SmokeFunction 'ConsoleSetup' '#46: Set-PctkConsoleSize devuelve bool (antes seteaba y seguia en silencio)' {
+    # Estructural, NO invoca la funcion (utils read-only en smoke -- ver el test de
+    # arriba). Antes del fix la funcion no declaraba OutputType y en WT se
+    # auto-cancelaba sin que nadie se enterara (issue #46). Ahora el caller
+    # (main.ps1) tiene que poder leer si el resize realmente llego a $MinHeight.
+    $cmd = Get-Command 'Set-PctkConsoleSize' -CommandType Function -ErrorAction SilentlyContinue
+    if ($null -eq $cmd) { throw 'Set-PctkConsoleSize no encontrado' }
+    [bool] $declaraBool = @($cmd.OutputType | Where-Object { $_.Type -eq [bool] }).Count -gt 0
+    if (-not $declaraBool) {
+        [string[]] $outTypes = @($cmd.OutputType | ForEach-Object { $_.Name })
+        throw ('Set-PctkConsoleSize deberia declarar [OutputType([bool])]; declara: {0}' -f ($outTypes -join ', '))
+    }
+}
 
 # ─── ExportClientLogs (5 casos: empty, only-audit, both, tag-sanitize, collide) ─
 
@@ -1968,6 +1981,105 @@ Test-SmokeFunction 'ConsoleMenu' 'Test-PctkInteractiveConsole: bool + false bajo
 Test-SmokeFunction 'ConsoleMenu' 'Invoke-ToolsMenuInteractive presente (handler [T])' {
     if ($null -eq (Get-Command 'Invoke-ToolsMenuInteractive' -CommandType Function -ErrorAction SilentlyContinue)) {
         throw 'Invoke-ToolsMenuInteractive no encontrado'
+    }
+}
+
+# ─── #46: Get-PctkMenuLayout / Get-PctkMenuViewport (Windows Terminal) ───────
+# La ventana de Windows Terminal NO se puede agrandar via Set-PctkConsoleSize
+# (MaxWindowSize ahi es el tamanio ACTUAL -- ver ConsoleIcon.ps1). El fix mide
+# el alto real de la consola en cada redibujo completo y elige Full / Compact
+# (sin separadores) / Paged (ventana deslizante) / TooSmall (opcion c: avisar
+# y caer al render plano). Estas dos funciones son PURAS a proposito -- no
+# dependen de [Console], asi que se prueban sin abrir una consola real. El
+# NOTA DE HONESTIDAD para quien lea esto despues: el loop de ReadKey de
+# Read-PctkMenuChoice/Read-PctkMultiChoice NO se puede ejercitar end-to-end
+# en smoke -- [Console]::ReadKey tira bajo input redirigido (por eso existe
+# el gate Test-PctkInteractiveConsole) y [Console]::WindowHeight no se puede
+# mockear. Por eso esta bateria prueba la MISMA funcion que el loop real
+# llama (no una copia), y el test de "wiring" mas abajo confirma que el loop
+# de verdad la invoca. La verificacion visual con Mateo mirando (ver el
+# contrato D7) es la que cubre el tramo que smoke no puede.
+Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: Full cuando entra todo' {
+    $l = Get-PctkMenuLayout -TotalRows 23 -CompactRows 19 -HeaderLines 8 -WindowHeight 44
+    if ($l.Mode -ne 'Full') { throw "esperado Full; got $($l.Mode) (budget=$($l.Budget))" }
+    if ($l.Budget -ne 34) { throw "budget esperado 34; got $($l.Budget)" }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: limite exacto Full/Compact (budget == TotalRows)' {
+    # budget = WindowHeight - HeaderLines - FooterLines = 10-2-0 = 8 = TotalRows -> Full
+    $l = Get-PctkMenuLayout -TotalRows 8 -CompactRows 6 -HeaderLines 2 -WindowHeight 10 -FooterLines 0
+    if ($l.Mode -ne 'Full') { throw "budget==TotalRows deberia ser Full; got $($l.Mode)" }
+    # un budget menos -> ya no entra todo, pero SI entra sin separadores -> Compact
+    $l2 = Get-PctkMenuLayout -TotalRows 8 -CompactRows 6 -HeaderLines 3 -WindowHeight 10 -FooterLines 0
+    if ($l2.Mode -ne 'Compact') { throw "budget==CompactRows deberia caer a Compact; got $($l2.Mode)" }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: Paged cuando ni compacto entra' {
+    $l = Get-PctkMenuLayout -TotalRows 31 -CompactRows 25 -HeaderLines 8 -WindowHeight 29
+    if ($l.Mode -ne 'Paged') { throw "esperado Paged; got $($l.Mode) (budget=$($l.Budget))" }
+    if ($l.Budget -lt 3) { throw "Paged con budget < MinUsableRows no deberia pasar el gate: $($l.Budget)" }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: TooSmall (opcion c) con ventana absurda' {
+    $l = Get-PctkMenuLayout -TotalRows 31 -CompactRows 25 -HeaderLines 10 -WindowHeight 10
+    if ($l.Mode -ne 'TooSmall') { throw "esperado TooSmall; got $($l.Mode) (budget=$($l.Budget))" }
+    # budget negativo (header+footer ya se comen toda la ventana) tambien es TooSmall, no revienta
+    $l2 = Get-PctkMenuLayout -TotalRows 31 -CompactRows 25 -HeaderLines 40 -WindowHeight 10
+    if ($l2.Mode -ne 'TooSmall') { throw "budget negativo deberia ser TooSmall; got $($l2.Mode)" }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: 0 filas compactas no fuerza Paged (evita bucle sin contenido)' {
+    $l = Get-PctkMenuLayout -TotalRows 0 -CompactRows 0 -HeaderLines 10 -WindowHeight 10
+    if ($l.Mode -ne 'TooSmall') { throw "CompactRows=0 deberia ser TooSmall (nada que paginar); got $($l.Mode)" }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: la ventana ORIGINAL del bug (29 filas WT) nunca da Full ni revienta' {
+    # Numeros medidos en field-bugs.md 2026-08-07: WT quedaba en 29 filas y NI el
+    # menu principal (23 filas) NI el submenu [A] (31 filas) entraban. Esto ancla
+    # el fix a esos numeros reales -- si alguien agrega items al menu y esto sigue
+    # en Full, es que el guard se rompio (silenciosamente volveria al bug #46).
+    foreach ($fn in @('Get-MainMenuRows', 'Get-IndividualActionRows')) {
+        [object[]] $rows    = & $fn
+        [int]      $total   = $rows.Count
+        [int]      $compact = @($rows | Where-Object { $_.Kind -ne 'Spacer' }).Count
+        foreach ($hdr in 6, 8, 10) {
+            $l = Get-PctkMenuLayout -TotalRows $total -CompactRows $compact -HeaderLines $hdr -WindowHeight 29
+            if ($l.Mode -eq 'Full') {
+                throw ("{0} con header={1} en ventana de 29 filas dio Full -- el bug #46 volveria (WT no puede crecer la ventana)" -f $fn, $hdr)
+            }
+        }
+    }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuViewport: sigue la fila resaltada sin des-sincronizarse' {
+    # target adelante del budget -> la ventana se desliza para que quede al fondo
+    [int] $vt = Get-PctkMenuViewport -TargetPos 7 -CurrentViewTop 0 -Budget 5 -TotalCompactRows 20
+    if ($vt -ne 3) { throw "target=7 budget=5 deberia dar viewTop=3; got $vt" }
+    # target atras del viewTop -> sube directo a mostrarlo primero
+    [int] $vt2 = Get-PctkMenuViewport -TargetPos 1 -CurrentViewTop $vt -Budget 5 -TotalCompactRows 20
+    if ($vt2 -ne 1) { throw "target=1 (antes del viewTop) deberia dar viewTop=1; got $vt2"}
+    # target al final de la lista -> clampa a maxTop, nunca se pasa del final
+    [int] $vt3 = Get-PctkMenuViewport -TargetPos 19 -CurrentViewTop $vt2 -Budget 5 -TotalCompactRows 20
+    if ($vt3 -ne 15) { throw "target=19 (ultimo, total=20, budget=5) deberia clampar a viewTop=15; got $vt3" }
+    # target dentro de la ventana actual -> no se mueve (evita redibujos de mas)
+    [int] $vt4 = Get-PctkMenuViewport -TargetPos 16 -CurrentViewTop $vt3 -Budget 5 -TotalCompactRows 20
+    if ($vt4 -ne $vt3) { throw "target dentro de la ventana visible no deberia mover viewTop; $vt3 -> $vt4" }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 wiring: Read-PctkMenuChoice y Read-PctkMultiChoice llaman a Get-PctkMenuLayout' {
+    # Guard estructural (no de comportamiento): el house rule de este repo es
+    # "testear el handler, no solo la funcion pura" -- Get-PctkMenuLayout ya esta
+    # probada arriba, pero eso no prueba que el LOOP REAL la use. Como
+    # [Console]::ReadKey/WindowHeight no se pueden mockear en smoke (tiran bajo
+    # input redirigido, por diseño -- ver Test-PctkInteractiveConsole), esta es
+    # la verificacion mas fuerte que se puede hacer sin abrir una consola real.
+    [string] $path = Join-Path (Split-Path -Parent $PSScriptRoot) 'utils\ConsoleMenu.ps1'
+    [string] $src  = Get-Content -LiteralPath $path -Raw
+    foreach ($fnName in @('Read-PctkMenuChoice', 'Read-PctkMultiChoice')) {
+        # extraer el cuerpo de la funcion hasta la siguiente "function " top-level
+        [int] $start = $src.IndexOf("function $fnName ")
+        if ($start -lt 0) { throw "$fnName no encontrada en ConsoleMenu.ps1" }
+        [int] $nextFn = $src.IndexOf("`nfunction ", $start + 10)
+        [string] $body = if ($nextFn -gt 0) { $src.Substring($start, $nextFn - $start) } else { $src.Substring($start) }
+        if ($body -notmatch 'Get-PctkMenuLayout') {
+            throw "$fnName no llama a Get-PctkMenuLayout -- el redibujo completo dejaria de medir el alto real (bug #46 de nuevo)"
+        }
+        if ($body -notmatch 'TooSmall') {
+            throw "$fnName no maneja el modo TooSmall (opcion c del plan D7: avisar en vez de romper)"
+        }
     }
 }
 

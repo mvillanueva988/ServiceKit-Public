@@ -118,6 +118,83 @@ function Test-PctkConsoleResized {
     catch { return $false }
 }
 
+function Get-PctkMenuLayout {
+    <#
+    .SYNOPSIS
+        Decide como entra una lista de filas de menu en el alto REAL
+        disponible de la consola (bug #46: en Windows Terminal la ventana no
+        se puede agrandar -- MaxWindowSize ahi es el tamanio actual de la
+        ventana, asi que Set-PctkConsoleSize no tiene margen para crecer -- el
+        menu tiene que entrar en lo que hay, no asumir que agrandar funciono).
+
+    .DESCRIPTION
+        Pura: recibe los altos ya medidos por el caller y devuelve el modo de
+        dibujo, sin tocar la consola (asi se puede probar sin abrir una). El
+        guard NO es "es Windows Terminal": es medir budget vs. filas, y eso
+        cubre tambien conhost en pantalla chica o achicado por AnyDesk.
+
+        Modos, de mejor a peor:
+        - Full     : entra TODO como hoy (headers + items + separadores).
+        - Compact  : entra sin los separadores en blanco (Kind=Spacer), con
+                     todo el contenido real (headers + items).
+        - Paged    : ni compacto entra completo -> el caller dibuja una
+                     VENTANA de $Budget filas de las compactas, que se
+                     desliza para mantener visible la fila resaltada.
+        - TooSmall : opcion (c) del plan D7 -- ni una vista minimamente util
+                     entra. El caller avisa con UNA linea y cae al render
+                     plano (sin coordenadas absolutas, a prueba de scroll)
+                     en vez de romper el dibujo.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)] [int] $TotalRows,
+        [Parameter(Mandatory)] [int] $CompactRows,
+        [Parameter(Mandatory)] [int] $HeaderLines,
+        [Parameter(Mandatory)] [int] $WindowHeight,
+        [int] $FooterLines   = 2,   # linea en blanco + linea de ayuda, debajo de las filas
+        [int] $MinUsableRows = 3    # opcion (c): por debajo de esto paginar ya no ayuda
+    )
+    [int] $budget = $WindowHeight - $HeaderLines - $FooterLines
+    [string] $mode = 'TooSmall'
+    if ($budget -ge $TotalRows) {
+        $mode = 'Full'
+    } elseif ($budget -ge $CompactRows) {
+        $mode = 'Compact'
+    } elseif ($budget -ge $MinUsableRows -and $CompactRows -gt 0) {
+        $mode = 'Paged'
+    }
+    return [PSCustomObject]@{ Mode = $mode; Budget = $budget }
+}
+
+function Get-PctkMenuViewport {
+    <#
+    .SYNOPSIS
+        Nuevo ViewTop (primer indice visible) de un menu en modo Paged, para
+        que $TargetPos (indice de la fila resaltada dentro de la lista SIN
+        separadores) quede dentro de la ventana visible. Pura: sin consola,
+        para poder probarla sin abrir una.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory)] [int] $TargetPos,
+        [Parameter(Mandatory)] [int] $CurrentViewTop,
+        [Parameter(Mandatory)] [int] $Budget,
+        [Parameter(Mandatory)] [int] $TotalCompactRows
+    )
+    [int] $viewTop = $CurrentViewTop
+    if ($TargetPos -lt $viewTop) {
+        $viewTop = $TargetPos
+    } elseif ($TargetPos -ge ($viewTop + $Budget)) {
+        $viewTop = $TargetPos - $Budget + 1
+    }
+    [int] $maxTop = [Math]::Max(0, $TotalCompactRows - $Budget)
+    if ($viewTop -gt $maxTop) { $viewTop = $maxTop }
+    if ($viewTop -lt 0)       { $viewTop = 0 }
+    return $viewTop
+}
+
 function Read-PctkMenuChoice {
     <#
     .SYNOPSIS
@@ -130,6 +207,13 @@ function Read-PctkMenuChoice {
         el highlight y la que lo gana) con [Console]::SetCursorPosition, SIN Clear-Host
         -> cero parpadeo (el flash de la v1 venia del Clear-Host por flecha). Si
         SetCursorPosition falla (consola rara), cae a un redibujo completo ese frame.
+
+        #46: cada redibujo completo mide el alto REAL de ventana (Get-PctkMenuLayout)
+        y elige Full/Compact/Paged/TooSmall en vez de asumir que Set-PctkConsoleSize
+        agrando la ventana. En Paged, la ventana visible (viewTop) se desliza para
+        mantener la fila resaltada a la vista; moverse DENTRO de la ventana sigue
+        siendo el mismo redibujo surgical de 2 filas, moverse afuera fuerza un
+        redibujo completo (la ventana visible cambio, las Y guardadas ya no valen).
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -177,6 +261,17 @@ function Read-PctkMenuChoice {
         }
     }
 
+    # helper local: render plano sin highlight + Read-Host. Sin coordenadas
+    # absolutas -> nunca se desalinea aunque el contenido scrollee, por eso es
+    # el fallback comun de "no hay consola interactiva real" (headless/smoke),
+    # "ReadKey fallo a mitad de sesion" (consola rara) y "TooSmall" (#46,
+    # opcion c: ni la vista paginada entra -- avisar y no romper el dibujo).
+    function Invoke-FlatFallback {
+        foreach ($row in $Rows) { Write-RowLine -Row $row -Hi $false }
+        Write-Host ''
+        return (Read-Host $Prompt).Trim().ToUpperInvariant()
+    }
+
     # Gate: todas deben pasar para usar modo crudo; si falla alguna -> fallback
     [bool] $interactive = $false
     if (-not $ForceFallbackForTest) {
@@ -192,9 +287,7 @@ function Read-PctkMenuChoice {
     if (-not $interactive -or $items.Count -eq 0) {
         # Fallback: render sin highlight + Read-Host (comportamiento original)
         & $RenderHeader
-        foreach ($row in $Rows) { Write-RowLine -Row $row -Hi $false }
-        Write-Host ''
-        return (Read-Host $Prompt).Trim().ToUpperInvariant()
+        return (Invoke-FlatFallback)
     }
 
     # --- Modo interactivo: redibujo surgical (sin Clear-Host por flecha) ---
@@ -207,21 +300,81 @@ function Read-PctkMenuChoice {
     [int]    $lastH  = -1                            #   completo -> detectar resize (ej. maximizar) y
     [int]    $lastBW = -1                            #   re-dibujar (las Y cacheadas quedan obsoletas)
 
+    # #46: filas sin separadores (modo Compact/Paged) + mapa fila->indice de
+    # item, precalculado UNA vez (la estructura de $Rows no cambia durante el
+    # loop). $itemIndexOf usa el objeto fila como clave -- son las MISMAS
+    # instancias en $Rows/$compactRows (Where-Object no clona), asi que la
+    # identidad de referencia es estable.
+    [object[]] $compactRows = @($Rows | Where-Object { $_.Kind -ne 'Spacer' })
+    [hashtable] $itemIndexOf = @{}
+    for ([int] $k = 0; $k -lt $items.Count; $k++) { $itemIndexOf[$items[$k]] = $k }
+    [int[]] $itemRowPos = [int[]]::new($items.Count)   # indice del item DENTRO de $compactRows
+    [int] $cIdx = 0
+    foreach ($cRow in $compactRows) {
+        if ($cRow.Kind -eq 'Item') { $itemRowPos[$itemIndexOf[$cRow]] = $cIdx }
+        $cIdx++
+    }
+    [string] $layoutMode = 'Full'
+    [int]    $viewTop    = 0   # solo relevante en modo Paged: primer indice visible de $compactRows
+    [int]    $viewEnd    = $compactRows.Count - 1
+
     while ($true) {
         if ($full) {
             & $RenderHeader
-            [int] $ii = 0
-            foreach ($row in $Rows) {
+
+            # #46: medir el alto REAL antes de decidir como dibujar. Si algo
+            # no se puede medir, degradar directo al render plano (mismo
+            # espiritu que TooSmall: ante la duda, el seguro es el que no usa
+            # coordenadas absolutas).
+            [bool] $measureOk   = $true
+            [int]  $headerLines = 0
+            try { $headerLines = [Console]::CursorTop } catch { $measureOk = $false }
+            [int] $winH = 0
+            if ($measureOk) {
+                try { $winH = [Console]::WindowHeight }
+                catch {
+                    try { $winH = [int] $Host.UI.RawUI.WindowSize.Height }
+                    catch { $measureOk = $false }
+                }
+            }
+
+            if (-not $measureOk -or $winH -le 0) {
+                $layoutMode = 'TooSmall'
+            } else {
+                $layoutInfo = Get-PctkMenuLayout -TotalRows $Rows.Count -CompactRows $compactRows.Count -HeaderLines $headerLines -WindowHeight $winH
+                $layoutMode = [string] $layoutInfo.Mode
+            }
+
+            if ($layoutMode -eq 'TooSmall') {
+                Write-PctkWarn '  [!] La consola es muy chica para el menu -- agranda la ventana para ver las opciones.'
+                return (Invoke-FlatFallback)
+            }
+
+            [object[]] $rowsToDraw = $Rows
+            if ($layoutMode -eq 'Compact') { $rowsToDraw = $compactRows }
+            if ($layoutMode -eq 'Paged') {
+                $viewTop = Get-PctkMenuViewport -TargetPos $itemRowPos[$hiIdx] -CurrentViewTop $viewTop -Budget $layoutInfo.Budget -TotalCompactRows $compactRows.Count
+                $viewEnd = [Math]::Min($compactRows.Count, $viewTop + $layoutInfo.Budget) - 1
+                $rowsToDraw = $compactRows[$viewTop..$viewEnd]
+            } else {
+                $viewTop = 0
+                $viewEnd = $compactRows.Count - 1
+            }
+
+            foreach ($row in $rowsToDraw) {
                 if ($row.Kind -eq 'Item') {
+                    [int] $ii = $itemIndexOf[$row]
                     $itemY[$ii] = [Console]::CursorTop
                     Write-RowLine -Row $row -Hi ($ii -eq $hiIdx)
-                    $ii++
                 } else {
                     Write-RowLine -Row $row -Hi $false
                 }
             }
             Write-Host ''
             [string] $hintLine = '  Usa flechas arriba/abajo + Enter, o la tecla del atajo:'
+            if ($layoutMode -eq 'Paged') {
+                $hintLine = ('  Flechas + Enter, o el atajo del margen.  (mostrando {0}-{1} de {2})' -f ($viewTop + 1), ($viewEnd + 1), $compactRows.Count)
+            }
             if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $hintLine + (Pe)) }
             else             { Write-Host $hintLine -ForegroundColor DarkGray }
             $bottomY = [Console]::CursorTop
@@ -256,9 +409,7 @@ function Read-PctkMenuChoice {
             # KeyAvailable/ReadKey fallaron (host sin consola real) -> fallback a
             # Read-Host, igual que antes.
             & $RenderHeader
-            foreach ($row in $Rows) { Write-RowLine -Row $row -Hi $false }
-            Write-Host ''
-            return (Read-Host $Prompt).Trim().ToUpperInvariant()
+            return (Invoke-FlatFallback)
         }
 
         # Resize mientras se esperaba: las Y cacheadas en $itemY quedaron obsoletas,
@@ -283,15 +434,25 @@ function Read-PctkMenuChoice {
                 $hiIdx = if ($hiIdx -ge ($items.Count - 1)) { 0 } else { $hiIdx + 1 }
             }
             if ($old -ne $hiIdx) {
-                try {
-                    # solo las 2 filas que cambian -> cero flash
-                    [Console]::SetCursorPosition(0, $itemY[$old])
-                    Write-RowLine -Row $items[$old]   -Hi $false
-                    [Console]::SetCursorPosition(0, $itemY[$hiIdx])
-                    Write-RowLine -Row $items[$hiIdx] -Hi $true
-                    [Console]::SetCursorPosition(0, $bottomY)
-                } catch {
-                    $full = $true   # consola rara -> redibujo completo el proximo frame
+                # #46: en modo Paged, si el nuevo resaltado cae afuera de la
+                # ventana visible actual hay que deslizarla -> las Y de TODAS
+                # las filas visibles cambian, asi que toca redibujo completo
+                # (no alcanza con las 2 filas de siempre).
+                [bool] $needsScroll = ($layoutMode -eq 'Paged') -and
+                    ($itemRowPos[$hiIdx] -lt $viewTop -or $itemRowPos[$hiIdx] -gt $viewEnd)
+                if ($needsScroll) {
+                    $full = $true
+                } else {
+                    try {
+                        # solo las 2 filas que cambian -> cero flash
+                        [Console]::SetCursorPosition(0, $itemY[$old])
+                        Write-RowLine -Row $items[$old]   -Hi $false
+                        [Console]::SetCursorPosition(0, $itemY[$hiIdx])
+                        Write-RowLine -Row $items[$hiIdx] -Hi $true
+                        [Console]::SetCursorPosition(0, $bottomY)
+                    } catch {
+                        $full = $true   # consola rara -> redibujo completo el proximo frame
+                    }
                 }
             }
             continue
@@ -324,11 +485,20 @@ function Read-PctkMenuChoice {
                     if ($mi -lt 0) { for ($j = 0; $j -lt $items.Count; $j++) { if (([string]$items[$j].Key).StartsWith($cand)) { $mi = $j; break } } }
                     if ($mi -ge 0 -and $mi -ne $hiIdx) {
                         [int] $old = $hiIdx; $hiIdx = $mi
-                        try {
-                            [Console]::SetCursorPosition(0, $itemY[$old]);   Write-RowLine -Row $items[$old]   -Hi $false
-                            [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-RowLine -Row $items[$hiIdx] -Hi $true
-                            [Console]::SetCursorPosition(0, $bottomY)
-                        } catch { $full = $true }
+                        # #46: mismo trato que las flechas -- si el atajo salto
+                        # a un item fuera de la ventana Paged visible, redibujo
+                        # completo en vez de pintar en Y que ya no corresponden.
+                        [bool] $needsScroll = ($layoutMode -eq 'Paged') -and
+                            ($itemRowPos[$hiIdx] -lt $viewTop -or $itemRowPos[$hiIdx] -gt $viewEnd)
+                        if ($needsScroll) {
+                            $full = $true
+                        } else {
+                            try {
+                                [Console]::SetCursorPosition(0, $itemY[$old]);   Write-RowLine -Row $items[$old]   -Hi $false
+                                [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-RowLine -Row $items[$hiIdx] -Hi $true
+                                [Console]::SetCursorPosition(0, $bottomY)
+                            } catch { $full = $true }
+                        }
                     }
                     $accepted = $true
                     break
@@ -410,17 +580,67 @@ function Read-PctkMultiChoice {
     [string] $buffer  = ''    # acumulador para marcar por numero multi-digito (10-19)
     [int]    $lastW = -1; [int] $lastH = -1; [int] $lastBW = -1   # detectar resize -> redibujo
 
+    # #46: sin headers/spacers aca (todas las filas son items) -> "Compact" no
+    # aporta nada distinto de "Full" y nunca se elige; solo importan Full vs.
+    # Paged vs. TooSmall. viewTop/viewEnd delimitan la ventana visible cuando
+    # es Paged (indices directos sobre $Items, no hace falta mapeo de filas).
+    [string] $layoutMode = 'Full'
+    [int]    $viewTop    = 0
+    [int]    $viewEnd    = $count - 1
+
     while ($true) {
         if ($full) {
             & $RenderHeader
-            for ([int] $i = 0; $i -lt $count; $i++) {
+
+            [bool] $measureOk   = $true
+            [int]  $headerLines = 0
+            try { $headerLines = [Console]::CursorTop } catch { $measureOk = $false }
+            [int] $winH = 0
+            if ($measureOk) {
+                try { $winH = [Console]::WindowHeight }
+                catch {
+                    try { $winH = [int] $Host.UI.RawUI.WindowSize.Height }
+                    catch { $measureOk = $false }
+                }
+            }
+
+            if (-not $measureOk -or $winH -le 0) {
+                $layoutMode = 'TooSmall'
+            } else {
+                $layoutInfo = Get-PctkMenuLayout -TotalRows $count -CompactRows $count -HeaderLines $headerLines -WindowHeight $winH
+                $layoutMode = [string] $layoutInfo.Mode
+            }
+
+            if ($layoutMode -eq 'TooSmall') {
+                # #46 opcion (c): avisar con UNA linea y volver -- no hay un
+                # "render plano" propio para el multi-select (el caller ya
+                # trata Action=fallback como "salir con gracia", ver
+                # Invoke-ToolsMenuInteractive), asi que se reusa esa salida
+                # PERO con el aviso puesto, en vez de irse en silencio.
+                Write-PctkWarn '  [!] La consola es muy chica para esta lista -- agranda la ventana para ver las opciones.'
+                return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx }
+            }
+
+            if ($layoutMode -eq 'Paged') {
+                $viewTop = Get-PctkMenuViewport -TargetPos $hiIdx -CurrentViewTop $viewTop -Budget $layoutInfo.Budget -TotalCompactRows $count
+                $viewEnd = [Math]::Min($count, $viewTop + $layoutInfo.Budget) - 1
+            } else {
+                $viewTop = 0
+                $viewEnd = $count - 1
+            }
+
+            for ([int] $i = $viewTop; $i -le $viewEnd; $i++) {
                 $itemY[$i] = [Console]::CursorTop
                 Write-MultiRow -IsChecked $Checked[$i] -Item $Items[$i] -Hi ($i -eq $hiIdx)
             }
             Write-Host ''
             $legendY = [Console]::CursorTop
-            if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $LegendLine + (Pe)) }
-            else             { Write-Host $LegendLine -ForegroundColor DarkGray }
+            [string] $legend = $LegendLine
+            if ($layoutMode -eq 'Paged') {
+                $legend = ('{0}  (mostrando {1}-{2} de {3})' -f $LegendLine, ($viewTop + 1), ($viewEnd + 1), $count)
+            }
+            if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $legend + (Pe)) }
+            else             { Write-Host $legend -ForegroundColor DarkGray }
             try { $lastW = [Console]::WindowWidth; $lastH = [Console]::WindowHeight; $lastBW = [Console]::BufferWidth } catch { }
             $full = $false
         }
@@ -460,11 +680,19 @@ function Read-PctkMultiChoice {
             if ($key.Key -eq [ConsoleKey]::UpArrow) { $hiIdx = if ($hiIdx -le 0) { $count - 1 } else { $hiIdx - 1 } }
             else { $hiIdx = if ($hiIdx -ge ($count - 1)) { 0 } else { $hiIdx + 1 } }
             if ($old -ne $hiIdx) {
-                try {
-                    [Console]::SetCursorPosition(0, $itemY[$old]);   Write-MultiRow -IsChecked $Checked[$old]   -Item $Items[$old]   -Hi $false
-                    [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
-                    [Console]::SetCursorPosition(0, $legendY)
-                } catch { $full = $true }
+                # #46: mismo trato que en Read-PctkMenuChoice -- si el nuevo
+                # resaltado cae afuera de la ventana Paged visible, redibujo
+                # completo (la ventana se desliza, todas las Y cambian).
+                [bool] $needsScroll = ($layoutMode -eq 'Paged') -and ($hiIdx -lt $viewTop -or $hiIdx -gt $viewEnd)
+                if ($needsScroll) {
+                    $full = $true
+                } else {
+                    try {
+                        [Console]::SetCursorPosition(0, $itemY[$old]);   Write-MultiRow -IsChecked $Checked[$old]   -Item $Items[$old]   -Hi $false
+                        [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                        [Console]::SetCursorPosition(0, $legendY)
+                    } catch { $full = $true }
+                }
             }
             continue
         }
@@ -504,22 +732,33 @@ function Read-PctkMultiChoice {
                     [int] $old = $hiIdx; $hiIdx = $idx
                     $Checked[$idx] = -not $Checked[$idx]
                     $buffer = ''
-                    try {
-                        if ($old -ne $hiIdx) { [Console]::SetCursorPosition(0, $itemY[$old]); Write-MultiRow -IsChecked $Checked[$old] -Item $Items[$old] -Hi $false }
-                        [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
-                        [Console]::SetCursorPosition(0, $legendY)
-                    } catch { $full = $true }
+                    # #46: el estado (Checked) ya cambio arriba pase lo que
+                    # pase con el dibujo -- si el salto se va de la ventana
+                    # Paged visible, redibujo completo en vez de pintar Y viejas.
+                    if (($layoutMode -eq 'Paged') -and ($hiIdx -lt $viewTop -or $hiIdx -gt $viewEnd)) {
+                        $full = $true
+                    } else {
+                        try {
+                            if ($old -ne $hiIdx) { [Console]::SetCursorPosition(0, $itemY[$old]); Write-MultiRow -IsChecked $Checked[$old] -Item $Items[$old] -Hi $false }
+                            [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                            [Console]::SetCursorPosition(0, $legendY)
+                        } catch { $full = $true }
+                    }
                     $handled = $true; break
                 }
                 if ($hasLonger) {
                     [int] $idx = $candNum - 1
                     if ($idx -ge 0 -and $idx -lt $count) {
                         [int] $old = $hiIdx; $hiIdx = $idx
-                        try {
-                            if ($old -ne $hiIdx) { [Console]::SetCursorPosition(0, $itemY[$old]); Write-MultiRow -IsChecked $Checked[$old] -Item $Items[$old] -Hi $false }
-                            [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
-                            [Console]::SetCursorPosition(0, $legendY)
-                        } catch { $full = $true }
+                        if (($layoutMode -eq 'Paged') -and ($hiIdx -lt $viewTop -or $hiIdx -gt $viewEnd)) {
+                            $full = $true
+                        } else {
+                            try {
+                                if ($old -ne $hiIdx) { [Console]::SetCursorPosition(0, $itemY[$old]); Write-MultiRow -IsChecked $Checked[$old] -Item $Items[$old] -Hi $false }
+                                [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                                [Console]::SetCursorPosition(0, $legendY)
+                            } catch { $full = $true }
+                        }
                     }
                     $buffer = $cand
                     $handled = $true; break

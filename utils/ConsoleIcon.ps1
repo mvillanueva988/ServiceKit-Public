@@ -107,17 +107,34 @@ function Set-PctkConsoleSize {
         regresion). Nota de diseno: con QuickEdit off (anti-footgun AnyDesk) el
         conhost no scrollea con la rueda; por eso el fix es que el menu ENTRE, no
         que se pueda scrollear.
+
+    .DESCRIPTION
+        Devuelve [bool]: si el alto FINAL de la ventana llego a $MinHeight.
+        Antes esta funcion seteaba y seguia sin chequear la post-condicion --
+        en Windows Terminal el pedido se auto-cancela en silencio (MaxWindowSize
+        ahi reporta el tamanio ACTUAL de la ventana, asi que el clamp
+        [Math]::Min($MinHeight, $max.Height) da el tamanio de hoy y el guard
+        "ya entra" se dispara sin haber crecido nada -- bug #46). El caller NO
+        debe asumir "pedi el resize -> el menu entra": tiene que leer este
+        [bool], o mejor, medir el alto real de ventana al momento de dibujar
+        (ver Get-PctkMenuLayout en ConsoleMenu.ps1), porque la ventana puede
+        cambiar de tamanio despues de este llamado (AnyDesk, el operador).
     #>
     [CmdletBinding()]
+    [OutputType([bool])]
     param([int] $MinHeight = 44)
     try {
         $rui = $Host.UI.RawUI
-        if ($null -eq $rui) { return }
+        if ($null -eq $rui) { return $false }
+        if ([int] $rui.WindowSize.Height -ge $MinHeight) { return $true }   # ya entra -> nada que hacer
         $max = $rui.MaxWindowSize
-        $win = $rui.WindowSize
         $buf = $rui.BufferSize
         [int] $wantH = [Math]::Min($MinHeight, [int] $max.Height)
-        if ([int] $win.Height -ge $wantH) { return }   # ya entra -> nada que hacer
+        if ([int] $rui.WindowSize.Height -ge $wantH) {
+            # tope alcanzado (WT: MaxWindowSize == tamanio actual) -> no hay mas
+            # para crecer. Solo "logrado" si ESE tope ya alcanzaba el objetivo.
+            return ($wantH -ge $MinHeight)
+        }
         # La ventana no puede superar el buffer: crecer el buffer primero si hace falta.
         if ([int] $buf.Height -lt $wantH) {
             $rui.BufferSize = New-Object System.Management.Automation.Host.Size([int] $buf.Width, $wantH)
@@ -125,6 +142,9 @@ function Set-PctkConsoleSize {
         $newWin = $rui.WindowSize
         $newWin.Height = $wantH
         $rui.WindowSize = $newWin
+        # Post-condicion verificada de nuevo (no "setee y segui"): una consola
+        # puede aceptar la asignacion sin aplicarla, sin tirar excepcion.
+        return ([int] $Host.UI.RawUI.WindowSize.Height -ge $MinHeight)
     }
-    catch { }
+    catch { return $false }
 }

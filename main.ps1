@@ -64,7 +64,10 @@ try {
     $origConsoleMode = $null
     try { $origConsoleMode = Disable-PctkQuickEdit } catch { }
     try { [void] (Enable-PctkVT) } catch { }
-    try { Set-PctkConsoleSize } catch { }
+    # $null = : Set-PctkConsoleSize ahora devuelve [bool] (#46, ver ConsoleIcon.ps1).
+    # Se ignora aca a proposito -- el menu ya no asume "pedi el resize -> entra",
+    # mide el alto real de ventana al dibujar (Get-PctkMenuLayout).
+    try { $null = Set-PctkConsoleSize } catch { }
     Show-MainMenu -MachineProfile $machineProfile
 }
 finally {
