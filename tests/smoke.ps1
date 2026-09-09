@@ -2002,15 +2002,17 @@ Test-SmokeFunction 'ConsoleMenu' 'Invoke-ToolsMenuInteractive presente (handler 
 Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: Full cuando entra todo' {
     $l = Get-PctkMenuLayout -TotalRows 23 -CompactRows 19 -HeaderLines 8 -WindowHeight 44
     if ($l.Mode -ne 'Full') { throw "esperado Full; got $($l.Mode) (budget=$($l.Budget))" }
-    if ($l.Budget -ne 34) { throw "budget esperado 34; got $($l.Budget)" }
+    # 44 - 8 (header) - 2 (footer) - 1 (BottomReserve, ver la nota de #46 en
+    # Get-PctkMenuLayout: el newline de la ultima linea scrollearia la consola)
+    if ($l.Budget -ne 33) { throw "budget esperado 33; got $($l.Budget)" }
 }
 Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: limite exacto Full/Compact (budget == TotalRows)' {
-    # budget = WindowHeight - HeaderLines - FooterLines = 10-2-0 = 8 = TotalRows -> Full
-    $l = Get-PctkMenuLayout -TotalRows 8 -CompactRows 6 -HeaderLines 2 -WindowHeight 10 -FooterLines 0
-    if ($l.Mode -ne 'Full') { throw "budget==TotalRows deberia ser Full; got $($l.Mode)" }
+    # budget = WindowHeight - HeaderLines - FooterLines - BottomReserve = 11-2-0-1 = 8 = TotalRows -> Full
+    $l = Get-PctkMenuLayout -TotalRows 8 -CompactRows 6 -HeaderLines 2 -WindowHeight 11 -FooterLines 0
+    if ($l.Mode -ne 'Full') { throw "budget==TotalRows deberia ser Full; got $($l.Mode) (budget=$($l.Budget))" }
     # un budget menos -> ya no entra todo, pero SI entra sin separadores -> Compact
-    $l2 = Get-PctkMenuLayout -TotalRows 8 -CompactRows 6 -HeaderLines 3 -WindowHeight 10 -FooterLines 0
-    if ($l2.Mode -ne 'Compact') { throw "budget==CompactRows deberia caer a Compact; got $($l2.Mode)" }
+    $l2 = Get-PctkMenuLayout -TotalRows 8 -CompactRows 6 -HeaderLines 3 -WindowHeight 11 -FooterLines 0
+    if ($l2.Mode -ne 'Compact') { throw "budget==CompactRows deberia caer a Compact; got $($l2.Mode) (budget=$($l2.Budget))" }
 }
 Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: Paged cuando ni compacto entra' {
     $l = Get-PctkMenuLayout -TotalRows 31 -CompactRows 25 -HeaderLines 8 -WindowHeight 29
@@ -2041,6 +2043,39 @@ Test-SmokeFunction 'ConsoleMenu' '#46 Get-PctkMenuLayout: la ventana ORIGINAL de
             $l = Get-PctkMenuLayout -TotalRows $total -CompactRows $compact -HeaderLines $hdr -WindowHeight 29
             if ($l.Mode -eq 'Full') {
                 throw ("{0} con header={1} en ventana de 29 filas dio Full -- el bug #46 volveria (WT no puede crecer la ventana)" -f $fn, $hdr)
+            }
+        }
+    }
+}
+Test-SmokeFunction 'ConsoleMenu' '#46 el dibujo NUNCA llega a la ultima fila (si scrollea, las Y del redibujo surgical quedan desfasadas)' {
+    # LA INVARIANTE QUE FALTABA. Los tests de arriba prueban que el modo se
+    # CLASIFICA bien; ninguno probaba que lo dibujado ENTRE sin scrollear, y ahi
+    # vivia el bug que encontro la verificacion visual de Mateo (2026-09-09).
+    #
+    # El caller emite, desde la fila 0: HeaderLines (banner) + N filas de menu +
+    # FooterLines (linea en blanco + linea de ayuda). La ultima sale con
+    # Write-Host, o sea con newline: para que ese newline NO scrollee, el total
+    # tiene que terminar como mucho en WindowHeight-1, es decir
+    #     HeaderLines + N + FooterLines <= WindowHeight - 1
+    # Sin esa fila de reserva la consola scrollea 1, las $itemY capturadas durante
+    # el dibujo quedan +1, y el redibujo de 2 filas pinta corrido.
+    [int] $footer = 2
+    foreach ($fn in @('Get-MainMenuRows', 'Get-IndividualActionRows')) {
+        [object[]] $rows    = @(& $fn)
+        [int]      $total   = $rows.Count
+        [int]      $compact = @($rows | Where-Object { $_.Kind -ne 'Spacer' }).Count
+        foreach ($winH in 20, 25, 29, 33, 39, 44, 60) {
+            foreach ($hdr in 6, 8, 10, 12) {
+                $l = Get-PctkMenuLayout -TotalRows $total -CompactRows $compact -HeaderLines $hdr -WindowHeight $winH -FooterLines $footer
+                [int] $drawn = -1
+                if     ($l.Mode -eq 'Full')     { $drawn = $total }
+                elseif ($l.Mode -eq 'Compact')  { $drawn = $compact }
+                elseif ($l.Mode -eq 'Paged')    { $drawn = $l.Budget }
+                else                            { continue }   # TooSmall no dibuja: cae al render plano
+                [int] $usadas = $hdr + $drawn + $footer
+                if ($usadas -gt ($winH - 1)) {
+                    throw ("{0} modo={1} winH={2} hdr={3}: dibuja {4} filas -> ocupa {5}, la consola scrollearia (max permitido {6})" -f $fn, $l.Mode, $winH, $hdr, $drawn, $usadas, ($winH - 1))
+                }
             }
         }
     }

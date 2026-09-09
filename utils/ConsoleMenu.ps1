@@ -153,9 +153,28 @@ function Get-PctkMenuLayout {
         [Parameter(Mandatory)] [int] $HeaderLines,
         [Parameter(Mandatory)] [int] $WindowHeight,
         [int] $FooterLines   = 2,   # linea en blanco + linea de ayuda, debajo de las filas
+        [int] $BottomReserve = 1,   # ver nota abajo: la fila que se come el newline final
         [int] $MinUsableRows = 3    # opcion (c): por debajo de esto paginar ya no ayuda
     )
-    [int] $budget = $WindowHeight - $HeaderLines - $FooterLines
+    # #46 -- POR QUE $BottomReserve (hallazgo de la verificacion visual, 2026-09-09):
+    # la ULTIMA linea que dibuja el caller (la de ayuda) se escribe con Write-Host, o
+    # sea TERMINA CON NEWLINE. Si el dibujo ocupa hasta la ultima fila valida
+    # (WindowHeight-1), ese newline manda el cursor a la fila WindowHeight, que no
+    # existe, y la consola SCROLLEA una fila. En Windows Terminal duele el doble
+    # porque Buffer == WindowSize: no hay scrollback que lo absorba.
+    #
+    # El scroll no rompe el frame recien dibujado -- rompe el SIGUIENTE: las Y de
+    # cada item ($itemY) se capturan MIENTRAS se dibuja, o sea antes del scroll, asi
+    # que quedan todas +1. El redibujo "surgical" de 2 filas (el que evita el
+    # parpadeo) entonces pinta una fila mas abajo de donde esta el texto: pisa la
+    # opcion de al lado y deja la vieja sin limpiar.
+    #
+    # Reservar una fila es la unica correccion que NO toca el resto del fix: el
+    # dibujo termina en WindowHeight-2, el newline final cae en WindowHeight-1 (que
+    # existe) y no hay scroll en NINGUN modo. La alternativa -- escribir la ultima
+    # linea con -NoNewline -- deja el cursor a mitad de renglon y lo que imprima el
+    # caller despues se pega ahi.
+    [int] $budget = $WindowHeight - $HeaderLines - $FooterLines - $BottomReserve
     [string] $mode = 'TooSmall'
     if ($budget -ge $TotalRows) {
         $mode = 'Full'
