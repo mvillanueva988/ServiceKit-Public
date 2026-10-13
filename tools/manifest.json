@@ -40,12 +40,12 @@
         {
             "name": "shutup10",
             "category": "privacidad",
-            "description": "O&O ShutUp10++ - GUI con 200+ tweaks de privacidad y telemetria de Windows 10/11, con perfiles exportables",
+            "description": "O&O ShutUp10 (antes ShutUp10++) - GUI con 200+ tweaks de privacidad y telemetria de Windows 10/11, con perfiles exportables",
             "filename": "OOSU10.exe",
             "launchExe": "OOSU10.exe",
             "url": "https://dl5.oo-software.com/files/ooshutup10/OOSU10.exe",
             "updatePolicy": "latest",
-            "approxSizeMB": 2,
+            "approxSizeMB": 86,
             "sha256": ""
         },
         {
@@ -56,12 +56,13 @@
             "launchExe": "BCUninstaller\\BCUninstaller.exe",
             "type": "zip",
             "extractDir": "BCUninstaller",
-            "url": "https://github.com/Klocman/Bulk-Crap-Uninstaller/releases/download/v6.1/BCUninstaller_6.1.0.1_portable.zip",
+            "url": "https://github.com/BCUninstaller/Bulk-Crap-Uninstaller/releases/download/v6.3/BCUninstaller_6.3.0_net8.0-windows10.0.18362.0.zip",
             "updatePolicy": "pinned",
-            "version": "6.1.0.1",
-            "checkUpdate": "https://api.github.com/repos/Klocman/Bulk-Crap-Uninstaller/releases/latest",
-            "approxSizeMB": 77,
-            "sha256": ""
+            "version": "6.3.0",
+            "checkUpdate": "https://api.github.com/repos/BCUninstaller/Bulk-Crap-Uninstaller/releases/latest",
+            "requires": "dotnet-desktop-8",
+            "approxSizeMB": 12,
+            "sha256": "4bfa602517b0cd4e81519ae12f4fdb087625aa93f2fed5c99f5c049117ce5c17"
         },
         {
             "name": "procmon",
@@ -130,13 +131,13 @@
             "launchExe": "WizTree\\WizTree64.exe",
             "type": "zip",
             "extractDir": "WizTree",
-            "url": "https://diskanalyzer.com/files/wiztree_4_31_portable.zip",
+            "url": "https://diskanalyzer.com/files/wiztree_4_33_portable.zip",
             "updatePolicy": "pinned",
-            "version": "4.31",
+            "version": "4.33",
             "checkUpdate": "https://diskanalyzer.com/download",
             "versionPattern": "wiztree_(\\d+)_(\\d+)_portable\\.zip",
             "approxSizeMB": 8,
-            "sha256": ""
+            "sha256": "38b30aab08710613d8a06a7d3dfb777e43ed436cfd7d1ff8bd33d0b5b6bd2c6d"
         },
         {
             "name": "hwinfo64",
@@ -159,13 +160,13 @@
             "launchExe": "CPU-Z\\cpuz_x64.exe",
             "type": "zip",
             "extractDir": "CPU-Z",
-            "url": "https://download.cpuid.com/cpu-z/cpu-z_2.20-en.zip",
+            "url": "https://download.cpuid.com/cpu-z/cpu-z_3.01-en.zip",
             "updatePolicy": "pinned",
-            "version": "2.20",
+            "version": "3.01",
             "checkUpdate": "https://www.cpuid.com/softwares/cpu-z.html",
             "versionPattern": "cpu-z_(\\d+\\.\\d+)-en\\.zip",
-            "approxSizeMB": 6,
-            "sha256": ""
+            "approxSizeMB": 5,
+            "sha256": "8ae3b45d43d97e6ce19535c045cd1e5394c7a3a5334dc01f63edd760ace40827"
         },
         {
             "name": "cinebenchr23",
@@ -198,16 +199,16 @@
             "category": "limpieza",
             "description": "BleachBit portable - limpieza profunda de cache, cookies, logs, temporales de 70+ aplicaciones (Chrome, Firefox, Office, etc.) y shred seguro de archivos. Alternativa a CCleaner sin telemetria",
             "filename": "BleachBit_portable.zip",
-            "launchExe": "BleachBit\\bleachbit.exe",
+            "launchExe": "BleachBit\\BleachBit-Portable\\bleachbit.exe",
             "type": "zip",
             "extractDir": "BleachBit",
-            "url": "https://download.bleachbit.org/BleachBit-6.0.0-portable.zip",
+            "url": "https://download.bleachbit.org/BleachBit-6.0.4-portable.zip",
             "updatePolicy": "pinned",
-            "version": "6.0.0",
+            "version": "6.0.4",
             "checkUpdate": "https://www.bleachbit.org/download/windows",
             "versionPattern": "BleachBit-(\\d+\\.\\d+\\.\\d+)-portable\\.zip",
-            "approxSizeMB": 22,
-            "sha256": ""
+            "approxSizeMB": 18,
+            "sha256": "3425195570e4d191695c45537065dc007a51efd4fd675a47f7b6da6d686a4660"
         },
         {
             "name": "winutil",
@@ -278,13 +279,13 @@
             "description": "Intel PresentMon - captura de frame timing / FPS, frametime, percentiles (1% low) y stutter por proceso. Mide el rendimiento real PRE/POST de un service (la prueba de venta del trabajo gaming) y exporta CSV para comparar. Portable, un solo .exe (CLI + overlay en vivo).",
             "filename": "PresentMon.exe",
             "launchExe": "PresentMon.exe",
-            "url": "https://github.com/GameTechDev/PresentMon/releases/download/v2.4.1/PresentMon-2.4.1-x64.exe",
+            "url": "https://github.com/GameTechDev/PresentMon/releases/download/v2.6.0/PresentMon-2.6.0-x64.exe",
             "updatePolicy": "pinned",
-            "version": "2.4.1",
+            "version": "2.6.0",
             "checkUpdate": "https://api.github.com/repos/GameTechDev/PresentMon/releases/latest",
             "versionPattern": "PresentMon-(\\d+\\.\\d+\\.\\d+)-x64\\.exe",
             "approxSizeMB": 1,
-            "sha256": ""
+            "sha256": "b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af"
         },
         {
             "name": "kvrt",
