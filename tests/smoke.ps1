@@ -5590,6 +5590,161 @@ Test-SmokeFunction 'ToolsAlDia' 'checker: reconoce el asset net8.0 de BCU 6.3 (y
     if ($null -eq $call) { throw 'el checker ya no llama a _Get-GithubAssetVersion' }
 }
 
+# --- #86: rutas con espacios a Start-Process + guard StrictMode del menu de tools ---
+# PS 5.1 une -ArgumentList con ' ' SIN comillas: una ruta con espacios (PCTk en una
+# carpeta con espacios, un perfil de usuario "Juan Perez" en %TEMP%) le llega al
+# exe partida en varios argumentos. Se prueba el HANDLER con Start-Process
+# shadoweado, uniendo los argumentos como los une PS 5.1.
+Test-SmokeFunction 'Robustez86' '#86a OOSU: el .cfg en ruta con espacios llega entrecomillado (Invoke-OOSU10Profile)' {
+    [string] $cfg = 'C:\Carpeta Con Espacios\x.cfg'
+    $script:r86SpArgs = $null
+    function Get-ShutUp10Path { 'C:\fake\OOSU10.exe' }
+    function Test-Path { param([string] $LiteralPath, [string] $Path) $true }
+    function Start-Process {
+        [CmdletBinding()]
+        param($FilePath, $ArgumentList, [switch] $PassThru, $WindowStyle)
+        $script:r86SpArgs = @($ArgumentList)
+        $p = [PSCustomObject]@{ ExitCode = 0 }
+        $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) $true }
+        $p | Add-Member -MemberType ScriptMethod -Name Kill -Value { }
+        return $p
+    }
+    $r = Invoke-OOSU10Profile -Path $cfg
+    if ($null -eq $script:r86SpArgs) { throw ('no llamo a Start-Process (Reason: {0})' -f $r.Reason) }
+    [string] $joined = $script:r86SpArgs -join ' '
+    if (-not $joined.Contains(('"{0}"' -f $cfg))) { throw ('la ruta del .cfg llega partida a OOSU10: {0}' -f $joined) }
+    if ($joined -notmatch '/quiet') { throw ('se perdio /quiet: {0}' -f $joined) }
+    if (-not $r.Success) { throw ('Success=$false: {0}' -f $r.Reason) }
+}
+
+Test-SmokeFunction 'Robustez86' '#86a selector: una tool .ps1 en carpeta con espacios llega entrecomillada a -File (Invoke-ToolLaunch)' {
+    [string] $bin = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk 86 ' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    [void](New-Item -ItemType Directory -Path $bin -Force)
+    [string] $ps1 = Join-Path $bin 'mi tool.ps1'
+    [System.IO.File]::WriteAllText($ps1, '# fixture #86')
+    $script:r86SpArgs = $null
+    function Start-Process { param($FilePath, $ArgumentList, $WorkingDirectory) $script:r86SpArgs = @($ArgumentList) }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+    try {
+        $tool = [PSCustomObject]@{ name = 't86'; category = 'setup'; filename = 'mi tool.ps1' }
+        $r = Invoke-ToolLaunch -Tool $tool -BinDir $bin
+        if ($r -ne 'opened') { throw ('resultado {0}' -f $r) }
+        [string] $joined = $script:r86SpArgs -join ' '
+        if (-not $joined.Contains(('-File "{0}"' -f $ps1))) { throw ('la ruta del .ps1 llega partida a powershell -File: {0}' -f $joined) }
+    } finally { Remove-Item -LiteralPath $bin -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# El handler del [T] es Show-ToolsMenu. Bajo StrictMode, leer $manifest.tools o
+# $t.category de un manifest que no los trae tira PropertyNotFoundStrict y se
+# lleva el menu (y bajo EAP=Stop, el toolkit). Se shadowea la lectura del
+# manifest, la consola (no interactiva) y el input ('B' = volver).
+function New-R86ToolsMenuRun {
+    param([string] $ManifestJson)
+    Set-StrictMode -Version Latest
+    $script:r86Json  = $ManifestJson
+    $script:r86Lines = [System.Collections.Generic.List[string]]::new()
+    $script:r86Warn  = [System.Collections.Generic.List[string]]::new()
+    function Get-Content { param($Path, [switch] $Raw) $script:r86Json }
+    function Test-PctkInteractiveConsole { $false }
+    function Read-Host { param($Prompt) 'B' }
+    function Write-Host { }
+    function Write-PctkActionTitle { param($Title) }
+    function Write-PctkLine { param([string] $Text, [string] $Kind) $script:r86Lines.Add($Text) }
+    function Write-PctkWarn { param([string] $Text) $script:r86Warn.Add($Text) }
+    function Write-PctkErr  { param([string] $Text) $script:r86Warn.Add($Text) }
+    function Write-PctkHint { param([string] $Text) }
+    Show-ToolsMenu -MachineProfile ([PSCustomObject]@{})
+    return [PSCustomObject]@{ Lines = @($script:r86Lines); Warn = @($script:r86Warn) }
+}
+
+Test-SmokeFunction 'Robustez86' '#86b Show-ToolsMenu: manifest SIN tools degrada con aviso, no crashea (StrictMode)' {
+    $o = New-R86ToolsMenuRun -ManifestJson '{ "version": 5 }'
+    if (@($o.Warn).Count -lt 1) { throw 'no aviso que el manifest no trae herramientas' }
+}
+
+Test-SmokeFunction 'Robustez86' '#86b Show-ToolsMenu: tool SIN category se saltea con aviso; las sanas se listan (StrictMode)' {
+    [string] $j = '{ "version": 5, "tools": [ { "name": "sana86", "category": "disco", "filename": "s.exe" }, { "name": "sincat86", "filename": "x.exe" } ] }'
+    $o = New-R86ToolsMenuRun -ManifestJson $j
+    if (-not (@($o.Lines) -match 'sana86'))    { throw 'la tool sana no se listo' }
+    if (@($o.Lines) -match 'sincat86')         { throw 'la tool sin category se listo igual' }
+    if (-not (@($o.Warn) -match 'sincat86'))   { throw 'no aviso que salteo la tool sin category' }
+}
+
+# Lint por AST (no por texto): un Start-Process cuyo -ArgumentList (nombrado o
+# posicional, resuelto con StaticParameterBinder) lleva una variable o propiedad
+# SUELTA -- sola o como elemento de un array -- pasa ese valor sin comillas. Si es
+# una ruta, se parte en los espacios. Arreglo: ('"{0}"' -f $ruta).
+# No mira splats (@params): ahi el binder no ve -ArgumentList (Apps.ps1, #77).
+function Get-R86UnquotedStartProcessArg {
+    param([System.Management.Automation.Language.Ast] $Ast, [string] $Label)
+    [System.Collections.Generic.List[string]] $hits = [System.Collections.Generic.List[string]]::new()
+    foreach ($c in @($Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))) {
+        [string] $name = ''
+        try { $name = [string] $c.GetCommandName() } catch { }
+        if ($name -ne 'Start-Process') { continue }
+        $b = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($c, $true)
+        if ($null -eq $b -or -not $b.BoundParameters.ContainsKey('ArgumentList')) { continue }
+        [System.Collections.Generic.List[object]] $pend = [System.Collections.Generic.List[object]]::new()
+        $pend.Add($b.BoundParameters['ArgumentList'].Value)
+        while ($pend.Count -gt 0) {
+            $e = $pend[0]; $pend.RemoveAt(0)
+            if ($e -is [System.Management.Automation.Language.VariableExpressionAst] -or
+                $e -is [System.Management.Automation.Language.MemberExpressionAst]) {
+                [void] $hits.Add(('{0}:{1} -> {2}' -f $Label, $e.Extent.StartLineNumber, $e.Extent.Text))
+            } elseif ($e -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+                foreach ($x in $e.Elements) { $pend.Add($x) }
+            } elseif ($e -is [System.Management.Automation.Language.ArrayExpressionAst]) {
+                foreach ($s in $e.SubExpression.Statements) { $pend.Add($s) }
+            } elseif ($e -is [System.Management.Automation.Language.PipelineAst]) {
+                if ($e.PipelineElements.Count -eq 1 -and $e.PipelineElements[0] -is [System.Management.Automation.Language.CommandExpressionAst]) {
+                    $pend.Add($e.PipelineElements[0].Expression)
+                }
+            }
+        }
+    }
+    return $hits.ToArray()   # los que llaman envuelven en @(): 0/1/N
+}
+
+Test-SmokeFunction 'StaticCheck' '#86 lint Start-Process: tiene diente (marca suelta/posicional/en array; no marca entrecomillada)' {
+    [string] $src = @'
+Start-Process -FilePath $e -ArgumentList @($Path, '/quiet')
+Start-Process explorer.exe $Dir
+Start-Process powershell.exe -ArgumentList '-File', $f.FullName
+Start-Process -FilePath $e -ArgumentList ('"{0}"' -f $Path)
+Start-Process powershell.exe -ArgumentList @('-File', ('"{0}"' -f $p))
+Start-Process -FilePath 'msiexec.exe' -ArgumentList "/X{$guid} /qn"
+Start-Process @startParams
+Start-Process $url
+'@
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($src, [ref] $null, [ref] $null)
+    [string[]] $h = @(Get-R86UnquotedStartProcessArg -Ast $ast -Label 'fx')
+    [string] $got = $h -join ' | '
+    foreach ($need in @('fx:1 -> $Path', 'fx:2 -> $Dir', 'fx:3 -> $f.FullName')) {
+        if ($h -notcontains $need) { throw ('no marco {0}; marco: {1}' -f $need, $got) }
+    }
+    if ($h.Count -ne 3) { throw ('falsos positivos: {0}' -f $got) }
+}
+
+Test-SmokeFunction 'StaticCheck' '#86 Start-Process -ArgumentList sin variables sueltas (rutas sin comillas) en core/modules/utils/raiz' {
+    [string] $rRoot = Split-Path -Parent $PSScriptRoot
+    [string[]] $patterns = @('core\*.ps1', 'modules\*.ps1', 'utils\*.ps1',
+                             'main.ps1', 'Launch.ps1', 'Release.ps1', 'Bootstrap-Tools.ps1')
+    [System.Collections.Generic.List[string]] $all = [System.Collections.Generic.List[string]]::new()
+    [int] $files = 0
+    foreach ($p in $patterns) {
+        foreach ($f in @(Get-ChildItem -Path (Join-Path $rRoot $p) -File -ErrorAction SilentlyContinue)) {
+            $files++
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref] $null, [ref] $null)
+            if ($null -eq $ast) { continue }
+            foreach ($x in @(Get-R86UnquotedStartProcessArg -Ast $ast -Label $f.Name)) { [void] $all.Add($x) }
+        }
+    }
+    if ($files -lt 20) { throw ('barrio solo {0} archivos: glob roto?' -f $files) }
+    if ($all.Count -gt 0) {
+        throw ('Start-Process con argumento suelto (una ruta con espacios se parte en PS 5.1): {0}. Usar (''"{{0}}"'' -f $ruta).' -f ($all -join ', '))
+    }
+}
+
 
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''

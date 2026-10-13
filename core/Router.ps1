@@ -919,7 +919,10 @@ function Get-ToolStatus {
     if ($null -ne $prop -and -not [string]::IsNullOrWhiteSpace($prop.Value)) {
         return [bool] (Test-Path (Join-Path $BinDir $prop.Value) -PathType Container)
     }
-    return [bool] (Test-Path (Join-Path $BinDir $Tool.filename) -PathType Leaf)
+    # #86: sin filename (manifest malformado) -> "falta", no PropertyNotFoundStrict
+    $fn = $Tool.PSObject.Properties['filename']
+    if ($null -eq $fn -or [string]::IsNullOrWhiteSpace([string] $fn.Value)) { return $false }
+    return [bool] (Test-Path (Join-Path $BinDir ([string] $fn.Value)) -PathType Leaf)
 }
 
 # ─── Requisitos de runtime de una tool (campo "requires" del manifest) ────────
@@ -1052,7 +1055,8 @@ function Invoke-ToolLaunch {
     try {
         if ($ext -eq '.ps1') {
             # un .ps1 se EJECUTA con powershell (Start-Process directo lo abriria en el editor)
-            Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $exePath) -WorkingDirectory $workDir
+            # ruta entrecomillada: PS 5.1 une -ArgumentList sin comillas (#86)
+            Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $exePath)) -WorkingDirectory $workDir
         } else {
             Start-Process -FilePath $exePath -WorkingDirectory $workDir
         }
@@ -1104,7 +1108,7 @@ function Invoke-ToolsMenuInteractive {
             'F' { $force = -not $force; continue }
             'O' {
                 if (-not (Test-Path $BinDir)) { New-Item -ItemType Directory -Path $BinDir -Force | Out-Null }
-                Start-Process explorer.exe $BinDir
+                Start-Process explorer.exe -ArgumentList ('"{0}"' -f $BinDir)
                 continue
             }
             'open' {
@@ -1168,7 +1172,30 @@ function Show-ToolsMenu {
     try   { $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json }
     catch { Write-PctkErr ('  [!] Error leyendo manifest.json: {0}' -f $_.Exception.Message); return }
 
-    [object[]] $tools = @($manifest.tools)
+    # #86: guard de PSObject.Properties. Bajo StrictMode, leer $manifest.tools o
+    # $t.category de un manifest malformado tira PropertyNotFoundStrict y se lleva
+    # el menu. Sin 'tools' -> lista vacia; tool sin name/category/archivo -> se
+    # saltea con aviso y las sanas se listan igual.
+    [object[]] $tools = @()
+    if ($null -ne $manifest -and $null -ne $manifest.PSObject.Properties['tools']) {
+        [int] $pos = 0
+        foreach ($cand in @($manifest.tools)) {
+            $pos++
+            [string[]] $faltan = @()
+            foreach ($req in @('name', 'category')) {
+                if ($null -eq $cand -or $null -eq $cand.PSObject.Properties[$req] -or
+                    [string]::IsNullOrWhiteSpace([string] $cand.PSObject.Properties[$req].Value)) { $faltan += $req }
+            }
+            if ($null -eq $cand -or ($null -eq $cand.PSObject.Properties['filename'] -and
+                                     $null -eq $cand.PSObject.Properties['extractDir'])) { $faltan += 'filename' }
+            if ($faltan.Count -gt 0) {
+                [string] $quien = if ($null -ne $cand -and $null -ne $cand.PSObject.Properties['name']) { [string] $cand.PSObject.Properties['name'].Value } else { ('#{0}' -f $pos) }
+                Write-PctkWarn ('  [!] manifest.json: tool "{0}" salteada (le falta {1}).' -f $quien, ($faltan -join ', '))
+                continue
+            }
+            $tools += $cand
+        }
+    }
     if ($tools.Count -eq 0) {
         Write-PctkWarn '  [!] manifest.json no contiene herramientas.'
         return
@@ -1212,7 +1239,7 @@ function Show-ToolsMenu {
 
         if ($up -eq 'O') {
             if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
-            Start-Process explorer.exe $binDir
+            Start-Process explorer.exe -ArgumentList ('"{0}"' -f $binDir)
             continue
         }
 

@@ -230,7 +230,7 @@ function New-RawAuditReport {
     [long] $size = (Get-Item -LiteralPath $filePath).Length
 
     if ($OpenAfter) {
-        try { Start-Process notepad.exe $filePath } catch { }
+        try { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $filePath) } catch { }
     }
 
     return [PSCustomObject]@{
