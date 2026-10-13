@@ -3470,6 +3470,33 @@ Test-SmokeFunction 'Apps' '#77 Get-InstalledWin32Apps: SystemComponent fuera por
     if ($h.Count -ne 1 -or -not $h[0].IsSystemComponent) { throw 'on: Hidden Comp no marcado' }
 }
 
+Test-SmokeFunction 'Apps' '#77 Start-Win32AppsJob -IncludeSystemComponents: el job REAL (clausura + interpolacion del flag)' {
+    # POR QUE: el flag viaja por un here-string que se interpola ("Get-InstalledWin32Apps$sysFlag")
+    # y corre en un runspace fresco. Probar Get-InstalledWin32Apps directo no lo ejercita
+    # (CLAUDE.md: "serializar la clausura COMPLETA" / el test corre el job real).
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    function Get-JobErr { param($Job)
+        [string[]] $e = @()
+        foreach ($c in @($Job.ChildJobs)) { foreach ($er in @($c.Error)) { $e += [string]$er } }
+        return $e
+    }
+    $jobOff = Start-Win32AppsJob
+    $rOff = @((Invoke-JobWithProgress -Jobs @($jobOff) -Activity 'smoke #77 off' -TimeoutSeconds 120)[0])
+    $jobOn = Start-Win32AppsJob -IncludeSystemComponents
+    $rOn = @((Invoke-JobWithProgress -Jobs @($jobOn) -Activity 'smoke #77 on' -TimeoutSeconds 120)[0])
+    foreach ($j in @($jobOff, $jobOn)) {
+        $err = Get-JobErr $j
+        foreach ($m in $err) {
+            if ($m -match 'CommandNotFound|no se reconoce|ParameterBinding|no se encuentra un par|parameter cannot be found') { throw ('error en el job: ' + $m) }
+        }
+        if ($j.State -eq 'Failed') { throw 'el job termino Failed' }
+    }
+    if ($rOn.Count -eq 0 -or $null -eq $rOn[0]) { throw 'con el flag el job no devolvio apps (murio?)' }
+    if ($null -eq $rOn[0].PSObject.Properties['IsSystemComponent']) { throw 'el resultado no trae IsSystemComponent' }
+    if ($rOn.Count -lt $rOff.Count) { throw ('con flag {0} < sin flag {1}' -f $rOn.Count, $rOff.Count) }
+}
+
 Test-SmokeFunction 'Apps' '#52: SizeMB es numerico o null, nunca revienta por un EstimatedSize raro' {
     # EstimatedSize es DWORD por convencion pero el registro no lo garantiza: con
     # REG_BINARY / REG_MULTI_SZ la division tiraba ("no contiene op_Division") y con
