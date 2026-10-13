@@ -1403,6 +1403,69 @@ function Invoke-ActionUsbPower {
     Show-OrphanModuleResult -Action 'UsbPower' -Result $r
 }
 
+function Invoke-ActionEnergyLaptop {
+    <#
+    .SYNOPSIS
+        Handler [A][20] (#78). Muestra el estado de energia (PERFBOOSTMODE,
+        PROCTHROTTLEMIN, MMAgent, SysMain) y ofrece: [M] mostrar el setting oculto
+        (cualquier PC, no cambia valores), [A] aplicar "laptop gaming" y [R] revertir
+        (solo laptops). Mutante y por PC: NUNCA entra en la optimizacion automatica.
+        Se separa [M] de [A] a proposito: ocultar/mostrar es solo visibilidad y
+        mezclarlo con el valor volveria imposible un revert limpio.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+
+    $st = Get-EnergyTuningState
+    [scriptblock] $fmt = { param($v) if ($null -eq $v) { '-' } else { [string]$v } }
+    Write-PctkSection '  ENERGIA (PERFBOOSTMODE / PROCTHROTTLEMIN / MMAgent)'
+    Write-Host ('  PERFBOOSTMODE   : AC={0}  DC={1}   (2=Agresiva 4=Eficiencia agresiva)' -f (& $fmt $st.PerfBoostModeAc), (& $fmt $st.PerfBoostModeDc))
+    Write-Host ('  PROCTHROTTLEMIN : AC={0}  DC={1}   (%)' -f (& $fmt $st.ProcThrottleMinAc), (& $fmt $st.ProcThrottleMinDc))
+    if ($st.MmAgentAvailable) {
+        Write-Host ('  MMAgent         : MemoryCompression={0}  ApplicationLaunchPrefetching={1}' -f (& $fmt $st.MemoryCompression), (& $fmt $st.ApplicationLaunchPrefetching))
+    } else {
+        Write-PctkHint '  MMAgent         : no disponible (requiere admin / Win10 viejo)'
+    }
+    Write-Host ('  SysMain         : {0} / inicio {1}   (PCTk nunca lo deshabilita)' -f $st.SysMainStatus, $st.SysMainStartType)
+    Write-Host ''
+
+    [bool] $offered = Test-EnergyLaptopOffered -MachineProfile $MachineProfile
+    if ($offered) {
+        Write-Host '  [M]ostrar setting oculto  /  [A]plicar laptop gaming (AC)  /  [R]evertir  /  [B]volver'
+    } else {
+        Write-PctkHint '  Laptop gaming: solo se ofrece si el chassis es laptop (no detectado en este equipo).'
+        Write-Host '  [M]ostrar setting oculto  /  [B]volver'
+    }
+    [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
+
+    if ($sub -eq 'M') {
+        Write-ActionAudit -Action 'EnergyTuning.ShowHidden' -Status 'Started'
+        $r = Show-PerfBoostModeSetting
+        Show-OrphanModuleResult -Action 'EnergyTuning.ShowHidden' -Result $r
+        return
+    }
+    if (-not $offered -or ($sub -ne 'A' -and $sub -ne 'R')) { Write-PctkHint '  Cancelado.'; return }
+
+    [bool] $apply = ($sub -eq 'A')
+    [string] $title = if ($apply) { 'Aplicar energia "laptop gaming" (solo AC)?' } else { 'Revertir energia "laptop gaming"?' }
+    [string[]] $lines = if ($apply) {
+        @('PERFBOOSTMODE AC -> 4 (Eficiencia agresiva) y PROCTHROTTLEMIN AC -> 5 en el esquema activo',
+          'Antes se guardan los valores actuales para poder revertir. DC no se toca.')
+    } else {
+        @('Restaura PERFBOOSTMODE/PROCTHROTTLEMIN AC desde el respaldo; sin respaldo, PERFBOOSTMODE -> 2 y PROCTHROTTLEMIN queda como esta.')
+    }
+    if (-not (Confirm-Action -Title $title -Lines $lines)) {
+        Write-PctkHint '  Cancelado.'
+        Write-ActionAudit -Action 'EnergyTuning' -Status 'Cancelled'
+        return
+    }
+    [string] $verb = if ($apply) { 'Apply' } else { 'Revert' }
+    Write-ActionAudit -Action 'EnergyTuning' -Status 'Started' -Summary $verb -Details $st
+    Write-PctkWork '  Aplicando energia...'
+    if ($apply) { $r = Enable-LaptopGamingEnergy } else { $r = Restore-LaptopGamingEnergy }
+    Show-OrphanModuleResult -Action 'EnergyTuning' -Result $r
+}
+
 function Invoke-ActionDiskMaintenance {
     <#
     .SYNOPSIS

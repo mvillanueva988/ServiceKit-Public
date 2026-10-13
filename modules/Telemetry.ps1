@@ -362,6 +362,127 @@ function Get-BatteryHealth {
     return $null
 }
 
+# ─── Energia: PERFBOOSTMODE / PROCTHROTTLEMIN / MMAgent / SysMain (#78) ──────
+# Solo lectura. Viven ACA (y no en EnergyTuning.ps1) porque el runspace del job
+# de telemetria solo dot-sourcea este archivo (ver nota de Invoke-WithTimeout).
+# SIN variables $script: a proposito: este codigo corre dentro de un Start-Job
+# (Start-TelemetryJob) y un $script: sin resolver se traga en silencio (el try/catch
+# lo deja en $null). Los GUIDs van como default de parametro / literal local.
+
+function ConvertFrom-PowercfgQhIndices {
+    <#
+    .SYNOPSIS
+        Extrae los indices AC/DC de la salida de `powercfg /qh <scheme> <sub> <setting>`.
+        Funcion pura.
+    .DESCRIPTION
+        NO se lee por el texto de la linea: en Windows en espanol dice "corriente
+        alterna / continua", en pt-BR "CA / CC", en en-US "AC / DC". Se lee por
+        POSICION: los dos ULTIMOS valores hex (0x...) de la salida son AC y DC
+        (powercfg los imprime siempre en ese orden, al final). Los hex anteriores
+        son minimo/maximo/incremento del rango y no cuentan.
+    .OUTPUTS
+        PSCustomObject { Ac; Dc } con [Nullable[int]]: $null si no hay dos valores.
+    #>
+    [CmdletBinding()]
+    param([Parameter()] [AllowNull()] [AllowEmptyString()] [string] $Text)
+
+    [Nullable[int]] $ac = $null
+    [Nullable[int]] $dc = $null
+    if (-not [string]::IsNullOrWhiteSpace($Text)) {
+        [object[]] $hex = @([regex]::Matches($Text, '(?m):\s*0x([0-9a-fA-F]{1,8})\s*$'))
+        if ($hex.Count -ge 2) {
+            $ac = [Convert]::ToInt32($hex[$hex.Count - 2].Groups[1].Value, 16)
+            $dc = [Convert]::ToInt32($hex[$hex.Count - 1].Groups[1].Value, 16)
+        }
+    }
+    return [PSCustomObject]@{ Ac = $ac; Dc = $dc }
+}
+
+function Get-ProcessorPowerSetting {
+    <#
+    .SYNOPSIS
+        Lee AC/DC de un setting de SUB_PROCESSOR en el esquema activo con /qh
+        (la `h` incluye los ocultos). Read-only.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $SettingGuid,
+        [Parameter()] [string] $SubGuid = '54533251-82be-4824-96c1-47b60b740d00'   # SUB_PROCESSOR
+    )
+
+    # Exe nativo + EAP=Stop (main.ps1) = NativeCommandError terminante (CLAUDE.md).
+    $ErrorActionPreference = 'Continue'
+    [string] $txt = ''
+    try { $txt = (& powercfg /qh SCHEME_CURRENT $SubGuid $SettingGuid 2>&1) -join "`n" } catch { }
+    return (ConvertFrom-PowercfgQhIndices -Text $txt)
+}
+
+function Get-MMAgentState {
+    <#
+    .SYNOPSIS
+        MemoryCompression y ApplicationLaunchPrefetching via Get-MMAgent.
+        Si el cmdlet no existe o falla (sin admin, Win10 viejo, Sandbox), Available
+        queda $false y los campos en $null. Nunca tira.
+    #>
+    [CmdletBinding()]
+    param()
+
+    [bool] $avail = $false
+    [Nullable[bool]] $mc = $null
+    [Nullable[bool]] $pf = $null
+    try {
+        if (Get-Command -Name 'Get-MMAgent' -ErrorAction SilentlyContinue) {
+            $mm = Get-MMAgent -ErrorAction Stop
+            if ($null -ne $mm) {
+                if ($mm.PSObject.Properties['MemoryCompression'])           { $mc = [bool] $mm.MemoryCompression }
+                if ($mm.PSObject.Properties['ApplicationLaunchPrefetching']) { $pf = [bool] $mm.ApplicationLaunchPrefetching }
+                $avail = ($null -ne $mc -or $null -ne $pf)
+            }
+        }
+    } catch { }
+    return [PSCustomObject]@{
+        Available                    = $avail
+        MemoryCompression            = $mc
+        ApplicationLaunchPrefetching = $pf
+    }
+}
+
+function Get-EnergyTuningState {
+    <#
+    .SYNOPSIS
+        Estado de energia/memoria para el diagnostico (campo `Energy` del snapshot).
+        Solo lectura. Cada sub-lectura falla por separado a $null / 'no disponible'.
+    #>
+    [CmdletBinding()]
+    param()
+
+    [string] $perfBoostGuid   = 'be337238-0d82-4146-a960-4f3749d470c7'   # PERFBOOSTMODE
+    [string] $throttleMinGuid = '893dee8e-2bef-41e0-89c6-b55d0929964c'   # PROCTHROTTLEMIN
+    $boost    = Get-ProcessorPowerSetting -SettingGuid $perfBoostGuid
+    $throttle = Get-ProcessorPowerSetting -SettingGuid $throttleMinGuid
+    $mm       = Get-MMAgentState
+
+    [string] $sysStatus = 'no disponible'
+    [string] $sysStart  = 'no disponible'
+    try {
+        $svc = Get-Service -Name 'SysMain' -ErrorAction Stop
+        $sysStatus = [string] $svc.Status
+        $sysStart  = [string] $svc.StartType
+    } catch { }
+
+    return [PSCustomObject]@{
+        PerfBoostModeAc              = $boost.Ac
+        PerfBoostModeDc              = $boost.Dc
+        ProcThrottleMinAc            = $throttle.Ac
+        ProcThrottleMinDc            = $throttle.Dc
+        MmAgentAvailable             = [bool] $mm.Available
+        MemoryCompression            = $mm.MemoryCompression
+        ApplicationLaunchPrefetching = $mm.ApplicationLaunchPrefetching
+        SysMainStatus                = $sysStatus
+        SysMainStartType             = $sysStart
+    }
+}
+
 # ─── Get-SystemSnapshot ───────────────────────────────────────────────────────
 function Get-SystemSnapshot {
     <#
@@ -964,6 +1085,12 @@ function Get-SystemSnapshot {
     $qt['powercfg'] = [int] $sw.ElapsedMilliseconds
     $powerPlan = $ppEnv.Value | Select-Object -First 1
 
+    # ── Energia / MMAgent / SysMain (#78): solo lectura, falla a $null ────────
+    $sw.Restart()
+    $energy = $null
+    try { $energy = Get-EnergyTuningState } catch { $energy = $null }
+    $qt['energy'] = [int] $sw.ElapsedMilliseconds
+
     # ── Retorno garantizado (§3c: partial-snapshot invariant) ─────────────────
     # T-N2: shape invariante — NUNCA renombrar ni remover campos existentes.
     # Campos nuevos agregados al final.
@@ -1006,6 +1133,8 @@ function Get-SystemSnapshot {
         IsVirtualMachine  = [bool]      $isVM
         VmVendor          = [string]    $vmVendor
         QueryTimings      = [hashtable] $qt
+        # ── #78: energia / MMAgent / SysMain (al final: shape invariante) ─────
+        Energy            = $energy
     }
 }
 
@@ -1041,6 +1170,80 @@ function Save-Snapshot {
         FilePath = [string] $filePath
         FileName = [string] $filename
     }
+}
+
+# ─── Energia PRE/POST (#78 ronda 3) ───────────────────────────────────────────
+function _EnergyText {
+    <#
+    .SYNOPSIS
+        Texto de UN campo del bloque Energy de un snapshot, para la comparacion.
+        'sin dato' = el snapshot no trae el bloque Energy (PRE anterior a #78).
+        'no disponible' = el bloque esta pero el campo es $null (MMAgent caido, etc.).
+    .NOTES
+        Lee con _BatteryProp (PSObject.Properties): ConvertFrom-Json NO crea una
+        propiedad ausente y `$x.Energy` bajo StrictMode tira PropertyNotFoundStrict.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object] $Energy,
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter()] [string] $Suffix = ''
+    )
+
+    if ($null -eq $Energy) { return 'sin dato' }
+    $v = _BatteryProp -Instance $Energy -Name $Name
+    if ($null -eq $v) { return 'no disponible' }
+    if ($v -is [bool]) {
+        [string] $yn = 'no'
+        if ($v) { $yn = 'si' }
+        return $yn
+    }
+    return ('{0}{1}' -f $v, $Suffix)
+}
+
+function Get-EnergyDiffRows {
+    <#
+    .SYNOPSIS
+        Filas de la comparacion PRE/POST del bloque Energy: Label, Pre, Post, Changed.
+        Funcion pura: acepta Energy $null en cualquiera de los dos lados.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object] $PreEnergy,
+        [Parameter()] [object] $PostEnergy
+    )
+
+    [System.Collections.Generic.List[PSCustomObject]] $rows =
+        [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # SysMain son dos campos (estado / tipo de inicio) en una sola fila.
+    [string] $preSys  = 'sin dato'
+    [string] $postSys = 'sin dato'
+    if ($null -ne $PreEnergy) {
+        $preSys = '{0} / {1}' -f (_EnergyText -Energy $PreEnergy -Name 'SysMainStatus'), (_EnergyText -Energy $PreEnergy -Name 'SysMainStartType')
+    }
+    if ($null -ne $PostEnergy) {
+        $postSys = '{0} / {1}' -f (_EnergyText -Energy $PostEnergy -Name 'SysMainStatus'), (_EnergyText -Energy $PostEnergy -Name 'SysMainStartType')
+    }
+
+    [object[]] $defs = @(
+        @{ Label = 'Boost CPU (AC)';          Pre = (_EnergyText -Energy $PreEnergy -Name 'PerfBoostModeAc');              Post = (_EnergyText -Energy $PostEnergy -Name 'PerfBoostModeAc') }
+        @{ Label = 'Throttle minimo (AC)';    Pre = (_EnergyText -Energy $PreEnergy -Name 'ProcThrottleMinAc' -Suffix '%'); Post = (_EnergyText -Energy $PostEnergy -Name 'ProcThrottleMinAc' -Suffix '%') }
+        @{ Label = 'Compresion de memoria';   Pre = (_EnergyText -Energy $PreEnergy -Name 'MemoryCompression');            Post = (_EnergyText -Energy $PostEnergy -Name 'MemoryCompression') }
+        @{ Label = 'Prefetch de aplicaciones'; Pre = (_EnergyText -Energy $PreEnergy -Name 'ApplicationLaunchPrefetching'); Post = (_EnergyText -Energy $PostEnergy -Name 'ApplicationLaunchPrefetching') }
+        @{ Label = 'SysMain';                 Pre = $preSys;                                                              Post = $postSys }
+    )
+    foreach ($d in $defs) {
+        # Un lado 'sin dato' no es un cambio: es que ese snapshot no midieron Energy.
+        [bool] $changed = ($d.Pre -ne $d.Post) -and ($d.Pre -notmatch '^sin dato') -and ($d.Post -notmatch '^sin dato')
+        $rows.Add([PSCustomObject]@{
+            Label   = [string] $d.Label
+            Pre     = [string] $d.Pre
+            Post    = [string] $d.Post
+            Changed = [bool]   $changed
+        })
+    }
+    return $rows.ToArray()
 }
 
 # ─── Compare-Snapshot ─────────────────────────────────────────────────────────
@@ -1130,6 +1333,12 @@ function Compare-Snapshot {
         }
     }
 
+    # #78: Energy (opcional). Un snapshot anterior a #78 no trae el campo y
+    # leerlo directo tira PropertyNotFoundStrict: se lee por PSObject.Properties.
+    $preEnergy  = _BatteryProp -Instance $pre  -Name 'Energy'
+    $postEnergy = _BatteryProp -Instance $post -Name 'Energy'
+    [object[]] $energyDiff = @(Get-EnergyDiffRows -PreEnergy $preEnergy -PostEnergy $postEnergy)
+
     # Score (6 áreas)
     [int] $score = 0
     [System.Collections.Generic.List[string]] $improvements =
@@ -1167,6 +1376,7 @@ function Compare-Snapshot {
         Score            = [int]      $score
         ScoreMax         = [int]      6
         Improvements     = $improvements.ToArray()
+        EnergyDiff       = $energyDiff
     }
 }
 
@@ -1226,6 +1436,20 @@ function Show-SnapshotComparison {
         Write-PctkHint "    [ ] Carga  : $($Diff.BatteryDiff.PreCharge)% -> $($Diff.BatteryDiff.PostCharge)%"
         [string] $healthKind = if ($Diff.BatteryDiff.PostHealth -lt ($Diff.BatteryDiff.PreHealth - 5)) { 'err' } else { 'hint' }
         Write-PctkLine "    [ ] Salud  : $($Diff.BatteryDiff.PreHealth)% -> $($Diff.BatteryDiff.PostHealth)%" $healthKind
+        Write-Host ''
+    }
+
+    # Energia (#78): boost, throttle minimo, MMAgent y SysMain. Solo lectura.
+    # Diff de un modulo anterior sin EnergyDiff -> la seccion no se pinta.
+    [object[]] $energyRows = @(_BatteryProp -Instance $Diff -Name 'EnergyDiff')
+    if ($energyRows.Count -gt 0 -and $null -ne $energyRows[0]) {
+        Write-PctkSection '  [ENERGIA]'
+        foreach ($er in $energyRows) {
+            [string] $erInd  = '[ ]'
+            [string] $erKind = 'hint'
+            if ($er.Changed) { $erInd = '[i]'; $erKind = 'warn' }
+            Write-PctkLine ('    {0} {1}: {2} -> {3}' -f $erInd, $er.Label, $er.Pre, $er.Post) $erKind
+        }
         Write-Host ''
     }
 

@@ -64,6 +64,7 @@ function Get-IndividualActionRows {
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  RENDIMIENTO'; Color = 'DarkCyan' }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '19';  Label = '  [19] Defender: reagendar escaneo + exclusiones (dev / WSL)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '20';  Label = '  [20] Energia: PERFBOOSTMODE + laptop gaming (por PC)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver al menu principal'; Color = 'DarkYellow' }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }

@@ -936,6 +936,322 @@ Test-SmokeFunction 'UsbPower' 'powercfg EAP-guarded (regresion gate #11)' {
     }
 }
 
+# ─── #78 Energia: PERFBOOSTMODE / PROCTHROTTLEMIN / MMAgent / SysMain ─────────
+# Fixtures de powercfg /qh REALES (es-AR, captura 13-10-2026): el parseo es por
+# posicion del hex, no por el texto "corriente alterna". El rango min/max/incr
+# de PROCTHROTTLEMIN tambien trae 0x: los ultimos DOS son AC y DC.
+$script:EnergyFixtureBoostEs = @(
+    'GUID de plan de energia: 381b4222-f694-41f0-9685-ff5bb260df2e  (Equilibrado)'
+    '    Alias de GUID: PERFBOOSTMODE'
+    '      Indice de configuracion posible: 002'
+    '      Nombre descriptivo de configuracion posible: Agresiva'
+    '    Indice de configuracion de corriente alterna actual: 0x00000004'
+    '    Indice de configuracion de corriente continua actual: 0x00000000'
+) -join "`n"
+$script:EnergyFixtureThrottleEs = @(
+    '    Alias de GUID: PROCTHROTTLEMIN'
+    '      Minima configuracion posible: 0x00000000'
+    '      Maxima configuracion posible: 0x00000064'
+    '      Incremento de configuracion posible: 0x00000001'
+    '    Indice de configuracion de corriente alterna actual: 0x00000005'
+    '    Indice de configuracion de corriente continua actual: 0x0000000a'
+) -join "`n"
+
+Test-SmokeFunction 'EnergyTuning' 'ConvertFrom-PowercfgQhIndices: es-AR por posicion (boost 4/0, throttle 5/10)' {
+    $b = ConvertFrom-PowercfgQhIndices -Text $script:EnergyFixtureBoostEs
+    if ($b.Ac -ne 4 -or $b.Dc -ne 0) { throw ('boost: AC={0} DC={1}' -f $b.Ac, $b.Dc) }
+    $t = ConvertFrom-PowercfgQhIndices -Text $script:EnergyFixtureThrottleEs
+    if ($t.Ac -ne 5 -or $t.Dc -ne 10) { throw ('throttle: AC={0} DC={1} (el rango min/max/incr no debe contar)' -f $t.Ac, $t.Dc) }
+}
+Test-SmokeFunction 'EnergyTuning' 'ConvertFrom-PowercfgQhIndices: en-US igual y basura/vacio -> $null' {
+    $en = "  Current AC Power Setting Index: 0x00000002`n  Current DC Power Setting Index: 0x00000001"
+    $r = ConvertFrom-PowercfgQhIndices -Text $en
+    if ($r.Ac -ne 2 -or $r.Dc -ne 1) { throw 'en-US mal parseado' }
+    foreach ($bad in @('', 'No se encontro el setting', $null)) {
+        $x = ConvertFrom-PowercfgQhIndices -Text $bad
+        if ($null -ne $x.Ac -or $null -ne $x.Dc) { throw 'basura debe dar $null' }
+    }
+}
+Test-SmokeFunction 'EnergyTuning' 'Get-MMAgentState: Get-MMAgent falla -> Available=false, no revienta' {
+    function Get-MMAgent { throw 'Acceso denegado (simulado)' }
+    $r = Get-MMAgentState
+    if ($r.Available -or $null -ne $r.MemoryCompression) { throw 'debia quedar no disponible' }
+}
+Test-SmokeFunction 'EnergyTuning' 'Get-MMAgentState: lee MemoryCompression y ApplicationLaunchPrefetching' {
+    function Get-MMAgent { [PSCustomObject]@{ MemoryCompression = $true; ApplicationLaunchPrefetching = $false } }
+    $r = Get-MMAgentState
+    if (-not $r.Available -or $r.MemoryCompression -ne $true -or $r.ApplicationLaunchPrefetching -ne $false) { throw 'MMAgent mal leido' }
+}
+Test-SmokeFunction 'EnergyTuning' 'Get-EnergyTuningState: powercfg es-AR + MMAgent caido + SysMain (1 servicio)' {
+    function powercfg {
+        if ($args -contains 'be337238-0d82-4146-a960-4f3749d470c7') { return $script:EnergyFixtureBoostEs -split "`n" }
+        return $script:EnergyFixtureThrottleEs -split "`n"
+    }
+    function Get-MMAgent { throw 'sin admin' }
+    function Get-Service { [PSCustomObject]@{ Name = 'SysMain'; Status = 'Running'; StartType = 'Automatic' } }
+    $s = Get-EnergyTuningState
+    if ($s.PerfBoostModeAc -ne 4 -or $s.ProcThrottleMinAc -ne 5 -or $s.ProcThrottleMinDc -ne 10) { throw 'valores powercfg' }
+    if ($s.MmAgentAvailable) { throw 'MMAgent debia ser no disponible' }
+    if ($s.SysMainStatus -ne 'Running' -or $s.SysMainStartType -ne 'Automatic') { throw 'SysMain' }
+}
+Test-SmokeFunction 'EnergyTuning' 'el snapshot lleva el campo Energy' {
+    $def = (Get-Command Get-SystemSnapshot -CommandType Function).Definition
+    if ($def -notmatch 'Energy\s*=\s*\$energy') { throw 'Get-SystemSnapshot no devuelve Energy' }
+}
+Test-SmokeFunction 'EnergyTuning' 'Get-EnergyTuningState DENTRO de un Start-Job real (como Start-TelemetryJob): GUIDs resuelven (#78 ronda 2)' {
+    # Mismo patron que Start-TelemetryJob: runspace fresco, StrictMode Latest, dot-source
+    # de Telemetry.ps1. El powercfg falso vive DENTRO del job y devuelve el fixture es-AR
+    # SOLO si recibe SUB_PROCESSOR + el GUID del setting: un $script: sin resolver o un
+    # GUID mal escrito da texto de error -> PerfBoostModeAc $null -> el test falla.
+    $modPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'modules\Telemetry.ps1'
+    $j = Start-Job -ScriptBlock {
+        param([string] $ModPath, [string] $FixBoost, [string] $FixThr)
+        Set-StrictMode -Version Latest
+        . $ModPath
+        function powercfg {
+            $a = @($args | ForEach-Object { [string] $_ })
+            $okSub = $a -contains '54533251-82be-4824-96c1-47b60b740d00'
+            if ($okSub -and ($a -contains 'be337238-0d82-4146-a960-4f3749d470c7')) { return ($FixBoost -split "`n") }
+            if ($okSub -and ($a -contains '893dee8e-2bef-41e0-89c6-b55d0929964c')) { return ($FixThr -split "`n") }
+            return @('Argumentos no validos: ' + ($a -join ' '))
+        }
+        Get-EnergyTuningState
+    } -ArgumentList @($modPath, $script:EnergyFixtureBoostEs, $script:EnergyFixtureThrottleEs)
+    try {
+        if (-not (Wait-Job $j -Timeout 120)) { throw 'el job no termino en 120 s' }
+        $s = Receive-Job $j -ErrorAction Stop
+    } finally { Remove-Job $j -Force -ErrorAction SilentlyContinue }
+    if ($null -eq $s) { throw 'el job no devolvio estado' }
+    if ($null -eq $s.PerfBoostModeAc) { throw 'PerfBoostModeAc $null dentro del job (GUID/$script: sin resolver)' }
+    if ($s.PerfBoostModeAc -ne 4 -or $s.PerfBoostModeDc -ne 0) { throw ('boost AC={0} DC={1}' -f $s.PerfBoostModeAc, $s.PerfBoostModeDc) }
+    if ($s.ProcThrottleMinAc -ne 5 -or $s.ProcThrottleMinDc -ne 10) { throw ('throttle AC={0} DC={1}' -f $s.ProcThrottleMinAc, $s.ProcThrottleMinDc) }
+}
+Test-SmokeFunction 'EnergyTuning' 'powercfg EAP-guarded en las funciones nativas (#78)' {
+    foreach ($fn in @('Get-ProcessorPowerSetting','Show-PerfBoostModeSetting','Set-ProcessorAcValue','Enable-LaptopGamingEnergy','Restore-LaptopGamingEnergy')) {
+        $def = (Get-Command $fn -CommandType Function).Definition
+        if ($def -notmatch "ErrorActionPreference\s*=\s*'Continue'") { throw "$fn no neutraliza EAP=Stop" }
+    }
+}
+
+# Handler [A][20]: powercfg falso CON ESTADO (AC por setting), Read-Host/Confirm
+# guionados, respaldo a un temp. Se llama al HANDLER, no a Enable-/Restore-.
+function Invoke-EnergyHandlerHarness {
+    param([string] $Answer, [bool] $IsLaptop, [bool] $Confirm = $true, [hashtable] $Start = @{ Boost = 2; Thr = 70 })
+    $script:EhState = @{ Boost = $Start.Boost; Thr = $Start.Thr; Calls = [System.Collections.Generic.List[string]]::new() }
+    $script:EhBak = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-energy-' + [guid]::NewGuid().ToString('N') + '.json')
+    if ($Start.ContainsKey('Backup')) { $Start.Backup | ConvertTo-Json | Out-File -LiteralPath $script:EhBak -Encoding UTF8 }
+    $script:EhAnswer = $Answer; $script:EhConfirm = $Confirm
+    function Get-EnergyBackupPath { $script:EhBak }
+    function Read-Host { $script:EhAnswer }
+    function Confirm-Action { $script:EhConfirm }
+    # Show-OrphanModuleResult es el REAL (ahi vivio el bug de .Count, ronda 4); se captura lo que le pasa a la auditoria.
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:EhStatus = $Status; if ($null -ne $Details) { $script:EhResult = $Details } }
+    function Get-MMAgent { throw 'sin admin' }
+    function powercfg {
+        $script:EhState.Calls.Add(($args -join ' '))
+        $a = @($args)
+        if ($a[0] -eq '/qh') {
+            $isBoost = ($a -contains 'be337238-0d82-4146-a960-4f3749d470c7')
+            $v = if ($isBoost) { $script:EhState.Boost } else { $script:EhState.Thr }
+            return @(('    Indice de configuracion de corriente alterna actual: 0x{0:x8}' -f $v), '    Indice de configuracion de corriente continua actual: 0x00000000')
+        }
+        if ($a[0] -eq '/SETACVALUEINDEX') {
+            if ($a[3] -eq 'be337238-0d82-4146-a960-4f3749d470c7') { $script:EhState.Boost = [int]$a[4] } else { $script:EhState.Thr = [int]$a[4] }
+        }
+        $global:LASTEXITCODE = 0
+    }
+    $script:EhResult = $null; $script:EhStatus = $null
+    $prof = [PSCustomObject]@{ IsLaptop = $IsLaptop }
+    Invoke-ActionEnergyLaptop -MachineProfile $prof | Out-Null
+    return $script:EhState
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: dispatch ruteado' {
+    $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
+    if ($disp -notmatch "'20'\s*\{\s*Invoke-ActionEnergyLaptop") { throw 'dispatch no rutea [20]' }
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: NO laptop -> A no muta nada (no se ofrece)' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'A' -IsLaptop $false
+    if (@($st.Calls | Where-Object { $_ -match 'SETACVALUEINDEX' }).Count -ne 0) { throw 'muto en un no-laptop' }
+    if ($st.Boost -ne 2 -or $st.Thr -ne 70) { throw 'cambio el estado' }
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: laptop + A + confirma -> boost 4, thr 5, respaldo con los previos' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'A' -IsLaptop $true
+    if ($st.Boost -ne 4 -or $st.Thr -ne 5) { throw ('AC final boost={0} thr={1}' -f $st.Boost, $st.Thr) }
+    if (-not (Test-Path -LiteralPath $script:EhBak)) { throw 'sin respaldo' }
+    $b = Get-Content -LiteralPath $script:EhBak -Raw | ConvertFrom-Json
+    if ($b.PerfBoostModeAc -ne 2 -or $b.ProcThrottleMinAc -ne 70) { throw 'respaldo no tiene los valores previos' }
+    if (-not $script:EhResult.Success) { throw 'Result.Success=false' }
+    Remove-Item -LiteralPath $script:EhBak -Force
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: no confirma -> no muta ni respalda' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'A' -IsLaptop $true -Confirm $false
+    if (@($st.Calls | Where-Object { $_ -match 'SETACVALUEINDEX' }).Count -ne 0) { throw 'muto sin confirmar' }
+    if (Test-Path -LiteralPath $script:EhBak) { throw 'creo respaldo sin confirmar' }
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: R restaura el respaldo y lo borra' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'R' -IsLaptop $true -Start @{ Boost = 4; Thr = 5; Backup = @{ PerfBoostModeAc = 3; ProcThrottleMinAc = 40 } }
+    if ($st.Boost -ne 3 -or $st.Thr -ne 40) { throw ('restaurado boost={0} thr={1}' -f $st.Boost, $st.Thr) }
+    if (Test-Path -LiteralPath $script:EhBak) { throw 'el respaldo no se borro' }
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: R sin respaldo -> boost 2, thr intacto, avisa' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'R' -IsLaptop $true -Start @{ Boost = 4; Thr = 5 }
+    if ($st.Boost -ne 2) { throw "boost=$($st.Boost)" }
+    if ($st.Thr -ne 5) { throw 'toco PROCTHROTTLEMIN sin respaldo' }
+    if ($script:EhResult.Reason -notmatch 'Sin respaldo') { throw 'no aviso la falta de respaldo' }
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: M des-oculta PERFBOOSTMODE sin cambiar valores (cualquier chassis)' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'M' -IsLaptop $false
+    if (@($st.Calls | Where-Object { $_ -match '^-attributes SUB_PROCESSOR PERFBOOSTMODE -ATTRIB_HIDE$' }).Count -ne 1) { throw 'no llamo -ATTRIB_HIDE' }
+    if (@($st.Calls | Where-Object { $_ -match 'SETACVALUEINDEX' }).Count -ne 0) { throw 'cambio valores' }
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: M pasa por el reporte real sin romper' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'M' -IsLaptop $true
+    if ($script:EhStatus -ne 'Success') { throw ('audit final Status={0}' -f $script:EhStatus) }
+    if (@($script:EhResult.Applied).Count -ne 1 -or @($script:EhResult.Errors).Count -ne 0) { throw 'Applied/Errors no son arrays' }
+    if ($script:EhResult.Applied -isnot [array] -or $script:EhResult.Errors -isnot [array]) { throw 'Applied/Errors desenrollados' }
+}
+Test-SmokeFunction 'EnergyTuning' 'la opcion laptop gaming NO esta en el engine ni en Performance (nunca en el [1])' {
+    $root = Split-Path -Parent $PSScriptRoot
+    foreach ($f in @('core\ProfileEngine.ps1', 'modules\Performance.ps1')) {
+        if ((Get-Content -LiteralPath (Join-Path $root $f) -Raw) -match 'LaptopGamingEnergy|PERFBOOSTMODE') { throw "$f menciona la opcion mutante" }
+    }
+}
+
+# Comparacion PRE/POST con Energy (#78 ronda 3). Se llama al HANDLER del menu
+# (Invoke-DiagnosticCompare) con Compare-Snapshot y Show-SnapshotComparison REALES
+# sobre snapshots JSON en un temp; solo se shadowean la salida (se captura el texto)
+# y la auditoria. $script:TelemetryModulePath apunta al temp para que
+# Compare-Snapshot lea de ahi, y se restaura en el finally.
+function Invoke-EnergyCompareHarness {
+    param([hashtable] $PreEnergy, [hashtable] $PostEnergy)
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-cmp-' + [guid]::NewGuid().ToString('N'))
+    $snapDir = Join-Path $root 'output\snapshots'
+    $null = New-Item -ItemType Directory -Path $snapDir -Force
+    $null = New-Item -ItemType Directory -Path (Join-Path $root 'modules') -Force
+    foreach ($ph in @('pre', 'post')) {
+        $snap = [ordered]@{
+            Timestamp         = '2026-10-13T10:00:00'
+            ComputerName      = 'PC-TEST'
+            UptimeHours       = 5.0
+            Volumes           = @(@{ Letter = 'C'; FreeGb = 50.0; UsedPct = 50.0 })
+            Services          = @{ RunningCount = 100; BloatRunning = @() }
+            StartupCount      = 10
+            Battery           = $null
+            MultipleAvProblem = $false
+        }
+        $en = $PreEnergy
+        if ($ph -eq 'post') { $en = $PostEnergy }
+        if ($null -ne $en) { $snap['Energy'] = $en }
+        $snap | ConvertTo-Json -Depth 6 | Out-File -LiteralPath (Join-Path $snapDir ('2026-10-13_100000_' + $ph + '.json')) -Encoding UTF8
+    }
+    $script:EcOut = [System.Collections.Generic.List[string]]::new()
+    $script:EcAudit = [System.Collections.Generic.List[string]]::new()
+    function Write-PctkLine { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkHint { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkSection { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkOk { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkWarn { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkActionTitle { $script:EcOut.Add(($args -join ' ')) }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:EcAudit.Add(('{0}|{1}|{2}' -f $Action, $Status, $Summary)) }
+    $oldPath = $script:TelemetryModulePath
+    try {
+        $script:TelemetryModulePath = Join-Path $root 'modules\Telemetry.ps1'
+        Invoke-DiagnosticCompare -MachineProfile ([PSCustomObject]@{ IsLaptop = $true }) | Out-Null
+    } finally {
+        $script:TelemetryModulePath = $oldPath
+        Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return [PSCustomObject]@{ Text = ($script:EcOut -join "`n"); Audit = @($script:EcAudit) }
+}
+$script:EcPreEn  = @{ PerfBoostModeAc = 2; ProcThrottleMinAc = 70; MemoryCompression = $true; ApplicationLaunchPrefetching = $true; SysMainStatus = 'Running'; SysMainStartType = 'Automatic' }
+$script:EcPostEn = @{ PerfBoostModeAc = 4; ProcThrottleMinAc = 5;  MemoryCompression = $true; ApplicationLaunchPrefetching = $null; SysMainStatus = 'Running'; SysMainStartType = 'Automatic' }
+Test-SmokeFunction 'EnergyTuning' 'comparacion PRE/POST (handler): ambos con Energy -> filas de energia con pre -> post' {
+    $r = Invoke-EnergyCompareHarness -PreEnergy $script:EcPreEn -PostEnergy $script:EcPostEn
+    if (@($r.Audit | Where-Object { $_ -match '^Snapshot\.Compare\|Success\|' }).Count -ne 1) { throw ('el handler no termino en Success: ' + ($r.Audit -join ' ; ')) }
+    foreach ($want in @('[ENERGIA]', 'Boost CPU (AC): 2 -> 4', 'Throttle minimo (AC): 70% -> 5%', 'Compresion de memoria: si -> si', 'Prefetch de aplicaciones: si -> no disponible', 'SysMain: Running / Automatic -> Running / Automatic')) {
+        if (-not $r.Text.Contains($want)) { throw ("falta en la salida: '$want'") }
+    }
+}
+Test-SmokeFunction 'EnergyTuning' 'comparacion PRE/POST (handler): PRE viejo SIN Energy + POST nuevo no rompe (StrictMode) y marca sin dato' {
+    $r = Invoke-EnergyCompareHarness -PreEnergy $null -PostEnergy $script:EcPostEn
+    if (@($r.Audit | Where-Object { $_ -match '^Snapshot\.Compare\|Success\|' }).Count -ne 1) { throw ('el handler fallo con PRE sin Energy: ' + ($r.Audit -join ' ; ')) }
+    foreach ($want in @('[ENERGIA]', 'Boost CPU (AC): sin dato -> 4', 'SysMain: sin dato -> Running / Automatic')) {
+        if (-not $r.Text.Contains($want)) { throw ("falta en la salida: '$want'") }
+    }
+    if ($r.Text -match 'sin dato -> 4.*\[i\]|\[i\][^\n]*sin dato') { throw 'un lado sin dato se marco como cambio' }
+}
+Test-SmokeFunction 'EnergyTuning' 'comparacion PRE/POST (handler): los dos snapshots viejos SIN Energy no rompen' {
+    $r = Invoke-EnergyCompareHarness -PreEnergy $null -PostEnergy $null
+    if (@($r.Audit | Where-Object { $_ -match '^Snapshot\.Compare\|Success\|' }).Count -ne 1) { throw ('el handler fallo con ambos sin Energy: ' + ($r.Audit -join ' ; ')) }
+    foreach ($want in @('[ENERGIA]', 'Boost CPU (AC): sin dato -> sin dato', 'SysMain: sin dato -> sin dato')) {
+        if (-not $r.Text.Contains($want)) { throw ("falta en la salida: '$want'") }
+    }
+}
+Test-SmokeFunction 'EnergyTuning' 'Energy NO esta en el reporte de cliente [8] (ClientReport.ps1)' {
+    $root = Split-Path -Parent $PSScriptRoot
+    if ((Get-Content -LiteralPath (Join-Path $root 'modules\ClientReport.ps1') -Raw) -match '(?i)energy|EnergyDiff|PERFBOOST') { throw 'ClientReport.ps1 menciona Energy' }
+}
+
+# Guarda de SysMain (#78): nunca una receta/codigo que lo deshabilite. Escanea
+# TODAS las carpetas del producto, no un archivo. Los comentarios no cuentan.
+function Get-SysMainDisableHits {
+    param([string] $Root)
+    $hits = [System.Collections.Generic.List[string]]::new()
+    $files = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+    foreach ($d in @('modules', 'core', 'utils', 'data')) {
+        $p = Join-Path $Root $d
+        if (Test-Path -LiteralPath $p) {
+            foreach ($f in @(Get-ChildItem -LiteralPath $p -Recurse -File | Where-Object { @('.ps1', '.json', '.psd1', '.cfg', '.bat', '.cmd') -contains $_.Extension })) { $files.Add($f) }
+        }
+    }
+    foreach ($f in @(Get-ChildItem -LiteralPath $Root -File | Where-Object { @('.ps1', '.json', '.psd1', '.bat', '.cmd') -contains $_.Extension })) { $files.Add($f) }
+    foreach ($f in $files) {
+        [string[]] $lines = @()
+        if ($f.Extension -eq '.ps1') {
+            $tokens = $null; $errs = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs)
+            $byLine = @{}
+            foreach ($t in $tokens) {
+                if ($t.Kind -eq 'Comment') { continue }
+                $ln = $t.Extent.StartLineNumber
+                $prev = ''
+                if ($byLine.ContainsKey($ln)) { $prev = $byLine[$ln] }
+                $byLine[$ln] = ('{0} {1}' -f $prev, $t.Text)
+            }
+            $lines = @($byLine.Values)
+        } else {
+            $lines = @(Get-Content -LiteralPath $f.FullName -Encoding UTF8)
+        }
+        foreach ($l in $lines) {
+            if ($l -match '(?i)sysmain' -and $l -match '(?i)disabled') {
+                $hits.Add(('{0}: {1}' -f $f.FullName, $l.Trim()))
+            }
+        }
+    }
+    return $hits.ToArray()
+}
+Test-SmokeFunction 'EnergyTuning' 'guarda SysMain: ninguna receta ni codigo del producto lo deshabilita' {
+    $root = Split-Path -Parent $PSScriptRoot
+    [string[]] $hits = @(Get-SysMainDisableHits -Root $root)
+    if ($hits.Count -ne 0) { throw ('SysMain deshabilitado en: ' + ($hits -join ' | ')) }
+}
+Test-SmokeFunction 'EnergyTuning' 'guarda SysMain: probada por mutacion (JSON y .ps1 cazan; comentario no)' {
+    $root = Split-Path -Parent $PSScriptRoot
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-sysmain-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $null = New-Item -ItemType Directory -Path (Join-Path $tmp 'data\profiles\auto') -Force
+        $null = New-Item -ItemType Directory -Path (Join-Path $tmp 'modules') -Force
+        Copy-Item -Path (Join-Path $root 'data\profiles\auto\*.json') -Destination (Join-Path $tmp 'data\profiles\auto') -Force
+        if (@(Get-SysMainDisableHits -Root $tmp).Count -ne 0) { throw 'base de la mutacion no esta limpia' }
+        Set-Content -LiteralPath (Join-Path $tmp 'modules\c.ps1') -Value '# nunca: Set-Service SysMain -StartupType Disabled' -Encoding UTF8
+        if (@(Get-SysMainDisableHits -Root $tmp).Count -ne 0) { throw 'conto un comentario' }
+        Set-Content -LiteralPath (Join-Path $tmp 'data\profiles\auto\mutante.json') -Value '{ "service": "SysMain", "start": "Disabled" }' -Encoding UTF8
+        if (@(Get-SysMainDisableHits -Root $tmp).Count -ne 1) { throw 'no cazo la mutacion en JSON' }
+        Set-Content -LiteralPath (Join-Path $tmp 'modules\m.ps1') -Value 'Set-Service -Name SysMain -StartupType Disabled' -Encoding UTF8
+        if (@(Get-SysMainDisableHits -Root $tmp).Count -ne 2) { throw 'no cazo la mutacion en .ps1' }
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Test-SmokeFunction 'NamedProfileEditor' 'Schema acepta timer_resolution=on' {
     $sP = Join-Path (Get-NamedProfileDir) '_sample.json'
     $p = Get-Content $sP -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -1934,10 +2250,10 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice fallback no bloquea (input
         throw ("fallback retorno '$result'; esperado '1'")
     }
 }
-Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 20 items en orden + 5 headers' {
+Test-SmokeFunction 'ConsoleMenu' 'Get-IndividualActionRows: 21 items en orden + 5 headers' {
     [object[]] $rows  = Get-IndividualActionRows
     [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
-    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','B')
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','B')
     if ($items.Count -ne $expectedKeys.Count) {
         throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
     }
