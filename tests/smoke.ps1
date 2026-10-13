@@ -2629,7 +2629,8 @@ Test-SmokeFunction 'StaticCheck' '#26-B: los handlers de accion no volvieron a R
 # render 16-color/texto. Estos tests verifican el contrato del FALLBACK: presencia,
 # no-throw, devuelve bool, y que los Get-* NO emiten ANSI crudo con VT off.
 # En consola interactiva el primer test PRENDE el VT ($script:PctkVT queda $true
-# el resto de la corrida), asi que el de 'Get-* ... con VT off' no aplica: SKIP.
+# el resto de la corrida): el de 'Get-* ... con VT off' fija $script:PctkVT = $false
+# adentro y lo restaura, asi prueba el fallback en todo entorno sin SKIP.
 Test-SmokeFunction 'ConsoleTheme' 'Enable-PctkVT presente + devuelve bool + no-throw' {
     if ($null -eq (Get-Command 'Enable-PctkVT' -CommandType Function -ErrorAction SilentlyContinue)) {
         throw 'Enable-PctkVT no encontrado'
@@ -2660,16 +2661,22 @@ Test-SmokeFunction 'ConsoleTheme' 'helpers de output no-throw con VT off' {
         Write-PctkDivider 20
     } *> $null
 }
-Test-SmokeFunction 'ConsoleTheme' 'Get-* no emiten ANSI crudo con VT off' -RequiresHeadless -SkipReason 'asume VT off, y en consola real Enable-PctkVT (test anterior) lo deja prendido' {
-    [char] $esc = [char]27
-    [string] $b = Get-PctkBadge 'OK' 'ok'
-    if ($b.IndexOf($esc) -ge 0) { throw 'Get-PctkBadge emitio ESC con VT off' }
-    if ($b -ne '[OK]')          { throw ("Get-PctkBadge VT off esperado '[OK]'; got '{0}'" -f $b) }
-    [string] $g = Get-PctkGrad 'abc' 255 170 40 95 108 124
-    if ($g.IndexOf($esc) -ge 0) { throw 'Get-PctkGrad emitio ESC con VT off' }
-    if ($g -ne 'abc')           { throw ("Get-PctkGrad VT off esperado 'abc'; got '{0}'" -f $g) }
-    [string] $f = ConvertTo-PctkAnsiFg 'Green'
-    if ($f -ne '')              { throw ("ConvertTo-PctkAnsiFg VT off esperado ''; got '{0}'" -f $f) }
+Test-SmokeFunction 'ConsoleTheme' 'Get-* no emiten ANSI crudo con VT off' {
+    # VT off fijado aca, no heredado del entorno: en consola real el test de
+    # Enable-PctkVT lo deja prendido. Se restaura para no cambiar el resto de la corrida.
+    [bool] $prevVT = $script:PctkVT
+    $script:PctkVT = $false
+    try {
+        [char] $esc = [char]27
+        [string] $b = Get-PctkBadge 'OK' 'ok'
+        if ($b.IndexOf($esc) -ge 0) { throw 'Get-PctkBadge emitio ESC con VT off' }
+        if ($b -ne '[OK]')          { throw ("Get-PctkBadge VT off esperado '[OK]'; got '{0}'" -f $b) }
+        [string] $g = Get-PctkGrad 'abc' 255 170 40 95 108 124
+        if ($g.IndexOf($esc) -ge 0) { throw 'Get-PctkGrad emitio ESC con VT off' }
+        if ($g -ne 'abc')           { throw ("Get-PctkGrad VT off esperado 'abc'; got '{0}'" -f $g) }
+        [string] $f = ConvertTo-PctkAnsiFg 'Green'
+        if ($f -ne '')              { throw ("ConvertTo-PctkAnsiFg VT off esperado ''; got '{0}'" -f $f) }
+    } finally { $script:PctkVT = $prevVT }
 }
 Test-SmokeFunction 'ConsoleTheme' 'Get-PctkKindSpec: shape + 16-color por kind' {
     $s = Get-PctkKindSpec 'ok'
