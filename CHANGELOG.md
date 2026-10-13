@@ -2,6 +2,23 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.10.1] - 2026-10-13
+
+Release: **las herramientas se vuelven a extraer en cualquier Windows**. En una PC con el módulo de compresión de PowerShell roto, ni el instalador ni el selector de tools podían abrir un ZIP; ahora extraen con .NET directo. Suma el aviso de anti-cheat antes de apagar HVCI y tres arreglos que el cliente veía o que estaban a una ruta con espacios de romperse.
+
+### Added
+
+- **Aviso de anti-cheat antes de apagar HVCI (`core/ActionHandlers.ps1`)**: en `[A][12]`, al elegir `[D]`, PCTk avisa que Vanguard, FACEIT, EAC y BattlEye pueden exigir Memory Integrity / VBS y pide confirmación con **No** por default. Sólo avisa: no detecta juegos ni bloquea.
+
+### Fixed
+
+- **La extracción de tools ya no depende del módulo Archive (`Launch.ps1`, `Bootstrap-Tools.ps1`)**: el instalador y el `[T]` extraían con `Expand-Archive`, que falla si el módulo `Microsoft.PowerShell.Archive` no carga; BCU, BleachBit y CPU-Z no se podían usar en esa PC. Ahora extraen con `System.IO.Compression`, con la misma semántica (pisa lo existente, rechaza rutas que se escapan de la carpeta).
+- **El progreso de AppX ya no queda pintado sobre el menú (`modules/Apps.ps1`)**: desinstalar una app de la Store en `[A][8]` dejaba el bloque de progreso de Windows encima del menú al volver. El progreso se apaga sólo durante la desinstalación.
+- **Rutas con espacios a programas externos (`modules/Privacy.ps1`, `core/Router.ps1`, `modules/NvidiaTweaks.ps1`, `modules/UninstallToolkit.ps1`, `modules/RawAudit.ps1`)**: la ruta del `.cfg` de O&O ShutUp10, del perfil de NVIDIA, de una tool `.ps1` y de las carpetas a abrir le llegaba partida al programa si tenía espacios. Ahora va entrecomillada.
+- **Selector de tools con un `manifest.json` incompleto (`core/Router.ps1`)**: una tool sin nombre, categoría o archivo cerraba el menú; ahora se saltea con un aviso.
+- **Optimización de red sin placas activas (`modules/Network.ps1`)**: sin ninguna placa física conectada, el paso de red reventaba en vez de no hacer nada.
+- **`Release.ps1` falla en voz alta**: todo error de publicación termina con exit 1 y, después de subir, verifica contra la API de GitHub que la release exista con el ZIP y su checksum.
+
 ## [2.10.0] - 2026-10-13
 
 Release: **las herramientas que descarga PCTk, al día**. Cinco tools del manifest suben de versión con su hash verificado, y Bulk Crap Uninstaller pasa a la edición que necesita .NET 8: si la PC no lo tiene, PCTk lo instala antes de abrirlo.
