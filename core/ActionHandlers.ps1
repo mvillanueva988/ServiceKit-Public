@@ -415,13 +415,30 @@ function Invoke-ActionDriverBackup {
     $job = Start-DriverBackupJob -OutputRoot $outDir
     $r = (Invoke-JobWithProgress -Jobs @($job) -Activity 'Backup drivers' -TimeoutSeconds 600)[0]
     if ($null -eq $r) { Write-PctkWarn '  [!] Sin resultado.'; Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed'; return }
-    if ($r.Success) {
-        Write-PctkOk ('  [OK] {0} drivers exportados de {1} candidatos. {2}' -f $r.Exported, $r.Total, $r.Message)
-        Write-PctkHint ('       {0}' -f $r.Destination)
-        Write-ActionAudit -Action 'Drivers.Backup' -Status 'Success' -Summary ('{0}/{1} drivers' -f $r.Exported, $r.Total) -Details $r
+    # #88: el resultado viene deserializado de un job y bajo StrictMode leer una
+    # propiedad ausente tira PropertyNotFoundStrict. Se lee todo por PSObject.Properties.
+    [bool]   $ok       = $false
+    [int]    $exported = 0
+    [int]    $total    = 0
+    [string] $msg      = ''
+    [string] $dest     = ''
+    if ($r.PSObject.Properties['Success'])     { $ok = [bool] $r.Success }
+    if ($r.PSObject.Properties['Exported'])    { $exported = [int] $r.Exported }
+    if ($r.PSObject.Properties['Message'])     { $msg = [string] $r.Message }
+    if ($r.PSObject.Properties['Destination']) { $dest = [string] $r.Destination }
+    if ($r.PSObject.Properties['Total'])       { $total = [int] $r.Total } else { $total = $exported }
+    if ($ok -and $exported -eq 0) {
+        # 0 candidatos (Sandbox, o DISM sin respuesta): no hubo nada que exportar.
+        if ([string]::IsNullOrWhiteSpace($msg)) { $msg = 'No se encontraron drivers de terceros para exportar.' }
+        Write-PctkWarn ('  [!] {0}' -f $msg)
+        Write-ActionAudit -Action 'Drivers.Backup' -Status 'Success' -Summary $msg -Details $r
+    } elseif ($ok) {
+        Write-PctkOk ('  [OK] {0} drivers exportados de {1} candidatos. {2}' -f $exported, $total, $msg)
+        Write-PctkHint ('       {0}' -f $dest)
+        Write-ActionAudit -Action 'Drivers.Backup' -Status 'Success' -Summary ('{0}/{1} drivers' -f $exported, $total) -Details $r
     } else {
-        Write-PctkWarn ('  [!] {0}' -f $r.Message)
-        Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed' -Summary $r.Message
+        Write-PctkWarn ('  [!] {0}' -f $msg)
+        Write-ActionAudit -Action 'Drivers.Backup' -Status 'Failed' -Summary $msg
     }
 }
 

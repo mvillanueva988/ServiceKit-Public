@@ -306,6 +306,10 @@ function Backup-Drivers {
         Exporta drivers de terceros (no-Microsoft) más drivers de red críticos
         a output\driver_backup\<timestamp>\.
         Usa Export-WindowsDriver filtrado por proveedor / clase.
+        Toda rama devuelve la MISMA forma: Success, Destination, Exported, Total,
+        Message (#88: la de 0 candidatos no traia Total y el handler crasheaba
+        bajo StrictMode). Corre serializada en un job (Start-DriverBackupJob):
+        no llamar funciones propias desde aca sin embeberlas alla.
     #>
     [CmdletBinding()]
     param(
@@ -324,6 +328,7 @@ function Backup-Drivers {
             Success     = $false
             Destination = $destFolder
             Exported    = 0
+            Total       = 0
             Message     = "No se pudo crear la carpeta de destino: $($_.Exception.Message)"
         }
     }
@@ -347,6 +352,7 @@ function Backup-Drivers {
             Success     = $true
             Destination = $destFolder
             Exported    = 0
+            Total       = 0
             Message     = 'No se encontraron drivers de terceros para exportar.'
         }
     }
