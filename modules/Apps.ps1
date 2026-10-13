@@ -16,7 +16,7 @@ function Get-InstalledWin32Apps {
         [switch] $IncludeSystemComponents
     )
 
-    [string[]] $regPaths = if ([Environment]::Is64BitOperatingSystem) {
+    [string[]] $regPaths = @(if ([Environment]::Is64BitOperatingSystem) {
         @(
             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -28,7 +28,7 @@ function Get-InstalledWin32Apps {
             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
         )
-    }
+    })
 
     $list = [System.Collections.Generic.List[PSCustomObject]]::new()
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

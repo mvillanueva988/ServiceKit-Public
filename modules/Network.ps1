@@ -33,7 +33,7 @@ function Optimize-Network {
     # NIC fisica real era el Wi-Fi MediaTek (HardwareInterface=True). EEE/Green
     # Ethernet son props de Ethernet: en una NIC Wi-Fi no existen -> ChangesMade=0
     # (no-op seguro). HardwareInterface excluye virtuales/loopback.
-    [object[]] $targets = if ($PSBoundParameters.ContainsKey('AdapterNames') -and $AdapterNames.Count -gt 0) {
+    [object[]] $targets = @(if ($PSBoundParameters.ContainsKey('AdapterNames') -and $AdapterNames.Count -gt 0) {
         @($allAdapters | Where-Object { $_.Name -in $AdapterNames })
     } else {
         @($allAdapters | Where-Object {
@@ -41,7 +41,7 @@ function Optimize-Network {
             $null -ne $_.PSObject.Properties['HardwareInterface'] -and
             $_.HardwareInterface -eq $true
         })
-    }
+    })
 
     if ($targets.Count -eq 0) {
         return [PSCustomObject]@{
@@ -163,7 +163,8 @@ $fnBody
 Optimize-Network -AdapterNames `$AdapterNames
 "@)
 
-    $argList = @(, [string[]] $(if ($AdapterNames -and $AdapterNames.Count -gt 0) { $AdapterNames } else { @() }))
+    # @(if ...) y no $(if ... else { @() }): el $() desenrollaba el @() vacio a $null.
+    $argList = @(, [string[]] @(if ($AdapterNames -and $AdapterNames.Count -gt 0) { $AdapterNames }))
 
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'NetworkOptimization' -ArgumentList $argList
 }

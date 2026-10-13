@@ -131,7 +131,8 @@ $fnBody
 Disable-BloatServices -ServicesList `$ServicesList
 "@)
 
-    $argList = @(, [string[]]$(if ($ServicesList -and $ServicesList.Count -gt 0) { $ServicesList } else { @() }))
+    # @(if ...) y no $(if ... else { @() }): el $() desenrollaba el @() vacio a $null.
+    $argList = @(, [string[]] @(if ($ServicesList -and $ServicesList.Count -gt 0) { $ServicesList }))
 
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'DebloatServices' -ArgumentList $argList
 }

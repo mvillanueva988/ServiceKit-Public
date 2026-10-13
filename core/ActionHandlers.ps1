@@ -367,12 +367,12 @@ function Invoke-ActionPerformance {
     } catch { }
 
     [string] $targetPlanHint = if ($MachineProfile.IsLaptop) { 'Balanced (laptop con TDP locked)' } else { 'Ultimate Performance o High Performance (desktop)' }
-    [string[]] $visualsDescription = switch ($vp) {
+    [string[]] $visualsDescription = @(switch ($vp) {
         'Balanced'   { @('Deshabilita animaciones, sombras, transparencias. Conserva ClearType, thumbnails, drag-fullwindow.') }
         'Full'       { @('Max Performance: TODO el efecto visual off. Equivale a "Adjust for best performance".') }
         'Restore'    { @('Restaura visuales a Windows defaults (efectos activos).') }
         'TweaksOnly' { @('NO toca visuales. Solo aplica system tweaks + power plan.') }
-    }
+    })
 
     if (-not (Confirm-Action -Title ('Aplicar perfil Performance: {0}?' -f $vp) -Lines @(
         ('Plan de energia actual: {0}' -f $currentPlanLabel),
@@ -652,7 +652,7 @@ function Invoke-ActionPrivacy {
     }
     if ([string]::IsNullOrWhiteSpace($profile)) { return }
 
-    [string[]] $profileDescription = switch ($profile) {
+    [string[]] $profileDescription = @(switch ($profile) {
         'Basic' {
             @(
                 'Telemetria (AllowTelemetry=0)',
@@ -684,7 +684,7 @@ function Invoke-ActionPrivacy {
                 'Windows Error Reporting off'
             )
         }
-    }
+    })
     Write-Host ''
     Write-PctkWarn '  [!] DEPRECATED: esta accion aplica tweaks privacy NATIVOS'
     Write-PctkWarn '       (registry hardcoded por el toolkit, NO mantenido upstream).'
@@ -1448,12 +1448,12 @@ function Invoke-ActionEnergyLaptop {
 
     [bool] $apply = ($sub -eq 'A')
     [string] $title = if ($apply) { 'Aplicar energia "laptop gaming" (solo AC)?' } else { 'Revertir energia "laptop gaming"?' }
-    [string[]] $lines = if ($apply) {
+    [string[]] $lines = @(if ($apply) {
         @('PERFBOOSTMODE AC -> 4 (Eficiencia agresiva) y PROCTHROTTLEMIN AC -> 5 en el esquema activo',
           'Antes se guardan los valores actuales para poder revertir. DC no se toca.')
     } else {
         @('Restaura PERFBOOSTMODE/PROCTHROTTLEMIN AC desde el respaldo; sin respaldo, PERFBOOSTMODE -> 2 y PROCTHROTTLEMIN queda como esta.')
-    }
+    })
     if (-not (Confirm-Action -Title $title -Lines $lines)) {
         Write-PctkHint '  Cancelado.'
         Write-ActionAudit -Action 'EnergyTuning' -Status 'Cancelled'
