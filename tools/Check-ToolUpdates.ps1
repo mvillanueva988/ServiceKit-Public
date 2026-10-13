@@ -48,6 +48,24 @@ function _Get-GithubLatestTag {
     }
 }
 
+function _Get-GithubAssetVersion {
+    <#
+    .SYNOPSIS
+        Saca la version del asset "portable" de un release de GitHub. Reconoce
+        <nombre>_<ver>_portable.zip (BCU <= 6.2) y <nombre>_<ver>_net<N>[.0]-windows<...>.zip
+        (BCU >= 6.3, build framework-dependent). NO matchea .7z, setup.exe ni
+        paquetes de idioma (Localisation_Pack_6.3.0.zip). Devuelve
+        @{ Asset; Version } o $null.
+    #>
+    param([string[]] $Assets)
+    foreach ($a in @($Assets)) {
+        if ($a -match '_(\d+(?:\.\d+){1,3})_(?:portable|net\d+(?:\.\d+)?-windows[\d.]*)\.zip$') {
+            return [PSCustomObject]@{ Asset = [string] $a; Version = [string] $Matches[1] }
+        }
+    }
+    return $null
+}
+
 function _Get-VersionFromHtml {
     param(
         [string] $Url,
@@ -134,12 +152,12 @@ foreach ($tool in $manifest.tools) {
         $gh = _Get-GithubLatestTag -ApiUrl $checkUrl
         if ($null -ne $gh) {
             $upstream = $gh.Tag
-            # Para BCUninstaller, el tag es 'v6.1' pero el asset incluye '6.1.0.1'
-            # Si la version actual del manifest es mas larga, usamos el asset name como upstream
-            $portableAsset = @($gh.Assets | Where-Object { $_ -match '_portable\.zip$' }) | Select-Object -First 1
-            if ($portableAsset -and $portableAsset -match '_(\d+(?:\.\d+){1,3})_portable\.zip$') {
-                $upstream = $Matches[1]
-                $note = "asset: $portableAsset"
+            # Para BCUninstaller, el tag es 'v6.3' pero el asset incluye '6.3.0'
+            # (6.2 y antes: *_portable.zip; 6.3: *_net8.0-windows*.zip). Se usa el asset como upstream.
+            $assetVer = _Get-GithubAssetVersion -Assets $gh.Assets
+            if ($null -ne $assetVer) {
+                $upstream = $assetVer.Version
+                $note = "asset: $($assetVer.Asset)"
             }
         } else {
             $note = 'GitHub API no respondio'
