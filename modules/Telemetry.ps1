@@ -365,9 +365,9 @@ function Get-BatteryHealth {
 # ─── Energia: PERFBOOSTMODE / PROCTHROTTLEMIN / MMAgent / SysMain (#78) ──────
 # Solo lectura. Viven ACA (y no en EnergyTuning.ps1) porque el runspace del job
 # de telemetria solo dot-sourcea este archivo (ver nota de Invoke-WithTimeout).
-$script:EnergySubProcessorGuid = '54533251-82be-4824-96c1-47b60b740d00'
-$script:EnergyPerfBoostGuid    = 'be337238-0d82-4146-a960-4f3749d470c7'
-$script:EnergyThrottleMinGuid  = '893dee8e-2bef-41e0-89c6-b55d0929964c'
+# SIN variables $script: a proposito: este codigo corre dentro de un Start-Job
+# (Start-TelemetryJob) y un $script: sin resolver se traga en silencio (el try/catch
+# lo deja en $null). Los GUIDs van como default de parametro / literal local.
 
 function ConvertFrom-PowercfgQhIndices {
     <#
@@ -405,12 +405,15 @@ function Get-ProcessorPowerSetting {
         (la `h` incluye los ocultos). Read-only.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $SettingGuid)
+    param(
+        [Parameter(Mandatory)] [string] $SettingGuid,
+        [Parameter()] [string] $SubGuid = '54533251-82be-4824-96c1-47b60b740d00'   # SUB_PROCESSOR
+    )
 
     # Exe nativo + EAP=Stop (main.ps1) = NativeCommandError terminante (CLAUDE.md).
     $ErrorActionPreference = 'Continue'
     [string] $txt = ''
-    try { $txt = (& powercfg /qh SCHEME_CURRENT $script:EnergySubProcessorGuid $SettingGuid 2>&1) -join "`n" } catch { }
+    try { $txt = (& powercfg /qh SCHEME_CURRENT $SubGuid $SettingGuid 2>&1) -join "`n" } catch { }
     return (ConvertFrom-PowercfgQhIndices -Text $txt)
 }
 
@@ -453,8 +456,10 @@ function Get-EnergyTuningState {
     [CmdletBinding()]
     param()
 
-    $boost    = Get-ProcessorPowerSetting -SettingGuid $script:EnergyPerfBoostGuid
-    $throttle = Get-ProcessorPowerSetting -SettingGuid $script:EnergyThrottleMinGuid
+    [string] $perfBoostGuid   = 'be337238-0d82-4146-a960-4f3749d470c7'   # PERFBOOSTMODE
+    [string] $throttleMinGuid = '893dee8e-2bef-41e0-89c6-b55d0929964c'   # PROCTHROTTLEMIN
+    $boost    = Get-ProcessorPowerSetting -SettingGuid $perfBoostGuid
+    $throttle = Get-ProcessorPowerSetting -SettingGuid $throttleMinGuid
     $mm       = Get-MMAgentState
 
     [string] $sysStatus = 'no disponible'

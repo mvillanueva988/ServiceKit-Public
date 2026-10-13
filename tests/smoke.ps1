@@ -998,6 +998,34 @@ Test-SmokeFunction 'EnergyTuning' 'el snapshot lleva el campo Energy' {
     $def = (Get-Command Get-SystemSnapshot -CommandType Function).Definition
     if ($def -notmatch 'Energy\s*=\s*\$energy') { throw 'Get-SystemSnapshot no devuelve Energy' }
 }
+Test-SmokeFunction 'EnergyTuning' 'Get-EnergyTuningState DENTRO de un Start-Job real (como Start-TelemetryJob): GUIDs resuelven (#78 ronda 2)' {
+    # Mismo patron que Start-TelemetryJob: runspace fresco, StrictMode Latest, dot-source
+    # de Telemetry.ps1. El powercfg falso vive DENTRO del job y devuelve el fixture es-AR
+    # SOLO si recibe SUB_PROCESSOR + el GUID del setting: un $script: sin resolver o un
+    # GUID mal escrito da texto de error -> PerfBoostModeAc $null -> el test falla.
+    $modPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'modules\Telemetry.ps1'
+    $j = Start-Job -ScriptBlock {
+        param([string] $ModPath, [string] $FixBoost, [string] $FixThr)
+        Set-StrictMode -Version Latest
+        . $ModPath
+        function powercfg {
+            $a = @($args | ForEach-Object { [string] $_ })
+            $okSub = $a -contains '54533251-82be-4824-96c1-47b60b740d00'
+            if ($okSub -and ($a -contains 'be337238-0d82-4146-a960-4f3749d470c7')) { return ($FixBoost -split "`n") }
+            if ($okSub -and ($a -contains '893dee8e-2bef-41e0-89c6-b55d0929964c')) { return ($FixThr -split "`n") }
+            return @('Argumentos no validos: ' + ($a -join ' '))
+        }
+        Get-EnergyTuningState
+    } -ArgumentList @($modPath, $script:EnergyFixtureBoostEs, $script:EnergyFixtureThrottleEs)
+    try {
+        if (-not (Wait-Job $j -Timeout 120)) { throw 'el job no termino en 120 s' }
+        $s = Receive-Job $j -ErrorAction Stop
+    } finally { Remove-Job $j -Force -ErrorAction SilentlyContinue }
+    if ($null -eq $s) { throw 'el job no devolvio estado' }
+    if ($null -eq $s.PerfBoostModeAc) { throw 'PerfBoostModeAc $null dentro del job (GUID/$script: sin resolver)' }
+    if ($s.PerfBoostModeAc -ne 4 -or $s.PerfBoostModeDc -ne 0) { throw ('boost AC={0} DC={1}' -f $s.PerfBoostModeAc, $s.PerfBoostModeDc) }
+    if ($s.ProcThrottleMinAc -ne 5 -or $s.ProcThrottleMinDc -ne 10) { throw ('throttle AC={0} DC={1}' -f $s.ProcThrottleMinAc, $s.ProcThrottleMinDc) }
+}
 Test-SmokeFunction 'EnergyTuning' 'powercfg EAP-guarded en las funciones nativas (#78)' {
     foreach ($fn in @('Get-ProcessorPowerSetting','Show-PerfBoostModeSetting','Set-ProcessorAcValue','Enable-LaptopGamingEnergy','Restore-LaptopGamingEnergy')) {
         $def = (Get-Command $fn -CommandType Function).Definition

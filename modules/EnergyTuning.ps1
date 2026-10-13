@@ -5,6 +5,10 @@ Set-StrictMode -Version Latest
 # Telemetry.ps1 porque el job de telemetria solo dot-sourcea ese archivo.
 # Esto es lo MUTANTE: por PC, con confirmacion, NUNCA default ni parte del [1].
 
+# GUIDs propios de este archivo (no dependen de lo que defina otro .ps1).
+$script:EnergySubProcessorGuid = '54533251-82be-4824-96c1-47b60b740d00'
+$script:EnergyPerfBoostGuid    = 'be337238-0d82-4146-a960-4f3749d470c7'
+$script:EnergyThrottleMinGuid  = '893dee8e-2bef-41e0-89c6-b55d0929964c'
 $script:EnergyBoostLaptopGaming = 4   # Eficiencia agresiva
 $script:EnergyThrottleLaptopGaming = 5
 $script:EnergyBoostRevertDefault = 2  # Agresiva (default de Windows)
