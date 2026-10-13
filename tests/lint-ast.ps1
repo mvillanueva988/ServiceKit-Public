@@ -24,6 +24,11 @@
 # trampa no cuentan)
 #   ARCHIVE  todo CommandAst cuyo nombre sea Compress-Archive o Expand-Archive
 #            (tambien calificado con el modulo). Sin allowlist.
+#   APPX  (#83) todo Add-/Remove-AppxPackage / -AppxProvisionedPackage corre con
+#            $ProgressPreference = 'SilentlyContinue' asignado LOCAL en la misma
+#            funcion y antes del comando: si no, el progreso de deployment de
+#            AppX queda pintado encima del menu. $global:/$script: no cuentan
+#            (apagan el progreso del resto del toolkit).
 #   R1  unroll-count  `$v = <rhs desenrollable>` SIN @() (con o sin tipo en la
 #            variable) y despues `$v.Count` en la MISMA funcion. rhs desenrollable
 #            = pipeline de 2+ etapas, un comando suelto, $( ... ), ( pipeline ),
@@ -44,9 +49,11 @@
 # API
 #   Get-LintProductFiles  -RepoRoot <path>          -> [string[]] rutas .ps1
 #   Find-LintArchiveHits  -Ast <Ast> -File <label>  -> hits
+#   Find-LintAppxSites    -Ast <Ast> -File <label>  -> sitios APPX (con .Ok)
 #   Find-LintUnrollHits   -Ast <Ast> -File <label>  -> hits (R1 + R2)
 #   Get-LintAstFromText   -Text <string>            -> Ast (para fixtures)
 #   Get-LintAstReport     -RepoRoot <path>          -> .Files .ArchiveHits
+#                                                      .AppxSites .AppxHits
 #                                                      .UnrollHits .UnrollAllowed
 #   Dot-source sin efectos. Corrido directo (powershell -File) imprime el reporte
 #   y sale con exit 0/1.
@@ -138,6 +145,46 @@ function Find-LintArchiveHits {
         }
     }
     return $hits.ToArray()
+}
+
+function Find-LintAppxSites {
+    # APPX (#83): cada Add-/Remove-AppxPackage / -AppxProvisionedPackage, con Ok =
+    # la MISMA funcion asigna $ProgressPreference = 'SilentlyContinue' LOCAL (sin
+    # $global:/$script:) ANTES del comando. Devuelve TODOS los sitios (no solo los
+    # malos) para que el smoke pueda exigir que el barrido no este vacio.
+    param([System.Management.Automation.Language.Ast] $Ast, [string] $File)
+    [System.Collections.Generic.List[PSCustomObject]] $sites = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $cmds = $Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)
+    foreach ($c in @($cmds)) {
+        [string] $name = $c.GetCommandName()
+        if ([string]::IsNullOrEmpty($name)) { continue }
+        [string] $short = ($name -split '\\')[-1]
+        if ($short -notmatch '^(Add|Remove)-Appx(Provisioned)?Package$') { continue }
+        $fn = Get-LintEnclosingFunction -Node $c
+        [System.Management.Automation.Language.Ast] $owner = $Ast
+        if ($null -ne $fn) { $owner = $fn }
+        [bool] $ok = $false
+        $asgs = $owner.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)
+        foreach ($a in @($asgs)) {
+            if ($a.Extent.StartOffset -ge $c.Extent.StartOffset) { continue }
+            if (-not ($a.Left -is [System.Management.Automation.Language.VariableExpressionAst])) { continue }
+            if ((Get-LintVarName -Var $a.Left) -ne 'progresspreference') { continue }
+            if ($a.Right.Extent.Text -notmatch 'SilentlyContinue') { continue }
+            # una asignacion dentro de una funcion anidada no cubre al comando
+            $afn = Get-LintEnclosingFunction -Node $a
+            if (-not [object]::ReferenceEquals($afn, $fn)) { continue }
+            $ok = $true
+            break
+        }
+        $sites.Add([PSCustomObject]@{
+            File     = $File
+            Line     = $c.Extent.StartLineNumber
+            Function = (Get-LintFunctionLabel -Node $c)
+            Command  = $short
+            Ok       = $ok
+        })
+    }
+    return $sites.ToArray()
 }
 
 function Get-LintUnrollKind {
@@ -373,6 +420,7 @@ function Get-LintAstReport {
     [System.Collections.Generic.List[PSCustomObject]] $arch    = [System.Collections.Generic.List[PSCustomObject]]::new()
     [System.Collections.Generic.List[PSCustomObject]] $unroll  = [System.Collections.Generic.List[PSCustomObject]]::new()
     [System.Collections.Generic.List[PSCustomObject]] $allowed = [System.Collections.Generic.List[PSCustomObject]]::new()
+    [System.Collections.Generic.List[PSCustomObject]] $appx    = [System.Collections.Generic.List[PSCustomObject]]::new()
     [string[]] $files = @(Get-LintProductFiles -RepoRoot $root)
     $asts = @{}
     foreach ($f in $files) { $asts[$f] = Get-LintAstFromFile -Path $f }
@@ -381,6 +429,7 @@ function Get-LintAstReport {
         [string] $rel = $f.Substring($root.Length + 1)
         $ast = $asts[$f]
         foreach ($h in @(Find-LintArchiveHits -Ast $ast -File $rel)) { $arch.Add($h) }
+        foreach ($s in @(Find-LintAppxSites -Ast $ast -File $rel)) { $appx.Add($s) }
         foreach ($h in @(Find-LintUnrollHits -Ast $ast -File $rel -SafeFunctions $safe)) {
             if ($script:LintUnrollAllowlist.ContainsKey($h.Key)) {
                 $h | Add-Member -NotePropertyName Reason -NotePropertyValue $script:LintUnrollAllowlist[$h.Key]
@@ -392,6 +441,8 @@ function Get-LintAstReport {
     return [PSCustomObject]@{
         Files         = $files
         ArchiveHits   = $arch.ToArray()
+        AppxSites     = $appx.ToArray()
+        AppxHits      = @($appx | Where-Object { -not $_.Ok })
         UnrollHits    = $unroll.ToArray()
         UnrollAllowed = $allowed.ToArray()
         UnrollEnforce = [bool] $script:LintUnrollEnforce
@@ -420,6 +471,14 @@ if ($MyInvocation.InvocationName -ne '.') {
     if (@($rep.ArchiveHits).Count -eq 0) { Write-Host '  [OK]   ningun *-Archive' -ForegroundColor Green }
 
     Write-Host ''
+    Write-Host ('-- APPX (#83: *-Appx*Package con $ProgressPreference local en SilentlyContinue)  {0} sitio(s) --' -f @($rep.AppxSites).Count)
+    foreach ($h in @($rep.AppxHits)) {
+        $failCount++
+        Write-Host ('  [FAIL] {0}:{1}  {2}  en {3}' -f $h.File, $h.Line, $h.Command, $h.Function) -ForegroundColor Red
+    }
+    if (@($rep.AppxHits).Count -eq 0) { Write-Host '  [OK]   todos con progreso suprimido local' -ForegroundColor Green }
+
+    Write-Host ''
     [string] $mode = if ($rep.UnrollEnforce) { 'FAIL' } else { 'REPORTE' }
     Write-Host ('-- UNROLL (E16: desenrollado + .Count bajo StrictMode)  modo {0} --' -f $mode)
     foreach ($h in @($rep.UnrollHits)) {
@@ -433,8 +492,8 @@ if ($MyInvocation.InvocationName -ne '.') {
     if (@($rep.UnrollHits).Count -eq 0) { Write-Host '  [OK]   ningun desenrollado sin @()' -ForegroundColor Green }
 
     Write-Host ''
-    Write-Host ('Resultado: {0} FAIL  (archive {1}, unroll {2}, allowlist {3})' -f `
-        $failCount, @($rep.ArchiveHits).Count, @($rep.UnrollHits).Count, @($rep.UnrollAllowed).Count)
+    Write-Host ('Resultado: {0} FAIL  (archive {1}, appx {2}, unroll {3}, allowlist {4})' -f `
+        $failCount, @($rep.ArchiveHits).Count, @($rep.AppxHits).Count, @($rep.UnrollHits).Count, @($rep.UnrollAllowed).Count)
     if ($failCount -gt 0) { exit 1 }
     exit 0
 }

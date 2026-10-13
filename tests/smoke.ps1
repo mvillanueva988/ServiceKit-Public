@@ -1737,6 +1737,32 @@ Test-SmokeFunction 'LintAst' 'ningun Expand-Archive/Compress-Archive en producto
     }
 }
 
+Test-SmokeFunction 'LintAst' 'APPX: todo *-Appx*Package de producto corre con $ProgressPreference local en SilentlyContinue (#83)' {
+    [object[]] $s = @($script:LintAstReport.AppxSites)
+    # piso: si el barrido no encuentra ninguno, el guard quedo verde por vacuidad
+    if ($s.Count -lt 1) { throw 'el barrido APPX no encontro ningun *-Appx*Package (Invoke-UwpUninstall usa Remove-AppxPackage): guard vacio' }
+    [object[]] $h = @($script:LintAstReport.AppxHits)
+    if ($h.Count -gt 0) {
+        throw ('*-Appx*Package sin $ProgressPreference local en SilentlyContinue antes: {0}' -f (($h | ForEach-Object { '{0}:{1} {2} en {3}' -f $_.File, $_.Line, $_.Command, $_.Function }) -join ', '))
+    }
+}
+
+Test-SmokeFunction 'LintAst' 'APPX: caza sin-fix, $global:, $script:, asignado despues y en funcion anidada; NO el comentario (mutacion)' {
+    $ast = Get-LintAstFromText -Text @'
+# Remove-AppxPackage en un comentario no cuenta
+function Sin     { Remove-AppxPackage -Package x -ErrorAction Stop }
+function Global  { $global:ProgressPreference = 'SilentlyContinue'; Remove-AppxPackage -Package x }
+function Script  { $script:ProgressPreference = 'SilentlyContinue'; Add-AppxPackage -Path x }
+function Tarde   { Remove-AppxProvisionedPackage -Online -PackageName x; $ProgressPreference = 'SilentlyContinue' }
+function Anidada { function Inner { $ProgressPreference = 'SilentlyContinue' }; Remove-AppxPackage -Package x }
+function Bien    { $ProgressPreference = 'SilentlyContinue'; Appx\Remove-AppxPackage -Package x }
+'@
+    [object[]] $s = @(Find-LintAppxSites -Ast $ast -File 'modules\Fx.ps1')
+    if ($s.Count -ne 6) { throw ('esperaba 6 sitios (el comentario no cuenta); encontro {0}' -f $s.Count) }
+    [string] $bad = (@($s | Where-Object { -not $_.Ok } | ForEach-Object { $_.Function }) -join ',')
+    if ($bad -ne 'Sin,Global,Script,Tarde,Anidada') { throw ('hits={0}; esperaba Sin,Global,Script,Tarde,Anidada' -f $bad) }
+}
+
 Test-SmokeFunction 'LintAst' 'ningun desenrollado sin @() leido con .Count (E16, StrictMode)' {
     [object[]] $h = @($script:LintAstReport.UnrollHits)
     if ($h.Count -gt 0 -and $script:LintAstReport.UnrollEnforce) {
