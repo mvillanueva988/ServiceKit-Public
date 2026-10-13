@@ -4934,6 +4934,200 @@ Test-SmokeFunction 'VaultUpload' 'el [A][18][C] sigue cableado al deposito (no s
     if ($null -eq $llamada) { throw 'Invoke-ActionEncryption ya no llama a Invoke-VaultDepositOffer' }
 }
 
+# --- tools al dia: manifest + runtime .NET 8 de BCU + checker -----------------
+Test-SmokeFunction 'ToolsAlDia' 'manifest: sha256 solo en pinned; los 5 bumps pinneados llevan hash; "requires" conocido' {
+    [string] $manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\manifest.json'
+    $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($t in @($m.tools)) {
+        [string] $pol = if ($t.PSObject.Properties['updatePolicy']) { [string]$t.updatePolicy } else { 'latest' }
+        [string] $sha = if ($t.PSObject.Properties['sha256']) { [string]$t.sha256 } else { '' }
+        if ($pol -ne 'pinned' -and $sha -ne '') { throw ('{0}: sha256 en una entry {1} (un hash fijo rompe la descarga en la proxima version)' -f $t.name, $pol) }
+        if ($sha -ne '' -and $sha -notmatch '^[0-9a-f]{64}$') { throw ('{0}: sha256 mal formado' -f $t.name) }
+        if ($t.PSObject.Properties['requires'] -and @('dotnet-desktop-8') -notcontains [string]$t.requires) {
+            throw ('{0}: requires desconocido "{1}"' -f $t.name, $t.requires)
+        }
+    }
+    foreach ($n in @('bcu', 'bleachbit', 'presentmon', 'wiztree', 'cpuz')) {
+        $t = @($m.tools | Where-Object { $_.name -eq $n }) | Select-Object -First 1
+        if ($null -eq $t) { throw ('{0} no esta en el manifest' -f $n) }
+        if ([string]$t.sha256 -notmatch '^[0-9a-f]{64}$') { throw ('{0}: pinned sin sha256' -f $n) }
+    }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'manifest: bcu 6.3 net8 en la org nueva, con requires' {
+    [string] $manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\manifest.json'
+    $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $t = @($m.tools | Where-Object { $_.name -eq 'bcu' }) | Select-Object -First 1
+    if ([string]$t.url -notmatch '^https://github\.com/BCUninstaller/.*_net8\.0-windows.*\.zip$') { throw ('url inesperada: {0}' -f $t.url) }
+    if ([string]$t.checkUpdate -notmatch 'repos/BCUninstaller/') { throw ('checkUpdate en la org vieja: {0}' -f $t.checkUpdate) }
+    if ([string]$t.requires -ne 'dotnet-desktop-8') { throw 'bcu sin requires=dotnet-desktop-8' }
+    if ([string]$t.version -ne '6.3.0') { throw ('version {0}' -f $t.version) }
+}
+
+function New-ToolsAlDiaFixture {
+    param([string[]] $RuntimeVersions = @())
+    [string] $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-tad-' + [guid]::NewGuid().ToString('N'))
+    [string] $bin  = Join-Path $root 'bin'
+    [string] $dn   = Join-Path $root 'dotnet'
+    New-Item -ItemType Directory -Path (Join-Path $bin 'BCUninstaller') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $bin 'Plain') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $bin 'BCUninstaller\BCUninstaller.exe') -Value 'x'
+    Set-Content -LiteralPath (Join-Path $bin 'Plain\plain.exe') -Value 'x'
+    foreach ($v in $RuntimeVersions) {
+        New-Item -ItemType Directory -Path (Join-Path $dn ('shared\Microsoft.WindowsDesktop.App\' + $v)) -Force | Out-Null
+    }
+    return [PSCustomObject]@{
+        Root = $root; Bin = $bin; DotNet = $dn
+        Bcu   = [PSCustomObject]@{ name = 'bcu';   launchExe = 'BCUninstaller\BCUninstaller.exe'; requires = 'dotnet-desktop-8' }
+        Plain = [PSCustomObject]@{ name = 'plain'; launchExe = 'Plain\plain.exe' }
+    }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'deteccion .NET Desktop: 0, 1 y 2+ carpetas de version (y 9.x no vale para 8)' {
+    $f0 = New-ToolsAlDiaFixture
+    $f1 = New-ToolsAlDiaFixture -RuntimeVersions @('8.0.11')
+    $f2 = New-ToolsAlDiaFixture -RuntimeVersions @('8.0.11', '9.0.2')
+    $f9 = New-ToolsAlDiaFixture -RuntimeVersions @('9.0.2')
+    try {
+        if ((Get-DotNetDesktopRuntimeVersion -DotNetRoot $f0.DotNet).Count -ne 0) { throw '0 carpetas: esperaba 0' }
+        if ((Get-DotNetDesktopRuntimeVersion -DotNetRoot $f1.DotNet).Count -ne 1) { throw '1 carpeta: esperaba Count 1 (trampa @() de 1 elemento)' }
+        if ((Get-DotNetDesktopRuntimeVersion -DotNetRoot $f2.DotNet).Count -ne 2) { throw '2 carpetas: esperaba 2' }
+        if (Test-DotNetDesktopRuntime -Major 8 -DotNetRoot $f0.DotNet) { throw '0 carpetas: dijo que hay 8' }
+        if (-not (Test-DotNetDesktopRuntime -Major 8 -DotNetRoot $f1.DotNet)) { throw '1 carpeta 8.0.11: dijo que no hay 8' }
+        if (-not (Test-DotNetDesktopRuntime -Major 8 -DotNetRoot $f2.DotNet)) { throw '8+9: dijo que no hay 8' }
+        if (Test-DotNetDesktopRuntime -Major 8 -DotNetRoot $f9.DotNet) { throw 'solo 9.x: acepto como 8 (BCU no tiene rollForward)' }
+    } finally {
+        foreach ($f in @($f0, $f1, $f2, $f9)) { Remove-Item -LiteralPath $f.Root -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# Handler: Invoke-ToolLaunch es lo que corre la flecha-derecha del selector.
+# Se shadowean winget, Start-Process, Get-Command y Write-ActionAudit; NUNCA corre winget real.
+Test-SmokeFunction 'ToolsAlDia' 'lanzador: runtime presente -> no instala y abre' {
+    $fx = New-ToolsAlDiaFixture -RuntimeVersions @('8.0.11')
+    $script:wgCalls = 0; $script:spCalls = 0
+    function winget { $script:wgCalls++; $global:LASTEXITCODE = 0 }
+    function Start-Process { param($FilePath, $WorkingDirectory, $ArgumentList) $script:spCalls++ }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+    try {
+        $r = Invoke-ToolLaunch -Tool $fx.Bcu -BinDir $fx.Bin -DotNetRoot $fx.DotNet
+        if ($r -ne 'opened') { throw ('resultado {0}' -f $r) }
+        if ($script:wgCalls -ne 0) { throw 'instalo con el runtime ya presente' }
+        if ($script:spCalls -ne 1) { throw ('Start-Process x{0}' -f $script:spCalls) }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'lanzador: ausente + winget ok + re-deteccion ok -> instala con los flags y abre' {
+    $fx = New-ToolsAlDiaFixture
+    $script:wgArgs = @(); $script:spCalls = 0; $script:audit = @()
+    $script:dnRoot = $fx.DotNet
+    function winget {
+        $script:wgArgs = @($args)
+        New-Item -ItemType Directory -Path (Join-Path $script:dnRoot 'shared\Microsoft.WindowsDesktop.App\8.0.11') -Force | Out-Null
+        $global:LASTEXITCODE = 0
+    }
+    function Start-Process { param($FilePath, $WorkingDirectory, $ArgumentList) $script:spCalls++ }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:audit += ('{0}:{1}' -f $Action, $Status) }
+    try {
+        $r = Invoke-ToolLaunch -Tool $fx.Bcu -BinDir $fx.Bin -DotNetRoot $fx.DotNet
+        if ($r -ne 'opened') { throw ('resultado {0}' -f $r) }
+        [string] $a = $script:wgArgs -join ' '
+        foreach ($need in @('install', '--id Microsoft.DotNet.DesktopRuntime.8', '-e', '--silent', '--accept-package-agreements', '--accept-source-agreements')) {
+            if ($a -notmatch [regex]::Escape($need)) { throw ('a winget le falta "{0}": {1}' -f $need, $a) }
+        }
+        if ($script:spCalls -ne 1) { throw 'no abrio tras instalar' }
+        if ($script:audit -notcontains 'Tools.RuntimeInstall:Success') { throw 'sin audit Success' }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'lanzador: ausente + winget exit != 0 -> NO abre (aunque EAP=Stop)' {
+    $fx = New-ToolsAlDiaFixture
+    $script:spCalls = 0; $script:audit = @()
+    function winget { $global:LASTEXITCODE = 1603 }
+    function Start-Process { param($FilePath, $WorkingDirectory, $ArgumentList) $script:spCalls++ }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:audit += ('{0}:{1}' -f $Action, $Status) }
+    try {
+        $r = Invoke-ToolLaunch -Tool $fx.Bcu -BinDir $fx.Bin -DotNetRoot $fx.DotNet
+        if ($r -ne 'blocked') { throw ('resultado {0}' -f $r) }
+        if ($script:spCalls -ne 0) { throw 'abrio BCU sin runtime' }
+        if ($script:audit -notcontains 'Tools.RuntimeInstall:Failed') { throw 'sin audit Failed' }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'lanzador: winget "ok" pero el runtime no aparece -> NO abre (el exit code no alcanza)' {
+    $fx = New-ToolsAlDiaFixture
+    $script:spCalls = 0
+    function winget { $global:LASTEXITCODE = 0 }
+    function Start-Process { param($FilePath, $WorkingDirectory, $ArgumentList) $script:spCalls++ }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+    try {
+        $r = Invoke-ToolLaunch -Tool $fx.Bcu -BinDir $fx.Bin -DotNetRoot $fx.DotNet
+        if ($r -ne 'blocked' -or $script:spCalls -ne 0) { throw ('resultado {0}, Start-Process x{1}' -f $r, $script:spCalls) }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'lanzador: ausente sin winget -> NO abre' {
+    $fx = New-ToolsAlDiaFixture
+    $script:spCalls = 0; $script:wgCalls = 0
+    function Get-Command { param($Name, $ErrorAction) if ($Name -eq 'winget') { return $null }; Microsoft.PowerShell.Core\Get-Command @PSBoundParameters }
+    function winget { $script:wgCalls++ }
+    function Start-Process { param($FilePath, $WorkingDirectory, $ArgumentList) $script:spCalls++ }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+    try {
+        $r = Invoke-ToolLaunch -Tool $fx.Bcu -BinDir $fx.Bin -DotNetRoot $fx.DotNet
+        if ($r -ne 'blocked' -or $script:spCalls -ne 0 -or $script:wgCalls -ne 0) { throw ('resultado {0}, Start-Process x{1}, winget x{2}' -f $r, $script:spCalls, $script:wgCalls) }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'lanzador: tool SIN requires abre como siempre, sin tocar winget' {
+    $fx = New-ToolsAlDiaFixture
+    $script:spCalls = 0; $script:wgCalls = 0
+    function winget { $script:wgCalls++ }
+    function Start-Process { param($FilePath, $WorkingDirectory, $ArgumentList) $script:spCalls++ }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+    try {
+        $r = Invoke-ToolLaunch -Tool $fx.Plain -BinDir $fx.Bin -DotNetRoot $fx.DotNet
+        if ($r -ne 'opened' -or $script:spCalls -ne 1 -or $script:wgCalls -ne 0) { throw ('resultado {0}, Start-Process x{1}, winget x{2}' -f $r, $script:spCalls, $script:wgCalls) }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'el selector (flecha-derecha) abre por Invoke-ToolLaunch, y nadie mas lanza launchExe' {
+    [string] $root = Split-Path -Parent $PSScriptRoot
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'core\Router.ps1'), [ref]$null, [ref]$null)
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ToolsMenuInteractive' }, $true)
+    if ($null -eq $fn) { throw 'no encontre Invoke-ToolsMenuInteractive' }
+    $call = $fn.Find({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-ToolLaunch' }, $true)
+    if ($null -eq $call) { throw 'el selector ya no abre por Invoke-ToolLaunch: se saltea el chequeo de requires' }
+    [string[]] $otros = @()
+    foreach ($d in @('core', 'modules', 'utils')) {
+        foreach ($f in @(Get-ChildItem -Path (Join-Path $root $d) -Filter '*.ps1' -File)) {
+            if ($f.Name -eq 'Router.ps1') { continue }
+            if ((Get-Content -LiteralPath $f.FullName -Raw) -match 'launchExe') { $otros += $f.Name }
+        }
+    }
+    if ($otros.Count -gt 0) { throw ('otro archivo toca launchExe sin pasar por Invoke-ToolLaunch: {0}' -f ($otros -join ', ')) }
+}
+
+Test-SmokeFunction 'ToolsAlDia' 'checker: reconoce el asset net8.0 de BCU 6.3 (y no el .7z ni el pack de idioma)' {
+    [string] $chk = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\Check-ToolUpdates.ps1'
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($chk, [ref]$null, [ref]$null)
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq '_Get-GithubAssetVersion' }, $true)
+    if ($null -eq $fn) { throw 'no encontre _Get-GithubAssetVersion en Check-ToolUpdates.ps1' }
+    . ([scriptblock]::Create($fn.Extent.Text))
+    # nombres literales del release v6.3, con el .7z primero a proposito
+    [string[]] $v63 = @('BCUninstaller_6.3.0_portable.7z', 'BCUninstaller_6.3.0_setup.exe', 'Localisation_Pack_6.3.0.zip', 'BCUninstaller_6.3.0_net8.0-windows10.0.18362.0.zip')
+    $r = _Get-GithubAssetVersion -Assets $v63
+    if ($null -eq $r -or $r.Version -ne '6.3.0') { throw 'no saco 6.3.0 del release 6.3' }
+    if ($r.Asset -ne 'BCUninstaller_6.3.0_net8.0-windows10.0.18362.0.zip') { throw ('gano otro asset: {0}' -f $r.Asset) }
+    $r = _Get-GithubAssetVersion -Assets @('BCUninstaller_6.1.0.1_portable.zip')
+    if ($null -eq $r -or $r.Version -ne '6.1.0.1') { throw 'rompio el formato viejo _portable.zip (1 solo asset)' }
+    if ($null -ne (_Get-GithubAssetVersion -Assets @('PresentMon-2.6.0-x64.exe'))) { throw 'matcheo un asset de otro repo (PresentMon)' }
+    if ($null -ne (_Get-GithubAssetVersion -Assets @('BCUninstaller_6.3.0_portable.7z'))) { throw 'el .7z no debe ganar' }
+    $call = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq '_Get-GithubAssetVersion' }, $true)
+    if ($null -eq $call) { throw 'el checker ya no llama a _Get-GithubAssetVersion' }
+}
+
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'

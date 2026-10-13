@@ -922,6 +922,144 @@ function Get-ToolStatus {
     return [bool] (Test-Path (Join-Path $BinDir $Tool.filename) -PathType Leaf)
 }
 
+# ─── Requisitos de runtime de una tool (campo "requires" del manifest) ────────
+# Hoy: 'dotnet-desktop-8' (BCU 6.3 build net8.0). El runtimeconfig.json de BCU
+# declara Microsoft.WindowsDesktop.App 8.0.0 SIN rollForward => roll-forward
+# default (Minor): sirve cualquier 8.x, NO 9/10. Por eso se exige 8.*.
+function Get-DotNetDesktopRuntimeVersion {
+    <#
+    .SYNOPSIS
+        Versiones instaladas de Microsoft.WindowsDesktop.App (carpetas bajo
+        <DotNetRoot>\shared\Microsoft.WindowsDesktop.App\). Sin exe nativo.
+        -DotNetRoot es inyectable para fixtures. Siempre devuelve string[].
+    #>
+    [CmdletBinding()]
+    param([string] $DotNetRoot = (Join-Path $env:ProgramFiles 'dotnet'))
+
+    [string] $baseDir = Join-Path $DotNetRoot 'shared\Microsoft.WindowsDesktop.App'
+    [string[]] $versions = @()
+    if (Test-Path -LiteralPath $baseDir -PathType Container) {
+        foreach ($d in @(Get-ChildItem -LiteralPath $baseDir -Directory -ErrorAction SilentlyContinue)) {
+            if ($d.Name -match '^\d+\.\d+\.\d+') { $versions += $d.Name }
+        }
+    }
+    return , $versions
+}
+
+function Test-DotNetDesktopRuntime {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [int] $Major,
+        [string] $DotNetRoot = (Join-Path $env:ProgramFiles 'dotnet')
+    )
+    [string[]] $versions = Get-DotNetDesktopRuntimeVersion -DotNetRoot $DotNetRoot
+    foreach ($v in $versions) {
+        if ($v -match ('^{0}\.' -f $Major)) { return $true }
+    }
+    return $false
+}
+
+function Resolve-ToolRequirement {
+    <#
+    .SYNOPSIS
+        Garantiza el runtime que declara la tool en "requires" ANTES de abrirla.
+        Devuelve $true si se puede abrir. Si falta .NET 8 Desktop Runtime lo
+        instala con winget SIN preguntar (decision de Mateo 2026-10-13) y
+        re-detecta; si no hay winget o falla, NO abre y muestra el link.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $Tool,
+        [string] $DotNetRoot = (Join-Path $env:ProgramFiles 'dotnet')
+    )
+
+    [object] $reqProp = $Tool.PSObject.Properties['requires']
+    if ($null -eq $reqProp -or [string]::IsNullOrWhiteSpace([string]$reqProp.Value)) { return $true }
+    [string] $req = [string]$reqProp.Value
+
+    if ($req -ne 'dotnet-desktop-8') {
+        Write-PctkWarn ('  [!] {0}: requisito desconocido "{1}"; no se abre.' -f $Tool.name, $req)
+        return $false
+    }
+
+    if (Test-DotNetDesktopRuntime -Major 8 -DotNetRoot $DotNetRoot) { return $true }
+
+    [string] $dlUrl = 'https://dotnet.microsoft.com/download/dotnet/8.0'
+    Write-PctkWork ('  {0} necesita .NET 8 Desktop Runtime (no esta instalado). Instalando con winget...' -f $Tool.name)
+
+    [bool] $haveWinget = $null -ne (Get-Command -Name 'winget' -ErrorAction SilentlyContinue)
+    [bool] $installed  = $false
+    [string] $why      = ''
+    if (-not $haveWinget) {
+        $why = 'winget no disponible'
+    } else {
+        # Exe nativo bajo EAP=Stop: el stderr se vuelve NativeCommandError terminante.
+        # EAP local (auto-revierte al return) y se decide por $LASTEXITCODE.
+        $ErrorActionPreference = 'Continue'
+        $global:LASTEXITCODE = 0
+        try {
+            & winget install --id Microsoft.DotNet.DesktopRuntime.8 -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+        } catch { }
+        [int] $wingetExit = [int] $global:LASTEXITCODE
+        # El exit code de winget no alcanza: se re-detecta.
+        if (Test-DotNetDesktopRuntime -Major 8 -DotNetRoot $DotNetRoot) {
+            $installed = $true
+        } else {
+            $why = ('winget termino con codigo {0} y el runtime sigue sin aparecer' -f $wingetExit)
+        }
+    }
+
+    if ($installed) {
+        Write-PctkOk '  [OK] .NET 8 Desktop Runtime instalado.'
+        Write-ActionAudit -Action 'Tools.RuntimeInstall' -Status 'Success' -Summary ('{0}: dotnet-desktop-8 via winget' -f $Tool.name)
+        return $true
+    }
+
+    Write-PctkErr ('  [!] No se pudo instalar .NET 8 Desktop Runtime ({0}). {1} no se abre.' -f $why, $Tool.name)
+    Write-PctkHint ('      Instalarlo a mano (Desktop Runtime x64): {0}' -f $dlUrl)
+    Write-ActionAudit -Action 'Tools.RuntimeInstall' -Status 'Failed' -Summary ('{0}: {1}' -f $Tool.name, $why)
+    return $false
+}
+
+function Invoke-ToolLaunch {
+    <#
+    .SYNOPSIS
+        Abre una tool descargada de tools\bin (la flecha-derecha del selector).
+        Unico camino que lanza launchExe. Respeta el campo "requires" del manifest.
+        Devuelve 'opened' | 'blocked' (requisito no cumplido: NO se abrio) | 'missing'.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $Tool,
+        [Parameter(Mandatory)] [string]         $BinDir,
+        [string] $DotNetRoot = (Join-Path $env:ProgramFiles 'dotnet')
+    )
+
+    [string] $exeRel = if ($Tool.PSObject.Properties['launchExe'] -and -not [string]::IsNullOrWhiteSpace([string]$Tool.launchExe)) { [string]$Tool.launchExe }
+                       elseif ($Tool.PSObject.Properties['filename']) { [string]$Tool.filename }
+                       else { '' }
+    if ($exeRel -eq '') { return 'missing' }
+    [string] $exePath = Join-Path $BinDir $exeRel
+    if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) { return 'missing' }
+
+    if (-not (Resolve-ToolRequirement -Tool $Tool -DotNetRoot $DotNetRoot)) { return 'blocked' }
+
+    [string] $ext     = ([System.IO.Path]::GetExtension($exePath)).ToLowerInvariant()
+    [string] $workDir = Split-Path -Parent $exePath
+    try {
+        if ($ext -eq '.ps1') {
+            # un .ps1 se EJECUTA con powershell (Start-Process directo lo abriria en el editor)
+            Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $exePath) -WorkingDirectory $workDir
+        } else {
+            Start-Process -FilePath $exePath -WorkingDirectory $workDir
+        }
+    } catch {}
+    return 'opened'
+}
+
 # ─── Tools menu (selector interactivo D-TS1) ──────────────────────────────────
 function Invoke-ToolsMenuInteractive {
     <#
@@ -975,24 +1113,8 @@ function Invoke-ToolsMenuInteractive {
                 if ($oi -ge 0 -and $oi -lt $Tools.Count) {
                     $ot = $Tools[$oi]
                     if (Get-ToolStatus -Tool $ot -BinDir $BinDir) {
-                        [string] $exeRel = if ($ot.PSObject.Properties['launchExe'] -and -not [string]::IsNullOrWhiteSpace([string]$ot.launchExe)) { [string]$ot.launchExe }
-                                           elseif ($ot.PSObject.Properties['filename']) { [string]$ot.filename }
-                                           else { '' }
-                        if ($exeRel -ne '') {
-                            [string] $exePath = Join-Path $BinDir $exeRel
-                            if (Test-Path -LiteralPath $exePath -PathType Leaf) {
-                                [string] $ext     = ([System.IO.Path]::GetExtension($exePath)).ToLowerInvariant()
-                                [string] $workDir = Split-Path -Parent $exePath
-                                try {
-                                    if ($ext -eq '.ps1') {
-                                        # un .ps1 se EJECUTA con powershell (Start-Process directo lo abriria en el editor)
-                                        Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $exePath) -WorkingDirectory $workDir
-                                    } else {
-                                        Start-Process -FilePath $exePath -WorkingDirectory $workDir
-                                    }
-                                } catch {}
-                            }
-                        }
+                        [string] $launch = Invoke-ToolLaunch -Tool $ot -BinDir $BinDir
+                        if ($launch -eq 'blocked') { Read-Host '  [Enter] para continuar' | Out-Null }
                     }
                 }
                 continue
