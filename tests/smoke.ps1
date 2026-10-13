@@ -13,11 +13,23 @@
 .EXAMPLE
     .\tests\smoke.ps1                # corre todos
     .\tests\smoke.ps1 -Module Network # solo un módulo
+    .\tests\smoke.ps1 -ResultPath "$env:TEMP\smoke.txt"   # + resumen a archivo
+
+.NOTES
+    Corrida canonica = HEADLESS (stdin y stdout redirigidos), desde Bash:
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/smoke.ps1 < /dev/null
+    En una consola interactiva los tests marcados -RequiresHeadless salen SKIP
+    (no FAIL falso) y el resumen lo dice. -ForceInteractive simula esa consola
+    (stdin no redirigido + VT on) para probar el mecanismo sin una consola real.
 #>
 
 [CmdletBinding()]
 param(
-    [string] $Module = ''
+    [string] $Module = '',
+    # Escribe el resumen (entorno + conteos + FAIL/SKIP) a este archivo, ademas de la consola.
+    [string] $ResultPath = '',
+    # SOLO para probar el smoke: simula consola interactiva aunque stdin/stdout esten redirigidos.
+    [switch] $ForceInteractive
 )
 
 Set-StrictMode -Version Latest
@@ -46,6 +58,28 @@ foreach ($folder in @($utilsDir, $coreDir, $modulesDir)) {
 
 [System.Collections.Generic.List[PSCustomObject]] $results =
     [System.Collections.Generic.List[PSCustomObject]]::new()
+
+# ─── Entorno de la corrida: headless vs consola interactiva ───────────────────
+# Se decide UNA vez, aca, y lo leen Test-SmokeFunction (-RequiresHeadless) y el
+# resumen. Se mide con [Console] directo y NO con Test-PctkInteractiveConsole /
+# Enable-PctkVT: esas son codigo bajo prueba, y si el gate del SKIP dependiera de
+# ellas, una regresion que las hiciera devolver $true se esconderia como SKIP.
+# Headless = stdin Y stdout redirigidos (la corrida canonica desde Bash con
+# '< /dev/null'). Con cualquiera de los dos en consola, Test-PctkInteractiveConsole
+# o Enable-PctkVT pueden dar distinto y los tests que asumen headless no aplican.
+[bool] $script:SmokeInputRedirected  = $true
+[bool] $script:SmokeOutputRedirected = $true
+try { $script:SmokeInputRedirected  = [Console]::IsInputRedirected }  catch { }
+try { $script:SmokeOutputRedirected = [Console]::IsOutputRedirected } catch { }
+[bool] $script:SmokeHeadless = $script:SmokeInputRedirected -and $script:SmokeOutputRedirected
+if ($ForceInteractive) {
+    # Simula la consola de Mateo: lo que ahi cambia para el codigo bajo prueba es
+    # que Test-PctkInteractiveConsole da $true y Enable-PctkVT prende el VT. Se
+    # sombrean SOLO esas dos; el resto del producto corre igual que headless.
+    $script:SmokeHeadless = $false
+    function Test-PctkInteractiveConsole { [OutputType([bool])] param() return $true }
+    function Enable-PctkVT { [OutputType([bool])] param() $script:PctkVT = $true; return $true }
+}
 
 # ─── Static check: BOM regression detector ────────────────────────────────────
 # Cuando un .ps1 tiene bytes no-ASCII (em-dash, tildes en string literals) y
@@ -77,10 +111,27 @@ function Test-SmokeFunction {
     param(
         [string] $ModuleName,
         [string] $FunctionName,
-        [scriptblock] $Invocation
+        [scriptblock] $Invocation,
+        # El test asume la corrida headless (stdin/stdout redirigidos). Fuera de
+        # ella se registra SKIP con -SkipReason en vez de dar un FAIL falso.
+        [switch] $RequiresHeadless,
+        [string] $SkipReason = 'asume corrida headless (stdin/stdout redirigidos)'
     )
 
     if (-not [string]::IsNullOrWhiteSpace($script:Module) -and $ModuleName -ne $script:Module) {
+        return
+    }
+
+    if ($RequiresHeadless -and -not $script:SmokeHeadless) {
+        # SKIP no es OK ni FAIL. Un SKIP en corrida headless es un bug del smoke:
+        # lo caza el guard del resumen, que no depende de esta condicion.
+        $script:results.Add([PSCustomObject]@{
+            Module     = $ModuleName
+            Function   = $FunctionName
+            Status     = 'SKIP'
+            DurationMs = 0
+            Error      = $SkipReason
+        })
         return
     }
 
@@ -2289,7 +2340,7 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMultiChoice + Test-PctkInteractiveCon
         if ($null -eq (Get-Command $fn -CommandType Function -ErrorAction SilentlyContinue)) { throw "$fn no encontrado" }
     }
 }
-Test-SmokeFunction 'ConsoleMenu' 'Test-PctkInteractiveConsole: bool + false bajo input redirigido (smoke)' {
+Test-SmokeFunction 'ConsoleMenu' 'Test-PctkInteractiveConsole: bool + false bajo input redirigido (smoke)' -RequiresHeadless -SkipReason 'espera $false, y en consola real Test-PctkInteractiveConsole da $true (stdin no redirigido)' {
     $r = Test-PctkInteractiveConsole
     if ($r -isnot [bool]) { throw 'no devolvio bool' }
     if ($r -ne $false) { throw "esperado false bajo input redirigido; got $r" }
@@ -2577,6 +2628,8 @@ Test-SmokeFunction 'StaticCheck' '#26-B: los handlers de accion no volvieron a R
 # En smoke el output esta redirigido -> Enable-PctkVT da false y todo cae al
 # render 16-color/texto. Estos tests verifican el contrato del FALLBACK: presencia,
 # no-throw, devuelve bool, y que los Get-* NO emiten ANSI crudo con VT off.
+# En consola interactiva el primer test PRENDE el VT ($script:PctkVT queda $true
+# el resto de la corrida), asi que el de 'Get-* ... con VT off' no aplica: SKIP.
 Test-SmokeFunction 'ConsoleTheme' 'Enable-PctkVT presente + devuelve bool + no-throw' {
     if ($null -eq (Get-Command 'Enable-PctkVT' -CommandType Function -ErrorAction SilentlyContinue)) {
         throw 'Enable-PctkVT no encontrado'
@@ -2607,7 +2660,7 @@ Test-SmokeFunction 'ConsoleTheme' 'helpers de output no-throw con VT off' {
         Write-PctkDivider 20
     } *> $null
 }
-Test-SmokeFunction 'ConsoleTheme' 'Get-* no emiten ANSI crudo con VT off' {
+Test-SmokeFunction 'ConsoleTheme' 'Get-* no emiten ANSI crudo con VT off' -RequiresHeadless -SkipReason 'asume VT off, y en consola real Enable-PctkVT (test anterior) lo deja prendido' {
     [char] $esc = [char]27
     [string] $b = Get-PctkBadge 'OK' 'ok'
     if ($b.IndexOf($esc) -ge 0) { throw 'Get-PctkBadge emitio ESC con VT off' }
@@ -5134,23 +5187,72 @@ Write-Host '──────────────────────�
 Write-Host '  SMOKE TEST RESULTS'
 Write-Host '────────────────────────────────────────────────────────────────────'
 
+[int] $skipCount = @($results | Where-Object { $_.Status -eq 'SKIP' }).Count
+
+# Guard: en headless TODO test corre. Un SKIP aca es un bug del mecanismo (una
+# condicion de skip rota, o un test que se saltea solo) y vuelve rojo el smoke.
+# No depende de la condicion de Test-SmokeFunction: cuenta lo que quedo registrado.
+if ($script:SmokeHeadless -and $skipCount -gt 0) {
+    $results.Add([PSCustomObject]@{
+        Module     = 'SmokeHarness'
+        Function   = 'corrida headless sin SKIP'
+        Status     = 'FAIL'
+        DurationMs = 0
+        Error      = ('{0} test(s) en SKIP en una corrida headless: el mecanismo de skip esta roto' -f $skipCount)
+    })
+}
+
 $results | Format-Table -AutoSize -Property Module, Function, Status, DurationMs
 
 [int] $failCount = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
 [int] $okCount   = @($results | Where-Object { $_.Status -eq 'OK' }).Count
 
-Write-Host ''
-Write-Host ('  OK: {0}  FAIL: {1}' -f $okCount, $failCount) -ForegroundColor $(
-    if ($failCount -gt 0) { 'Red' } else { 'Green' }
-)
-
-if ($failCount -gt 0) {
-    Write-Host ''
-    Write-Host '  Errores:' -ForegroundColor Red
-    $results | Where-Object { $_.Status -eq 'FAIL' } | ForEach-Object {
-        Write-Host ('    [{0}::{1}] {2}' -f $_.Module, $_.Function, $_.Error) -ForegroundColor Red
+# El resumen va a consola y, con -ResultPath, a archivo. SKIP se muestra SIEMPRE
+# (tambien en 0): 'SKIP: 0' es la evidencia de que la corrida fue headless
+# completa, y la linea tiene la misma forma en todo entorno (grepeable).
+[string] $headlessCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/smoke.ps1 < /dev/null   (desde Bash)'
+[System.Collections.Generic.List[string]] $summary = [System.Collections.Generic.List[string]]::new()
+[void] $summary.Add(('  Entorno: {0} (stdin redirigido={1}, stdout redirigido={2}{3})' -f
+    $(if ($script:SmokeHeadless) { 'headless' } else { 'consola interactiva' }),
+    $script:SmokeInputRedirected, $script:SmokeOutputRedirected,
+    $(if ($ForceInteractive) { ', simulada con -ForceInteractive' } else { '' })))
+[void] $summary.Add(('  OK: {0}  FAIL: {1}  SKIP: {2}' -f $okCount, $failCount, $skipCount))
+if ($skipCount -gt 0) {
+    [void] $summary.Add('')
+    if (-not $script:SmokeHeadless) {
+        [void] $summary.Add(('  La corrida NO fue headless: {0} test(s) que asumen stdin/stdout redirigidos quedaron en SKIP.' -f $skipCount))
+        [void] $summary.Add(('  Corrida canonica (todos corren): {0}' -f $headlessCmd))
     }
-    exit 1
+    [void] $summary.Add('  Salteados:')
+    foreach ($s in @($results | Where-Object { $_.Status -eq 'SKIP' })) {
+        [void] $summary.Add(('    [{0}::{1}] {2}' -f $s.Module, $s.Function, $s.Error))
+    }
 }
+if ($failCount -gt 0) {
+    [void] $summary.Add('')
+    [void] $summary.Add('  Errores:')
+    foreach ($f in @($results | Where-Object { $_.Status -eq 'FAIL' })) {
+        [void] $summary.Add(('    [{0}::{1}] {2}' -f $f.Module, $f.Function, $f.Error))
+    }
+}
+
+Write-Host ''
+[string] $summaryColor = if ($failCount -gt 0) { 'Red' } elseif ($skipCount -gt 0) { 'Yellow' } else { 'Green' }
+foreach ($line in $summary) { Write-Host $line -ForegroundColor $summaryColor }
+
+if (-not [string]::IsNullOrWhiteSpace($ResultPath)) {
+    try {
+        [string[]] $fileLines = @(('PCTk smoke {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))) + @($summary)
+        # .NET resuelve rutas relativas contra el cwd del PROCESO, no el de PS.
+        [string] $resultFull = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ResultPath)
+        [System.IO.File]::WriteAllLines($resultFull, $fileLines, (New-Object System.Text.UTF8Encoding($true)))
+        Write-Host ('  Resumen escrito en {0}' -f $resultFull) -ForegroundColor DarkGray
+    } catch {
+        Write-Host ('  No se pudo escribir el resumen en {0}: {1}' -f $ResultPath, $_.Exception.Message) -ForegroundColor Red
+        exit 1
+    }
+}
+
+if ($failCount -gt 0) { exit 1 }
 
 exit 0
