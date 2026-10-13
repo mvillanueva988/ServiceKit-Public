@@ -35,7 +35,8 @@ if (-not (Test-Path $binDir)) {
 }
 
 # Filtrar por -ToolName si se especifico
-[object[]] $toolsToProcess = if (-not [string]::IsNullOrWhiteSpace($ToolName)) {
+# @(if ...): un if-expresion desenrolla (0 elementos -> $null aun con [object[]]).
+[object[]] $toolsToProcess = @(if (-not [string]::IsNullOrWhiteSpace($ToolName)) {
     $filtered = @($manifest.tools | Where-Object { $_.name -eq $ToolName })
     if ($filtered.Count -eq 0) {
         Write-Error "Herramienta '$ToolName' no encontrada en manifest.json"
@@ -43,8 +44,8 @@ if (-not (Test-Path $binDir)) {
     }
     $filtered
 } else {
-    @($manifest.tools)
-}
+    $manifest.tools
+})
 
 # ─── Descarga con barra de progreso ──────────────────────────────────────────
 function Invoke-ToolDownload {
@@ -97,6 +98,55 @@ function Invoke-ToolDownload {
         $netStream.Dispose()
         $response.Dispose()
         Write-Progress -Activity "Descargando $DisplayName" -Completed
+    }
+}
+
+function Expand-ToolZip {
+    <#
+    .SYNOPSIS
+        Extrae un ZIP con System.IO.Compression, pisando lo que ya exista.
+    .DESCRIPTION
+        NO usar Expand-Archive: vive en el modulo Microsoft.PowerShell.Archive,
+        que puede no cargar en un Windows degradado o en la Sandbox (E21, #80:
+        el [T] revento asi en el gate v2.10.0). ZipFile.ExtractToDirectory de
+        .NET Framework tampoco sirve: NO pisa archivos existentes. Se itera
+        entrada por entrada con ExtractToFile(..., overwrite=$true), que es la
+        semantica de Expand-Archive -Force. Rechaza entradas que escapan del
+        destino (zip-slip), igual que Expand-Archive.
+        Gemela de Expand-PctkZip en Launch.ps1 (el one-liner tiene que ser
+        autocontenido: no puede dot-sourcear esta).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $DestinationPath
+    )
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+
+    [string] $zipFull  = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    [string] $destRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DestinationPath)
+    $destRoot = [System.IO.Path]::GetFullPath($destRoot).TrimEnd('\') + '\'
+    [void] [System.IO.Directory]::CreateDirectory($destRoot)
+
+    [System.IO.Compression.ZipArchive] $zip = [System.IO.Compression.ZipFile]::OpenRead($zipFull)
+    try {
+        foreach ($entry in $zip.Entries) {
+            [string] $target = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($destRoot, $entry.FullName))
+            if (-not $target.StartsWith($destRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw ("Entrada del ZIP fuera del destino: {0}" -f $entry.FullName)
+            }
+            if ($entry.FullName.EndsWith('/') -or $entry.FullName.EndsWith('\')) {
+                [void] [System.IO.Directory]::CreateDirectory($target)
+                continue
+            }
+            [void] [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target))
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        }
+    }
+    finally {
+        $zip.Dispose()
     }
 }
 
@@ -342,7 +392,7 @@ foreach ($tool in $toolsToProcess) {
             }
 
             if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
-            Expand-Archive -Path $destFile -DestinationPath $extractDir -Force
+            Expand-ToolZip -Path $destFile -DestinationPath $extractDir
             Remove-Item $destFile -Force   # limpiar el zip
             Write-Host ("  [v] {0}: extraido en {1}" -f $tool.name, $extractDir) -ForegroundColor Green
         }

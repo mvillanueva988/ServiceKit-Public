@@ -46,6 +46,48 @@ function Get-ExpectedSha256FromFile {
     return ''
 }
 
+function Expand-PctkZip {
+    # Extrae con System.IO.Compression, NO con Expand-Archive: el modulo
+    # Microsoft.PowerShell.Archive puede no cargar en un Windows degradado o en
+    # la Sandbox (E21, #80). ZipFile.ExtractToDirectory de .NET Framework NO pisa
+    # archivos: se itera por entrada con overwrite (= Expand-Archive -Force) y se
+    # rechaza toda entrada que escape del destino (zip-slip).
+    # Gemela de Expand-ToolZip en Bootstrap-Tools.ps1: este archivo se sirve raw
+    # desde GitHub y tiene que ser autocontenido.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $DestinationPath
+    )
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+
+    [string] $zipFull  = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    [string] $destRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DestinationPath)
+    $destRoot = [System.IO.Path]::GetFullPath($destRoot).TrimEnd('\') + '\'
+    [void] [System.IO.Directory]::CreateDirectory($destRoot)
+
+    [System.IO.Compression.ZipArchive] $zip = [System.IO.Compression.ZipFile]::OpenRead($zipFull)
+    try {
+        foreach ($entry in $zip.Entries) {
+            [string] $target = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($destRoot, $entry.FullName))
+            if (-not $target.StartsWith($destRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw ('Entrada del ZIP fuera del destino: {0}' -f $entry.FullName)
+            }
+            if ($entry.FullName.EndsWith('/') -or $entry.FullName.EndsWith('\')) {
+                [void] [System.IO.Directory]::CreateDirectory($target)
+                continue
+            }
+            [void] [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target))
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+}
+
 function Invoke-ToolkitMain {
     [CmdletBinding()]
     param(
@@ -169,7 +211,7 @@ function Invoke-Launch {
         }
         Remove-Item $InstallPath -Recurse -Force
     }
-    Expand-Archive -Path $zipDest -DestinationPath $InstallPath -Force
+    Expand-PctkZip -Path $zipDest -DestinationPath $InstallPath
     Remove-Item $zipDest -Force
 
     # ── Restaurar tools\bin\ ──────────────────────────────────────────────────
