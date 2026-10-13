@@ -232,11 +232,66 @@ Test-SmokeFunction 'JobClosure' 'red encontro los sitios de job (piso 14)' {
     [int] $n = @($script:JobClosureReport.Sites).Count
     if ($n -lt 14) { throw ("esperaba >=14 sitios de job serializado; encontro {0} (AST/regex roto?)" -f $n) }
 }
+Test-SmokeFunction 'JobClosure' 'red encontro el job inline de telemetria con su modulo resuelto (P2b)' {
+    # Sin esto, si el patron de Start-TelemetryJob cambia, el sitio inline desaparece
+    # o queda Dynamic y el chequeo de $script: deja de mirar ahi SIN ponerse rojo.
+    [object[]] $inl = @($script:JobClosureReport.Sites | Where-Object { $_.Kind -eq 'Inline+dot' -and -not $_.Dynamic })
+    if ($inl.Count -lt 1) { throw 'ningun sitio Inline+dot resuelto (Start-TelemetryJob): el chequeo de $script: no ve el job de telemetria' }
+}
 foreach ($__site in @($script:JobClosureReport.Sites)) {
     Test-SmokeFunction 'JobClosure' ('{0} [{1}:{2}]' -f $__site.Enclosing, $__site.File, $__site.Line) {
         if (@($__site.Missing).Count -gt 0) {
             throw ('cierre INCOMPLETO: faltan en el job -> {0}' -f (@($__site.Missing) -join ', '))
         }
+        # P2b (E15): $script: leido dentro del job y no asignado en el job -> $null /
+        # VariableIsUndefined en el runspace del job. Pasar el valor como parametro.
+        if (@($__site.ScriptVars).Count -gt 0) {
+            throw ('$script: sin resolver dentro del job -> {0}' -f (@($__site.ScriptVars) -join '; '))
+        }
+    }
+}
+Test-SmokeFunction 'JobClosure' 'la red de $script: tiene diente: fixture con un sitio here-string y uno inline+dot (P2b)' {
+    # Repo sintetico: lo que DEBE marcar y lo que NO (asignado a nivel archivo del modulo
+    # dot-sourceado, asignado en el job, o expandido en build time sin escapar).
+    $fxRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-jc-' + [guid]::NewGuid().ToString('N'))
+    try {
+        [void](New-Item -ItemType Directory -Path (Join-Path $fxRoot 'modules') -Force)
+        $fx = @'
+$script:FxPath = $PSCommandPath
+$script:FxOk = 'a'
+function Get-FxHelper { "$script:FxOk $script:FxMissing" }
+function Get-FxEntry { Get-FxHelper }
+function Start-FxJob {
+    [string] $m = $script:FxPath
+    Invoke-AsyncToolkitJob -ScriptBlock { param($p) . $p; Get-FxEntry } -ArgumentList @($m)
+}
+function Get-FxEmb { $script:FxEmbVar; $script:FxSet = 1; $script:FxSet }
+function Start-FxHere {
+    $b = ${function:Get-FxEmb}.ToString()
+    [scriptblock]::Create(@"
+function Get-FxEmb {
+$b
+}
+`$script:FxSkel
+`$script:FxSkelOk = 1
+`$script:FxSkelOk
+$script:FxBuild
+Get-FxEmb
+"@)
+}
+'@
+        [System.IO.File]::WriteAllText((Join-Path $fxRoot 'modules\Fx.ps1'), $fx)
+        $r = Get-JobClosureReport -RepoRoot $fxRoot
+        $inl = @($r.Sites | Where-Object { $_.Enclosing -eq 'Start-FxJob' })
+        $her = @($r.Sites | Where-Object { $_.Enclosing -eq 'Start-FxHere' })
+        if ($inl.Count -ne 1 -or $inl[0].Kind -ne 'Inline+dot') { throw ('sitio inline no detectado/resuelto: {0}' -f (@($r.Sites | ForEach-Object { $_.Enclosing + ':' + $_.Kind }) -join ', ')) }
+        if ($her.Count -ne 1) { throw 'sitio here-string no detectado' }
+        [string] $gotInl = (@($inl[0].ScriptVars) | Sort-Object) -join '; '
+        [string] $gotHer = (@($her[0].ScriptVars) | Sort-Object) -join '; '
+        if ($gotInl -ne 'Get-FxHelper -> $script:FxMissing') { throw ('inline: esperaba solo FxMissing; dio [{0}]' -f $gotInl) }
+        if ($gotHer -ne '<job> -> $script:FxSkel; Get-FxEmb -> $script:FxEmbVar') { throw ('here-string: esperaba FxSkel + FxEmbVar; dio [{0}]' -f $gotHer) }
+    } finally {
+        Remove-Item -LiteralPath $fxRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
