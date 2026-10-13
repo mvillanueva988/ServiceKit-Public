@@ -1001,6 +1001,76 @@ Test-SmokeFunction 'Router' 'handler [12] CoreIsolation routing + abort-seguro' 
     function Read-Host { '' }
     Invoke-ActionCoreIsolation -MachineProfile (Get-MachineProfile) | Out-Null
 }
+# #27(a): [A][12] [D] avisa de anti-cheat kernel ANTES de apagar HVCI y pide S/N
+# (default N). Corre el HANDLER (no CoreIsolation) con el input en cola; Confirm-Action
+# e Invoke-EncryptionGate van reales (el input llega por el Read-Host sombreado), y se
+# sombrean el estado, la mutacion (Disable-Hvci/Enable-Hvci cuentan llamadas), el
+# cifrado (sin cifrar), la auditoria y los renderers.
+# Las colas traen respuestas DE MAS para los prompts viejos (VBS + Confirm-Action):
+# si el handler no pregunta en el aviso, 'D','N','S','S' corre un lugar y llega a
+# Disable-Hvci, asi el test se rompe por el assert de la mutacion y no solo por el
+# texto. (Con 'D','N','N','S' el sobrante cancelaba en Confirm-Action y la mutacion
+# "sin confirmacion" pasaba el caso N: medido.)
+function Invoke-HvciAntiCheatHarness {
+    param([string[]] $Answers)
+    $script:HvAns    = [System.Collections.Generic.Queue[string]]::new()
+    foreach ($a in $Answers) { $script:HvAns.Enqueue($a) }
+    $script:HvOut    = [System.Collections.Generic.List[string]]::new()
+    $script:HvWarn   = [System.Collections.Generic.List[string]]::new()
+    $script:HvDisable = 0
+    $script:HvEnable  = 0
+    function Read-Host {
+        param([object] $Prompt)
+        $script:HvOut.Add(('prompt:{0}' -f $Prompt))
+        if ($script:HvAns.Count -eq 0) { throw ('Read-Host sin respuesta en cola: {0}' -f $Prompt) }
+        return $script:HvAns.Dequeue()
+    }
+    function Get-CoreIsolationStatus {
+        [PSCustomObject]@{ VbsConfigured = $true; VbsRunning = $true; HvciConfigured = $true; HvciRunning = $true; HypervisorPresent = $true }
+    }
+    function Disable-Hvci { param([switch] $DisableVbsToo) $script:HvDisable++; [PSCustomObject]@{ Success = $true; Applied = @('x'); Errors = @(); Reason = '' } }
+    function Enable-Hvci  { $script:HvEnable++;  [PSCustomObject]@{ Success = $true; Applied = @('x'); Errors = @(); Reason = '' } }
+    function Get-DiskEncryptionStatus { param($DriveLetter) [PSCustomObject]@{ IsEncrypted = $false } }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+    function Show-OrphanModuleResult { param($Action, $Result) }
+    function Write-Host { $script:HvOut.Add(($args -join ' ')) }
+    function Write-PctkLine { param([AllowEmptyString()][string] $Text, $Kind) $script:HvOut.Add($Text) }
+    function Write-PctkWarn { param([AllowEmptyString()][string] $Text) $script:HvOut.Add($Text); $script:HvWarn.Add($Text) }
+    function Write-PctkHint { param([AllowEmptyString()][string] $Text) $script:HvOut.Add($Text); $script:HvWarn.Add($Text) }
+    function Write-PctkWork { param([AllowEmptyString()][string] $Text) $script:HvOut.Add($Text) }
+    function Write-PctkSection { param([AllowEmptyString()][string] $Text) $script:HvOut.Add($Text) }
+    function Write-PctkOk { param([AllowEmptyString()][string] $Text) $script:HvOut.Add($Text) }
+    Invoke-ActionCoreIsolation -MachineProfile ([PSCustomObject]@{}) | Out-Null
+    return [PSCustomObject]@{
+        Text    = ($script:HvOut -join "`n")
+        Avisos  = @($script:HvWarn)
+        Disable = $script:HvDisable
+        Enable  = $script:HvEnable
+    }
+}
+Test-SmokeFunction 'Router' 'handler [12] [D]+N: avisa anti-cheat y NO deshabilita HVCI (#27a)' {
+    $r = Invoke-HvciAntiCheatHarness -Answers @('D', 'N', 'S', 'S')
+    if ($r.Text -notmatch 'anti-cheat') { throw ('falta el aviso anti-cheat en la salida: ' + $r.Text) }
+    if ($r.Disable -ne 0) { throw ('con N se llamo Disable-Hvci {0} vez/veces' -f $r.Disable) }
+    if ($r.Enable -ne 0) { throw 'con N se llamo Enable-Hvci' }
+}
+Test-SmokeFunction 'Router' 'handler [12] [D]+Enter vacio: default N, NO deshabilita HVCI (#27a)' {
+    $r = Invoke-HvciAntiCheatHarness -Answers @('D', '', 'S', 'S')
+    if ($r.Text -notmatch 'anti-cheat') { throw 'falta el aviso anti-cheat en la salida' }
+    if ($r.Disable -ne 0) { throw ('Enter vacio deshabilito HVCI ({0} llamadas): el default tiene que ser N' -f $r.Disable) }
+}
+Test-SmokeFunction 'Router' 'handler [12] [D]+S: avisa y deshabilita HVCI exactamente 1 vez (#27a)' {
+    $r = Invoke-HvciAntiCheatHarness -Answers @('D', 'S', 'N', 'S')
+    if ($r.Text -notmatch 'anti-cheat') { throw 'falta el aviso anti-cheat en la salida' }
+    if ($r.Disable -ne 1) { throw ('con S Disable-Hvci se llamo {0} vez/veces (esperado 1)' -f $r.Disable) }
+    if ($r.Enable -ne 0) { throw 'con S se llamo Enable-Hvci' }
+    # Paleta CP850: el aviso es ASCII puro (nada de flechas, bullets ni guion largo).
+    foreach ($l in $r.Avisos) {
+        foreach ($ch in $l.ToCharArray()) {
+            if ([int] $ch -gt 127) { throw ('aviso con caracter no-ASCII U+{0:X4}: {1}' -f [int] $ch, $l) }
+        }
+    }
+}
 Test-SmokeFunction 'Router' 'handler [13] HAGS routing + abort-seguro' {
     $ErrorActionPreference = 'Stop'
     $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
