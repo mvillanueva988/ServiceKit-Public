@@ -2,6 +2,31 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.10.0] - 2026-10-13
+
+Release: **las herramientas que descarga PCTk, al día**. Cinco tools del manifest suben de versión con su hash verificado, y Bulk Crap Uninstaller pasa a la edición que necesita .NET 8: si la PC no lo tiene, PCTk lo instala antes de abrirlo.
+
+Va como *minor* porque el manifest suma un campo (`requires`) y el selector de tools un paso nuevo.
+
+### Added
+
+- **Requisitos de runtime por tool (`tools/manifest.json`, `core/Router.ps1`)**: una entrada del manifest puede declarar `requires`. El primer caso es BCU 6.3, que viene en edición `net8.0`: al abrirlo desde el selector, si falta el .NET 8 Desktop Runtime, PCTk lo instala con winget sin preguntar y recién después lo abre. Si no puede (sin winget, sin red), no lo abre: muestra el link de descarga del runtime y espera un `[Enter]` para que el aviso no se borre.
+
+### Changed
+
+- **Versiones de tools (`tools/manifest.json`)**, todas con SHA-256 recalculado sobre el archivo descargado:
+  - Bulk Crap Uninstaller 6.1.0.1 → **6.3.0** (el proyecto se mudó de organización en GitHub; el zip baja de ~77 MB a ~12 MB).
+  - BleachBit 6.0.0 → **6.0.4**.
+  - PresentMon 2.4.1 → **2.6.0**.
+  - WizTree 4.31 → **4.33**.
+  - CPU-Z 2.20 → **3.01**.
+  - O&O ShutUp10: corregido el tamaño aproximado de descarga (sigue sin versión fija).
+- **El chequeo de actualizaciones de tools reconoce el asset `net8.0` de BCU (`tools/Check-ToolUpdates.ps1`)**: con el nombre nuevo del archivo, lo daba como no encontrado.
+
+### Fixed
+
+- **BleachBit no abría desde el selector (`tools/manifest.json`)**: desde la 6.0.0 el zip trae una carpeta `BleachBit-Portable\` adentro y el manifest apuntaba al ejecutable en el lugar viejo. Ahora apunta al correcto.
+
 ## [2.9.0] - 2026-10-13
 
 Release: **el toolkit deja de cerrarse en la cara del cliente**. Un error en cualquier opción del menú cerraba PCTk entero sin dejar leer el error; ahora la acción se cancela, el detalle queda en pantalla y en el audit, y el menú sigue. Suma además el ajuste de energía para laptops gaming, el desinstalador que resuelve los casos que antes quedaban a mano, y el menú que entra en Windows Terminal.
