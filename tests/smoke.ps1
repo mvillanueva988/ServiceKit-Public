@@ -1608,13 +1608,189 @@ Test-SmokeFunction 'ExportClientLogs' 'export-only-audit: 1 subdir (PS5.1 array)
     }
 }
 
-Test-SmokeFunction 'ExportClientLogs' 'bundle usa .NET, NO Compress-Archive (modulo Archive puede faltar en cliente/Sandbox)' {
-    [string] $def = (Get-Command Invoke-ExportClientLogs -CommandType Function).Definition
-    if ($def -match 'Compress-Archive') {
-        throw 'Invoke-ExportClientLogs todavia usa Compress-Archive; debe usar System.IO.Compression para no depender del modulo Microsoft.PowerShell.Archive'
+# --- P2a: lints AST de producto (tests/lint-ast.ps1, corrible standalone) ---
+# Reemplaza al guard viejo atado a Invoke-ExportClientLogs: ese miraba UNA funcion
+# y dejo pasar Expand-Archive en Bootstrap-Tools y Launch (E21, #80: el [T]
+# revento en el gate v2.10.0). Ahora se le pregunta al arbol entero, por AST.
+. (Join-Path $PSScriptRoot 'lint-ast.ps1')
+$script:LintAstReport = Get-LintAstReport -RepoRoot $repoRoot
+
+Test-SmokeFunction 'LintAst' 'barre el arbol de producto (piso 40 .ps1, incluye raiz/core/modules/utils/tools)' {
+    [string[]] $rels = @(@($script:LintAstReport.Files) | ForEach-Object { $_.Substring($repoRoot.Length + 1) })
+    if ($rels.Count -lt 40) { throw ('esperaba >=40 .ps1 de producto; encontro {0}' -f $rels.Count) }
+    foreach ($must in @('Launch.ps1', 'Bootstrap-Tools.ps1', 'main.ps1', 'core\', 'modules\', 'utils\', 'tools\')) {
+        if (-not @($rels | Where-Object { $_ -eq $must -or $_.StartsWith($must) }).Count) { throw ('el barrido no cubre {0}' -f $must) }
     }
-    if ($def -notmatch 'System\.IO\.Compression') {
-        throw 'Invoke-ExportClientLogs no usa el API .NET System.IO.Compression'
+    if (@($rels | Where-Object { $_ -like 'tests\*' }).Count) { throw 'el barrido incluye tests\ (no es producto)' }
+}
+
+Test-SmokeFunction 'LintAst' 'ningun Expand-Archive/Compress-Archive en producto (modulo Archive puede no cargar; E21/#80)' {
+    [object[]] $h = @($script:LintAstReport.ArchiveHits)
+    if ($h.Count -gt 0) {
+        throw ('*-Archive en producto (usar System.IO.Compression): {0}' -f (($h | ForEach-Object { '{0}:{1} {2}' -f $_.File, $_.Line, $_.Command }) -join ', '))
+    }
+}
+
+Test-SmokeFunction 'LintAst' 'ningun desenrollado sin @() leido con .Count (E16, StrictMode)' {
+    [object[]] $h = @($script:LintAstReport.UnrollHits)
+    if ($h.Count -gt 0 -and $script:LintAstReport.UnrollEnforce) {
+        throw ('desenrollado sin @(): {0}' -f (($h | ForEach-Object { '{0}:{1} {2} ${3}' -f $_.File, $_.Line, $_.Rule, $_.Variable }) -join ', '))
+    }
+}
+
+Test-SmokeFunction 'LintAst' 'ARCHIVE: caza el comando en cualquier carpeta y NO los comentarios (mutacion)' {
+    [string] $tmp = Join-Path $env:TEMP ('pctk-lintast-' + [guid]::NewGuid().ToString('N'))
+    try {
+        [void] (New-Item -ItemType Directory -Path (Join-Path $tmp 'modules') -Force)
+        [void] (New-Item -ItemType Directory -Path (Join-Path $tmp 'tests') -Force)
+        Set-Content -LiteralPath (Join-Path $tmp 'modules\Nuevo.ps1') -Encoding UTF8 -Value @(
+            '# Expand-Archive en un comentario no cuenta',
+            'function Get-X { Microsoft.PowerShell.Archive\Expand-Archive -Path a.zip -DestinationPath b -Force }')
+        Set-Content -LiteralPath (Join-Path $tmp 'tests\T.ps1') -Encoding UTF8 -Value 'Compress-Archive -Path a -DestinationPath b'
+        $rep = Get-LintAstReport -RepoRoot $tmp
+        [object[]] $h = @($rep.ArchiveHits)
+        if ($h.Count -ne 1) { throw ('esperaba 1 hit (el comando calificado de modules\); encontro {0}' -f $h.Count) }
+        if ($h[0].File -ne 'modules\Nuevo.ps1' -or $h[0].Line -ne 2) { throw ('hit en lugar equivocado: {0}:{1}' -f $h[0].File, $h[0].Line) }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'LintAst' 'UNROLL: caza el codigo PRE-fix de a0ec87b / 7e33ae6 / f762458 y no el POST-fix' {
+    # Extractos literales de `git show <c>^:<archivo>` (pre) y `git show <c>:<archivo>` (post).
+    $cases = @(
+        @{ C = 'a0ec87b'; Pre = @'
+function Get-NormalizedManufacturer {
+    param([string] $value)
+    $parts = $value.Split(' ') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if ($parts.Count -gt 0) {
+        [string] $first = $parts[0].ToLowerInvariant()
+    }
+}
+'@; Post = @'
+function Get-NormalizedManufacturer {
+    param([string] $value)
+    [object[]] $parts = @($value.Split(' ') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($parts.Count -gt 0) {
+        [string] $first = $parts[0].ToLowerInvariant()
+    }
+}
+'@ },
+        @{ C = '7e33ae6'; Pre = @'
+function New-ResearchPrompt {
+    $slotsProp = $Snapshot.PSObject.Properties['RamSlots']
+    $slotsArr  = if ($null -ne $slotsProp -and $null -ne $slotsProp.Value) { @($slotsProp.Value) } else { $null }
+    [string] $slotsCount = if ($null -ne $slotsArr) { [string] $slotsArr.Count } else { '?' }
+}
+'@; Post = @'
+function New-ResearchPrompt {
+    $slotsProp = $Snapshot.PSObject.Properties['RamSlots']
+    [object[]] $slotsArr = @()
+    if ($null -ne $slotsProp -and $null -ne $slotsProp.Value) { $slotsArr = @($slotsProp.Value) }
+    [string] $slotsCount = if ($slotsArr.Count -gt 0) { [string] $slotsArr.Count } else { '?' }
+}
+'@ },
+        @{ C = 'f762458'; Pre = @'
+function Show-PerfBoostModeSetting {
+    [bool] $ok = ($LASTEXITCODE -eq 0)
+    return [PSCustomObject]@{
+        Success = $ok
+        Applied = $(if ($ok) { @('PERFBOOSTMODE visible en Power Options') } else { @() })
+        Errors  = $(if ($ok) { @() } else { @("ATTRIB_HIDE exit $LASTEXITCODE") })
+    }
+}
+'@; Post = @'
+function Show-PerfBoostModeSetting {
+    [int] $exit = $LASTEXITCODE
+    [bool] $ok = ($exit -eq 0)
+    [string[]] $applied = @()
+    [string[]] $errs    = @()
+    if ($ok) { $applied = @('PERFBOOSTMODE visible en Power Options') } else { $errs = @("ATTRIB_HIDE exit $exit") }
+    return [PSCustomObject]@{
+        Success = $ok
+        Applied = $applied
+        Errors  = $errs
+    }
+}
+'@ }
+    )
+    foreach ($c in $cases) {
+        [object[]] $pre  = @(Find-LintUnrollHits -Ast (Get-LintAstFromText -Text $c.Pre)  -File $c.C)
+        [object[]] $post = @(Find-LintUnrollHits -Ast (Get-LintAstFromText -Text $c.Post) -File $c.C)
+        if ($pre.Count -eq 0) { throw ('{0}: el lint NO caza el codigo pre-fix' -f $c.C) }
+        if ($post.Count -gt 0) { throw ('{0}: el lint marca el codigo YA arreglado ({1})' -f $c.C, $post[0].Text) }
+    }
+}
+
+Test-SmokeFunction 'LintAst' 'UNROLL: `$x = Get-Repo` no se marca si Get-Repo devuelve ,$arr (Wait-ToolkitJobs)' {
+    foreach ($fn in @('wait-toolkitjobs', 'invoke-jobwithprogress')) {
+        if (@($script:LintAstReport.SafeFunctions) -notcontains $fn) { throw ('{0} deberia contar como "no desenrolla" (return ,x)' -f $fn) }
+    }
+    [string] $src = @'
+function Get-Coma { return ,@(1) }
+function Get-Suelto { return @(1) }
+function Use-Them {
+    $a = Get-Coma
+    $b = Get-Suelto
+    $a.Count + $b.Count
+}
+'@
+    $ast = Get-LintAstFromText -Text $src
+    [object[]] $h = @(Find-LintUnrollHits -Ast $ast -File 'x' -SafeFunctions (Get-LintCollectionSafeFunctions -Asts @($ast)))
+    if ($h.Count -ne 1 -or $h[0].Variable -ne 'b') { throw ('esperaba 1 hit en $b; encontro {0}' -f (($h | ForEach-Object { $_.Variable }) -join ',')) }
+}
+
+Test-SmokeFunction 'LintAst' 'extractores de Launch/Bootstrap pisan archivos existentes SIN el modulo Archive' {
+    # Corre el helper REAL (extraido del .ps1 por AST: los dos archivos ejecutan
+    # codigo al cargarse) en un powershell hijo donde el modulo
+    # Microsoft.PowerShell.Archive NO puede cargarse (autoload apagado): si el
+    # helper volviera a Expand-Archive, tira CommandNotFound.
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [string] $tmp = Join-Path $env:TEMP ('pctk-unzip-' + [guid]::NewGuid().ToString('N'))
+    [void] (New-Item -ItemType Directory -Path $tmp -Force)
+    try {
+        [string] $zipPath = Join-Path $tmp 'p.zip'
+        $za = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            [void] $za.CreateEntry('vacia/')
+            foreach ($pair in @(@('tools/a.txt', 'NUEVO'), @('b.txt', 'B'))) {
+                $sw = New-Object System.IO.StreamWriter(($za.CreateEntry($pair[0])).Open())
+                try { $sw.Write($pair[1]) } finally { $sw.Dispose() }
+            }
+        } finally { $za.Dispose() }
+
+        [string] $child = Join-Path $tmp 'child.ps1'
+        Set-Content -LiteralPath $child -Encoding UTF8 -Value @'
+param([string] $Source, [string] $FunctionName, [string] $Zip, [string] $Dest)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+Import-Module Microsoft.PowerShell.Utility, Microsoft.PowerShell.Management
+$PSModuleAutoloadingPreference = 'None'
+if (Get-Module Microsoft.PowerShell.Archive) { throw 'el modulo Archive ya estaba cargado: la prueba no vale' }
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Source, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $FunctionName }, $true)
+if ($null -eq $fn) { throw ('no existe {0} en {1}' -f $FunctionName, $Source) }
+. ([scriptblock]::Create($fn.Extent.Text))
+& $FunctionName -Path $Zip -DestinationPath $Dest
+'PASS'
+'@
+        foreach ($t in @(@('Launch.ps1', 'Expand-PctkZip'), @('Bootstrap-Tools.ps1', 'Expand-ToolZip'))) {
+            [string] $dest = Join-Path $tmp ('dest-' + $t[1])
+            [void] (New-Item -ItemType Directory -Path (Join-Path $dest 'tools') -Force)
+            Set-Content -LiteralPath (Join-Path $dest 'tools\a.txt') -Value 'VIEJO' -NoNewline
+            Set-Content -LiteralPath (Join-Path $dest 'queda.txt') -Value 'Q' -NoNewline
+            [string] $out = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $child `
+                -Source (Join-Path $repoRoot $t[0]) -FunctionName $t[1] -Zip $zipPath -Dest $dest 2>&1 | Out-String)
+            if ($out -notmatch 'PASS') { throw ('{0}: el extractor fallo sin el modulo Archive: {1}' -f $t[1], $out.Trim()) }
+            [string] $a = Get-Content -LiteralPath (Join-Path $dest 'tools\a.txt') -Raw
+            if ($a -ne 'NUEVO') { throw ('{0}: tools\a.txt no quedo pisado (contenido: {1})' -f $t[1], $a) }
+            if (-not (Test-Path -LiteralPath (Join-Path $dest 'b.txt'))) { throw ('{0}: falta b.txt' -f $t[1]) }
+            if (-not (Test-Path -LiteralPath (Join-Path $dest 'vacia') -PathType Container)) { throw ('{0}: falta la carpeta vacia/' -f $t[1]) }
+            if (-not (Test-Path -LiteralPath (Join-Path $dest 'queda.txt'))) { throw ('{0}: borro un archivo que no estaba en el zip' -f $t[1]) }
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
