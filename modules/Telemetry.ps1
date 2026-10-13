@@ -1172,6 +1172,80 @@ function Save-Snapshot {
     }
 }
 
+# ─── Energia PRE/POST (#78 ronda 3) ───────────────────────────────────────────
+function _EnergyText {
+    <#
+    .SYNOPSIS
+        Texto de UN campo del bloque Energy de un snapshot, para la comparacion.
+        'sin dato' = el snapshot no trae el bloque Energy (PRE anterior a #78).
+        'no disponible' = el bloque esta pero el campo es $null (MMAgent caido, etc.).
+    .NOTES
+        Lee con _BatteryProp (PSObject.Properties): ConvertFrom-Json NO crea una
+        propiedad ausente y `$x.Energy` bajo StrictMode tira PropertyNotFoundStrict.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object] $Energy,
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter()] [string] $Suffix = ''
+    )
+
+    if ($null -eq $Energy) { return 'sin dato' }
+    $v = _BatteryProp -Instance $Energy -Name $Name
+    if ($null -eq $v) { return 'no disponible' }
+    if ($v -is [bool]) {
+        [string] $yn = 'no'
+        if ($v) { $yn = 'si' }
+        return $yn
+    }
+    return ('{0}{1}' -f $v, $Suffix)
+}
+
+function Get-EnergyDiffRows {
+    <#
+    .SYNOPSIS
+        Filas de la comparacion PRE/POST del bloque Energy: Label, Pre, Post, Changed.
+        Funcion pura: acepta Energy $null en cualquiera de los dos lados.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object] $PreEnergy,
+        [Parameter()] [object] $PostEnergy
+    )
+
+    [System.Collections.Generic.List[PSCustomObject]] $rows =
+        [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # SysMain son dos campos (estado / tipo de inicio) en una sola fila.
+    [string] $preSys  = 'sin dato'
+    [string] $postSys = 'sin dato'
+    if ($null -ne $PreEnergy) {
+        $preSys = '{0} / {1}' -f (_EnergyText -Energy $PreEnergy -Name 'SysMainStatus'), (_EnergyText -Energy $PreEnergy -Name 'SysMainStartType')
+    }
+    if ($null -ne $PostEnergy) {
+        $postSys = '{0} / {1}' -f (_EnergyText -Energy $PostEnergy -Name 'SysMainStatus'), (_EnergyText -Energy $PostEnergy -Name 'SysMainStartType')
+    }
+
+    [object[]] $defs = @(
+        @{ Label = 'Boost CPU (AC)';          Pre = (_EnergyText -Energy $PreEnergy -Name 'PerfBoostModeAc');              Post = (_EnergyText -Energy $PostEnergy -Name 'PerfBoostModeAc') }
+        @{ Label = 'Throttle minimo (AC)';    Pre = (_EnergyText -Energy $PreEnergy -Name 'ProcThrottleMinAc' -Suffix '%'); Post = (_EnergyText -Energy $PostEnergy -Name 'ProcThrottleMinAc' -Suffix '%') }
+        @{ Label = 'Compresion de memoria';   Pre = (_EnergyText -Energy $PreEnergy -Name 'MemoryCompression');            Post = (_EnergyText -Energy $PostEnergy -Name 'MemoryCompression') }
+        @{ Label = 'Prefetch de aplicaciones'; Pre = (_EnergyText -Energy $PreEnergy -Name 'ApplicationLaunchPrefetching'); Post = (_EnergyText -Energy $PostEnergy -Name 'ApplicationLaunchPrefetching') }
+        @{ Label = 'SysMain';                 Pre = $preSys;                                                              Post = $postSys }
+    )
+    foreach ($d in $defs) {
+        # Un lado 'sin dato' no es un cambio: es que ese snapshot no midieron Energy.
+        [bool] $changed = ($d.Pre -ne $d.Post) -and ($d.Pre -notmatch '^sin dato') -and ($d.Post -notmatch '^sin dato')
+        $rows.Add([PSCustomObject]@{
+            Label   = [string] $d.Label
+            Pre     = [string] $d.Pre
+            Post    = [string] $d.Post
+            Changed = [bool]   $changed
+        })
+    }
+    return $rows.ToArray()
+}
+
 # ─── Compare-Snapshot ─────────────────────────────────────────────────────────
 function Compare-Snapshot {
     <#
@@ -1259,6 +1333,12 @@ function Compare-Snapshot {
         }
     }
 
+    # #78: Energy (opcional). Un snapshot anterior a #78 no trae el campo y
+    # leerlo directo tira PropertyNotFoundStrict: se lee por PSObject.Properties.
+    $preEnergy  = _BatteryProp -Instance $pre  -Name 'Energy'
+    $postEnergy = _BatteryProp -Instance $post -Name 'Energy'
+    [object[]] $energyDiff = @(Get-EnergyDiffRows -PreEnergy $preEnergy -PostEnergy $postEnergy)
+
     # Score (6 áreas)
     [int] $score = 0
     [System.Collections.Generic.List[string]] $improvements =
@@ -1296,6 +1376,7 @@ function Compare-Snapshot {
         Score            = [int]      $score
         ScoreMax         = [int]      6
         Improvements     = $improvements.ToArray()
+        EnergyDiff       = $energyDiff
     }
 }
 
@@ -1355,6 +1436,20 @@ function Show-SnapshotComparison {
         Write-PctkHint "    [ ] Carga  : $($Diff.BatteryDiff.PreCharge)% -> $($Diff.BatteryDiff.PostCharge)%"
         [string] $healthKind = if ($Diff.BatteryDiff.PostHealth -lt ($Diff.BatteryDiff.PreHealth - 5)) { 'err' } else { 'hint' }
         Write-PctkLine "    [ ] Salud  : $($Diff.BatteryDiff.PreHealth)% -> $($Diff.BatteryDiff.PostHealth)%" $healthKind
+        Write-Host ''
+    }
+
+    # Energia (#78): boost, throttle minimo, MMAgent y SysMain. Solo lectura.
+    # Diff de un modulo anterior sin EnergyDiff -> la seccion no se pinta.
+    [object[]] $energyRows = @(_BatteryProp -Instance $Diff -Name 'EnergyDiff')
+    if ($energyRows.Count -gt 0 -and $null -ne $energyRows[0]) {
+        Write-PctkSection '  [ENERGIA]'
+        foreach ($er in $energyRows) {
+            [string] $erInd  = '[ ]'
+            [string] $erKind = 'hint'
+            if ($er.Changed) { $erInd = '[i]'; $erKind = 'warn' }
+            Write-PctkLine ('    {0} {1}: {2} -> {3}' -f $erInd, $er.Label, $er.Pre, $er.Post) $erKind
+        }
         Write-Host ''
     }
 

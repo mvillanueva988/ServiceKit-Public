@@ -1111,6 +1111,81 @@ Test-SmokeFunction 'EnergyTuning' 'la opcion laptop gaming NO esta en el engine 
     }
 }
 
+# Comparacion PRE/POST con Energy (#78 ronda 3). Se llama al HANDLER del menu
+# (Invoke-DiagnosticCompare) con Compare-Snapshot y Show-SnapshotComparison REALES
+# sobre snapshots JSON en un temp; solo se shadowean la salida (se captura el texto)
+# y la auditoria. $script:TelemetryModulePath apunta al temp para que
+# Compare-Snapshot lea de ahi, y se restaura en el finally.
+function Invoke-EnergyCompareHarness {
+    param([hashtable] $PreEnergy, [hashtable] $PostEnergy)
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-cmp-' + [guid]::NewGuid().ToString('N'))
+    $snapDir = Join-Path $root 'output\snapshots'
+    $null = New-Item -ItemType Directory -Path $snapDir -Force
+    $null = New-Item -ItemType Directory -Path (Join-Path $root 'modules') -Force
+    foreach ($ph in @('pre', 'post')) {
+        $snap = [ordered]@{
+            Timestamp         = '2026-10-13T10:00:00'
+            ComputerName      = 'PC-TEST'
+            UptimeHours       = 5.0
+            Volumes           = @(@{ Letter = 'C'; FreeGb = 50.0; UsedPct = 50.0 })
+            Services          = @{ RunningCount = 100; BloatRunning = @() }
+            StartupCount      = 10
+            Battery           = $null
+            MultipleAvProblem = $false
+        }
+        $en = $PreEnergy
+        if ($ph -eq 'post') { $en = $PostEnergy }
+        if ($null -ne $en) { $snap['Energy'] = $en }
+        $snap | ConvertTo-Json -Depth 6 | Out-File -LiteralPath (Join-Path $snapDir ('2026-10-13_100000_' + $ph + '.json')) -Encoding UTF8
+    }
+    $script:EcOut = [System.Collections.Generic.List[string]]::new()
+    $script:EcAudit = [System.Collections.Generic.List[string]]::new()
+    function Write-PctkLine { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkHint { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkSection { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkOk { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkWarn { $script:EcOut.Add(($args -join ' ')) }
+    function Write-PctkActionTitle { $script:EcOut.Add(($args -join ' ')) }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:EcAudit.Add(('{0}|{1}|{2}' -f $Action, $Status, $Summary)) }
+    $oldPath = $script:TelemetryModulePath
+    try {
+        $script:TelemetryModulePath = Join-Path $root 'modules\Telemetry.ps1'
+        Invoke-DiagnosticCompare -MachineProfile ([PSCustomObject]@{ IsLaptop = $true }) | Out-Null
+    } finally {
+        $script:TelemetryModulePath = $oldPath
+        Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return [PSCustomObject]@{ Text = ($script:EcOut -join "`n"); Audit = @($script:EcAudit) }
+}
+$script:EcPreEn  = @{ PerfBoostModeAc = 2; ProcThrottleMinAc = 70; MemoryCompression = $true; ApplicationLaunchPrefetching = $true; SysMainStatus = 'Running'; SysMainStartType = 'Automatic' }
+$script:EcPostEn = @{ PerfBoostModeAc = 4; ProcThrottleMinAc = 5;  MemoryCompression = $true; ApplicationLaunchPrefetching = $null; SysMainStatus = 'Running'; SysMainStartType = 'Automatic' }
+Test-SmokeFunction 'EnergyTuning' 'comparacion PRE/POST (handler): ambos con Energy -> filas de energia con pre -> post' {
+    $r = Invoke-EnergyCompareHarness -PreEnergy $script:EcPreEn -PostEnergy $script:EcPostEn
+    if (@($r.Audit | Where-Object { $_ -match '^Snapshot\.Compare\|Success\|' }).Count -ne 1) { throw ('el handler no termino en Success: ' + ($r.Audit -join ' ; ')) }
+    foreach ($want in @('[ENERGIA]', 'Boost CPU (AC): 2 -> 4', 'Throttle minimo (AC): 70% -> 5%', 'Compresion de memoria: si -> si', 'Prefetch de aplicaciones: si -> no disponible', 'SysMain: Running / Automatic -> Running / Automatic')) {
+        if (-not $r.Text.Contains($want)) { throw ("falta en la salida: '$want'") }
+    }
+}
+Test-SmokeFunction 'EnergyTuning' 'comparacion PRE/POST (handler): PRE viejo SIN Energy + POST nuevo no rompe (StrictMode) y marca sin dato' {
+    $r = Invoke-EnergyCompareHarness -PreEnergy $null -PostEnergy $script:EcPostEn
+    if (@($r.Audit | Where-Object { $_ -match '^Snapshot\.Compare\|Success\|' }).Count -ne 1) { throw ('el handler fallo con PRE sin Energy: ' + ($r.Audit -join ' ; ')) }
+    foreach ($want in @('[ENERGIA]', 'Boost CPU (AC): sin dato -> 4', 'SysMain: sin dato -> Running / Automatic')) {
+        if (-not $r.Text.Contains($want)) { throw ("falta en la salida: '$want'") }
+    }
+    if ($r.Text -match 'sin dato -> 4.*\[i\]|\[i\][^\n]*sin dato') { throw 'un lado sin dato se marco como cambio' }
+}
+Test-SmokeFunction 'EnergyTuning' 'comparacion PRE/POST (handler): los dos snapshots viejos SIN Energy no rompen' {
+    $r = Invoke-EnergyCompareHarness -PreEnergy $null -PostEnergy $null
+    if (@($r.Audit | Where-Object { $_ -match '^Snapshot\.Compare\|Success\|' }).Count -ne 1) { throw ('el handler fallo con ambos sin Energy: ' + ($r.Audit -join ' ; ')) }
+    foreach ($want in @('[ENERGIA]', 'Boost CPU (AC): sin dato -> sin dato', 'SysMain: sin dato -> sin dato')) {
+        if (-not $r.Text.Contains($want)) { throw ("falta en la salida: '$want'") }
+    }
+}
+Test-SmokeFunction 'EnergyTuning' 'Energy NO esta en el reporte de cliente [8] (ClientReport.ps1)' {
+    $root = Split-Path -Parent $PSScriptRoot
+    if ((Get-Content -LiteralPath (Join-Path $root 'modules\ClientReport.ps1') -Raw) -match '(?i)energy|EnergyDiff|PERFBOOST') { throw 'ClientReport.ps1 menciona Energy' }
+}
+
 # Guarda de SysMain (#78): nunca una receta/codigo que lo deshabilite. Escanea
 # TODAS las carpetas del producto, no un archivo. Los comentarios no cuentan.
 function Get-SysMainDisableHits {
