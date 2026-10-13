@@ -20,7 +20,7 @@ Va como *minor* porque agrega funcionalidad (`[A][20]`), igual que el resto del 
 
 - **#52 - una opción que falla ya no cierra PCTk (`core/Router.ps1`)**: ningún menú atrapaba los errores, así que cualquier falla de cualquier opción cerraba el toolkit antes de poder leer qué pasó (así se perdió el error del listado de apps en una PC de cliente). Ahora la acción se cancela, el detalle completo sale en pantalla **y queda en `output\audit\`**, que sobrevive al scroll de una sesión AnyDesk, y el menú sigue vivo.
 
-  Y la causa de aquel caso: una app con el tamaño guardado en un formato raro del registro mataba el listado entero de `[A][8]`. Ahora ese dato queda vacío y el listado sale igual.
+  Además se cerró una causa posible de aquel caso (no se pudo reproducir en esa PC, así que no está confirmada): una app con el tamaño guardado en un formato raro del registro mataba el listado entero de `[A][8]`. Ahora ese dato queda vacío y el listado sale igual.
 
 - **#77 - el desinstalador de `[A][8]` resuelve lo que antes quedaba a mano (`modules/Apps.ps1`, `core/ActionHandlers.ps1`)**:
   - Rutas de desinstalador **con espacios y sin comillas**: se resuelven en vez de fallar.
