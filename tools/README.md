@@ -75,6 +75,6 @@ El script:
 ## Caveats conocidos
 
 - **Sin SHA-256 en `latest`**: si el CDN del publisher se compromete, no hay protección. Acepto el riesgo porque la alternativa (pinear todo) es insostenible.
-- **BCUninstaller filename con versión completa**: los assets de BCU se llaman `BCUninstaller_<version>_portable.zip` — no hay nombre estable. Por eso queda `pinned` aunque el repo es GitHub.
+- **BCUninstaller filename con versión completa**: desde 6.3 el asset que usa PCTk es `BCUninstaller_<version>_net8.0-windows<sdk>.zip` (el portable pasó a `.7z`, que PS5.1 no abre) — no hay nombre estable. Por eso queda `pinned` aunque el repo es GitHub. Necesita **.NET 8 Desktop Runtime**: si falta, PCTk lo instala con winget antes de abrir BCU (campo `requires` del manifest).
 - **TimerResolution**: la página de Lucas Hale tiene un download iframe — el `versionPattern` puede no matchear. Status `UNKNOWN` es esperado; verificar manualmente cada par de meses.
 - **SourceForge HTML scraping**: el parser de `Bootstrap-Tools.ps1` es heurístico; si SF cambia el layout, puede fallar para `latest-html`.
