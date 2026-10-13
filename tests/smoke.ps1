@@ -1044,8 +1044,8 @@ function Invoke-EnergyHandlerHarness {
     function Get-EnergyBackupPath { $script:EhBak }
     function Read-Host { $script:EhAnswer }
     function Confirm-Action { $script:EhConfirm }
-    function Write-ActionAudit { }
-    function Show-OrphanModuleResult { param($Action, $Result) $script:EhResult = $Result }
+    # Show-OrphanModuleResult es el REAL (ahi vivio el bug de .Count, ronda 4); se captura lo que le pasa a la auditoria.
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:EhStatus = $Status; if ($null -ne $Details) { $script:EhResult = $Details } }
     function Get-MMAgent { throw 'sin admin' }
     function powercfg {
         $script:EhState.Calls.Add(($args -join ' '))
@@ -1060,7 +1060,7 @@ function Invoke-EnergyHandlerHarness {
         }
         $global:LASTEXITCODE = 0
     }
-    $script:EhResult = $null
+    $script:EhResult = $null; $script:EhStatus = $null
     $prof = [PSCustomObject]@{ IsLaptop = $IsLaptop }
     Invoke-ActionEnergyLaptop -MachineProfile $prof | Out-Null
     return $script:EhState
@@ -1103,6 +1103,12 @@ Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: M des-oculta PERFBOOSTMODE s
     $st = Invoke-EnergyHandlerHarness -Answer 'M' -IsLaptop $false
     if (@($st.Calls | Where-Object { $_ -match '^-attributes SUB_PROCESSOR PERFBOOSTMODE -ATTRIB_HIDE$' }).Count -ne 1) { throw 'no llamo -ATTRIB_HIDE' }
     if (@($st.Calls | Where-Object { $_ -match 'SETACVALUEINDEX' }).Count -ne 0) { throw 'cambio valores' }
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: M pasa por el reporte real sin romper' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'M' -IsLaptop $true
+    if ($script:EhStatus -ne 'Success') { throw ('audit final Status={0}' -f $script:EhStatus) }
+    if (@($script:EhResult.Applied).Count -ne 1 -or @($script:EhResult.Errors).Count -ne 0) { throw 'Applied/Errors no son arrays' }
+    if ($script:EhResult.Applied -isnot [array] -or $script:EhResult.Errors -isnot [array]) { throw 'Applied/Errors desenrollados' }
 }
 Test-SmokeFunction 'EnergyTuning' 'la opcion laptop gaming NO esta en el engine ni en Performance (nunca en el [1])' {
     $root = Split-Path -Parent $PSScriptRoot

@@ -46,11 +46,15 @@ function Show-PerfBoostModeSetting {
     param()
     $ErrorActionPreference = 'Continue'
     & powercfg -attributes SUB_PROCESSOR PERFBOOSTMODE -ATTRIB_HIDE 2>&1 | Out-Null
-    [bool] $ok = ($LASTEXITCODE -eq 0)
+    [int] $exit = $LASTEXITCODE
+    [bool] $ok = ($exit -eq 0)
+    [string[]] $applied = @()
+    [string[]] $errs    = @()
+    if ($ok) { $applied = @('PERFBOOSTMODE visible en Power Options') } else { $errs = @("ATTRIB_HIDE exit $exit") }
     return [PSCustomObject]@{
         Success = $ok
-        Applied = $(if ($ok) { @('PERFBOOSTMODE visible en Power Options') } else { @() })
-        Errors  = $(if ($ok) { @() } else { @("ATTRIB_HIDE exit $LASTEXITCODE") })
+        Applied = $applied
+        Errors  = $errs
         RestartRequired = $false
         Reason  = 'Setting visible; ningun valor cambio.'
     }
