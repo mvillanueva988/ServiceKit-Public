@@ -212,10 +212,20 @@ function Get-NamedProfilePreviewLines {
     [System.Collections.Generic.List[string]] $lines =
         [System.Collections.Generic.List[string]]::new()
     $lines.Add("Receta: $([string]$Profile._name)")
-    $lines.Add("Tier receta: $([string]$Profile._tier)  |  Tier detectado: $(if ($MachineProfile.PSObject.Properties['Tier']) { [string]$MachineProfile.Tier } else { 'N/A' })")
+    # v2.0 saco _tier del JSON: el tier de la receta vive en _hardware_snapshot.Tier.
+    # Leerlo por PSObject.Properties: con StrictMode, $Profile._tier ausente tira.
+    [object] $hsP = $Profile.PSObject.Properties['_hardware_snapshot']
+    [string] $tierReceta = 'N/A'
+    [object] $tP = $Profile.PSObject.Properties['_tier']
+    if ($null -ne $tP -and -not [string]::IsNullOrWhiteSpace([string]$tP.Value)) {
+        $tierReceta = [string]$tP.Value
+    } elseif ($null -ne $hsP -and $null -ne $hsP.Value) {
+        [object] $hsTierP = $hsP.Value.PSObject.Properties['Tier']
+        if ($null -ne $hsTierP -and -not [string]::IsNullOrWhiteSpace([string]$hsTierP.Value)) { $tierReceta = [string]$hsTierP.Value }
+    }
+    $lines.Add("Tier receta: $tierReceta  |  Tier detectado: $(if ($MachineProfile.PSObject.Properties['Tier']) { [string]$MachineProfile.Tier } else { 'N/A' })")
 
     # Hardware cambio vs snapshot guardado
-    [object] $hsP = $Profile.PSObject.Properties['_hardware_snapshot']
     if ($null -ne $hsP -and $null -ne $hsP.Value) {
         [PSCustomObject] $hs = $hsP.Value
         foreach ($k in @('CpuName','RamMB','Manufacturer')) {

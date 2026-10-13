@@ -1071,6 +1071,33 @@ Test-SmokeFunction 'Router' 'handler [12] [D]+S: avisa y deshabilita HVCI exacta
         }
     }
 }
+
+# Fixtures del preview de receta nombrada (Get-NamedProfilePreviewLines): el
+# _sample.json (schema v2.0, sin _tier) con gaming_tweaks.hvci a eleccion, y una
+# maquina igual a su _hardware_snapshot.
+function New-HvciPreviewFixture {
+    param([string] $Hvci)   # 'off' | 'on' | '' = ausente
+    $p = Get-Content (Join-Path (Get-NamedProfileDir) '_sample.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]::IsNullOrEmpty($Hvci)) { $p.gaming_tweaks.PSObject.Properties.Remove('hvci') }
+    else { $p.gaming_tweaks.hvci = $Hvci }
+    return $p
+}
+function New-HvciPreviewMachine {
+    # Igual al _hardware_snapshot del _sample: sin avisos de "hardware cambio".
+    [PSCustomObject]@{ Tier = 'High'; CpuName = 'Sample CPU'; RamMB = 16384; Manufacturer = 'Sample'; HasIGpuOnly = $false }
+}
+Test-SmokeFunction 'NamedProfileEditor' 'preview de receta v2.0 (sin _tier) no crashea bajo StrictMode' {
+    # v2.0 saco _tier del JSON (New-NamedProfileInteractive no lo escribe, el _sample
+    # no lo tiene) y el preview lo seguia leyendo directo: PropertyNotFoundStrict y el
+    # [2] moria antes del Confirm-Action. Corre bajo el StrictMode Latest del smoke.
+    Set-StrictMode -Version Latest
+    $p = New-HvciPreviewFixture -Hvci 'off'
+    if ($null -ne $p.PSObject.Properties['_tier']) { throw 'el fixture tiene _tier: no ejercita el caso v2.0' }
+    [string[]] $lines = Get-NamedProfilePreviewLines -Profile $p -MachineProfile (New-HvciPreviewMachine)
+    if (@($lines | Where-Object { $_ -like 'Tier receta: High*Tier detectado: High*' }).Count -ne 1) {
+        throw ('la linea de tier no toma el del _hardware_snapshot: ' + ($lines -join ' | '))
+    }
+}
 Test-SmokeFunction 'Router' 'handler [13] HAGS routing + abort-seguro' {
     $ErrorActionPreference = 'Stop'
     $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
