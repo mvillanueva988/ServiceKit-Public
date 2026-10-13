@@ -4005,6 +4005,115 @@ Test-SmokeFunction 'Diagnostics' 'BSOD: BsodCount y PowerCount se cuentan por se
     }
 }
 
+# #88: [A][7] backup de drivers crasheaba con PropertyNotFoundStrict 'Total' (gate
+# Sandbox v2.10.1). Backup-Drivers tenia 3 formas de retorno y solo la final traia
+# Total; la de "0 candidatos" (Sandbox, o PC con DISM roto) va por la rama de exito
+# del handler, que leia $r.Total bajo StrictMode.
+# Los tests del handler le pasan las formas TAL COMO LAS DEVOLVIA Backup-Drivers
+# antes del fix (sin Total en las ramas tempranas): el resultado viene serializado
+# de un job, y el handler tiene que aguantar un objeto sin la propiedad aunque la
+# funcion ya la traiga. Se sombrean el job, la espera, la auditoria y los renderers.
+function Invoke-DriverBackupHarness {
+    param([PSCustomObject] $Result)
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    $script:DbResult = $Result
+    $script:DbOut    = [System.Collections.Generic.List[string]]::new()
+    $script:DbAudit  = [System.Collections.Generic.List[string]]::new()
+    function Start-DriverBackupJob { param($OutputRoot) 'job-falso' }
+    function Invoke-JobWithProgress { param($Jobs, $Activity, $TimeoutSeconds) , @($script:DbResult) }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:DbAudit.Add(('{0}|{1}|{2}' -f $Action, $Status, $Summary)) }
+    function Write-Host { $script:DbOut.Add(($args -join ' ')) }
+    function Write-PctkWarn { param([AllowEmptyString()][string] $Text) $script:DbOut.Add(('warn:{0}' -f $Text)) }
+    function Write-PctkHint { param([AllowEmptyString()][string] $Text) $script:DbOut.Add(('hint:{0}' -f $Text)) }
+    function Write-PctkWork { param([AllowEmptyString()][string] $Text) $script:DbOut.Add(('work:{0}' -f $Text)) }
+    function Write-PctkOk   { param([AllowEmptyString()][string] $Text) $script:DbOut.Add(('ok:{0}' -f $Text)) }
+    Invoke-ActionDriverBackup -MachineProfile ([PSCustomObject]@{}) | Out-Null
+    return [PSCustomObject]@{
+        Text  = ($script:DbOut -join "`n")
+        Audit = @($script:DbAudit)
+    }
+}
+Test-SmokeFunction 'Diagnostics' 'handler [A][7] drivers: 0 candidatos sin Total no crashea y lo dice legible (#88)' {
+    $r = Invoke-DriverBackupHarness -Result ([PSCustomObject]@{
+        Success     = $true
+        Destination = 'C:\x\driver_backup\2026'
+        Exported    = 0
+        Message     = 'No se encontraron drivers de terceros para exportar.'
+    })
+    if ($r.Text -notmatch 'No se encontraron drivers de terceros') { throw ('falta el mensaje legible de 0 drivers: ' + $r.Text) }
+    if ($r.Text -match '0 drivers exportados de') { throw ('muestra el conteo crudo en vez del mensaje: ' + $r.Text) }
+    if (-not ($r.Audit | Where-Object { $_ -like 'Drivers.Backup|Success|*' })) { throw ('sin auditoria Success: ' + ($r.Audit -join ' / ')) }
+}
+Test-SmokeFunction 'Diagnostics' 'handler [A][7] drivers: falla de carpeta va por la rama de falla (#88)' {
+    $r = Invoke-DriverBackupHarness -Result ([PSCustomObject]@{
+        Success     = $false
+        Destination = 'C:\x\driver_backup\2026'
+        Exported    = 0
+        Message     = 'No se pudo crear la carpeta de destino: acceso denegado'
+    })
+    if ($r.Text -notmatch 'warn:.*No se pudo crear la carpeta') { throw ('falta el aviso de falla: ' + $r.Text) }
+    if (-not ($r.Audit | Where-Object { $_ -like 'Drivers.Backup|Failed|*' })) { throw ('sin auditoria Failed: ' + ($r.Audit -join ' / ')) }
+}
+Test-SmokeFunction 'Diagnostics' 'handler [A][7] drivers: exito completo muestra exportados/candidatos (#88)' {
+    $r = Invoke-DriverBackupHarness -Result ([PSCustomObject]@{
+        Success     = $true
+        Destination = 'C:\x\driver_backup\2026'
+        Exported    = 5
+        Total       = 7
+        Message     = 'Backup completado.'
+    })
+    if ($r.Text -notmatch 'ok:.*5 drivers exportados de 7 candidatos') { throw ('falta el conteo 5/7: ' + $r.Text) }
+    if (-not ($r.Audit | Where-Object { $_ -like 'Drivers.Backup|Success|5/7*' })) { throw ('auditoria sin 5/7: ' + ($r.Audit -join ' / ')) }
+}
+# La funcion: las 3 ramas devuelven la MISMA forma. Get-WindowsDriver / Export-WindowsDriver
+# / New-Item sombreados; la carpeta real va a TEMP y se borra.
+Test-SmokeFunction 'Diagnostics' 'Backup-Drivers: sin drivers de terceros devuelve Total=0 (#88)' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    [string] $root = Join-Path $env:TEMP ('pctk-smoke-drv-' + [guid]::NewGuid().ToString('N'))
+    try {
+        function Get-WindowsDriver { param([switch] $Online, [switch] $All) }
+        $d = Backup-Drivers -OutputRoot $root
+        foreach ($campo in @('Success', 'Destination', 'Exported', 'Total', 'Message')) {
+            if (-not $d.PSObject.Properties[$campo]) { throw ('Falta el campo {0}' -f $campo) }
+        }
+        if ([int] $d.Total -ne 0) { throw ('Total={0}, esperado 0' -f $d.Total) }
+        if (-not $d.Success) { throw '0 candidatos deberia ser Success=$true' }
+    } finally {
+        Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+Test-SmokeFunction 'Diagnostics' 'Backup-Drivers: falla de carpeta y exito traen la misma forma (#88)' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    [string[]] $forma = @('Success', 'Destination', 'Exported', 'Total', 'Message')
+    # (b) falla de carpeta: New-Item tira.
+    & {
+        function New-Item { throw 'acceso denegado' }
+        $d = Backup-Drivers -OutputRoot 'C:\no-existe-pctk'
+        foreach ($campo in $forma) { if (-not $d.PSObject.Properties[$campo]) { throw ('falla de carpeta: falta {0}' -f $campo) } }
+        if ($d.Success) { throw 'falla de carpeta con Success=$true' }
+        if ([int] $d.Total -ne 0) { throw ('falla de carpeta: Total={0}, esperado 0' -f $d.Total) }
+    }
+    # (c) exito: 2 drivers OEM de terceros, Export-WindowsDriver no tira.
+    [string] $root = Join-Path $env:TEMP ('pctk-smoke-drv-' + [guid]::NewGuid().ToString('N'))
+    try {
+        & {
+            function Get-WindowsDriver { param([switch] $Online, [switch] $All)
+                [PSCustomObject]@{ Driver = 'oem1.inf'; ProviderName = 'Realtek'; ClassName = 'Net' }
+                [PSCustomObject]@{ Driver = 'oem2.inf'; ProviderName = 'NVIDIA';  ClassName = 'Display' }
+            }
+            function Export-WindowsDriver { param([switch] $Online, $Destination) }
+            $d = Backup-Drivers -OutputRoot $root
+            foreach ($campo in $forma) { if (-not $d.PSObject.Properties[$campo]) { throw ('exito: falta {0}' -f $campo) } }
+            if (-not $d.Success -or [int] $d.Exported -ne 2 -or [int] $d.Total -ne 2) { throw ('exito: Success={0} Exported={1} Total={2}' -f $d.Success, $d.Exported, $d.Total) }
+        }
+    } finally {
+        Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Test-SmokeFunction 'MachineProfile' '#28: expone Manufacturer / Model / SerialNumber' {
     $ErrorActionPreference = 'Stop'
     $mp = Get-MachineProfile
