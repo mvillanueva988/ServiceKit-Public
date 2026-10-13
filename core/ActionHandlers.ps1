@@ -943,6 +943,18 @@ function Invoke-ActionCoreIsolation {
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
 
     if ($sub -eq 'D') {
+        # #27(a): aviso anti-cheat kernel ANTES de todo lo demas. Solo avisa: no
+        # detecta juegos ni gatea. Default N (Enter vacio = no toca nada).
+        Write-Host ''
+        Write-PctkWarn '  [!] Juegos con anti-cheat a nivel kernel (Valorant/Vanguard, FACEIT, EasyAntiCheat, BattlEye):'
+        Write-PctkWarn '      algunos exigen Memory Integrity / VBS activos y pueden dejar de abrir si se apaga.'
+        Write-PctkHint '      Preguntale al cliente a que juega antes de seguir. Se revierte con [E].'
+        [string] $acAns = (Read-Host '  Deshabilitar HVCI igual? [s/N]').Trim().ToUpperInvariant()
+        if (-not ($acAns -eq 'S' -or $acAns -eq 'SI' -or $acAns -eq 'Y' -or $acAns -eq 'YES')) {
+            Write-PctkHint '  Cancelado.'
+            Write-ActionAudit -Action 'CoreIsolation' -Status 'Cancelled' -Summary 'aviso anti-cheat'
+            return
+        }
         [string] $vbsAns = (Read-Host '  Tambien deshabilitar VBS? (rompe WSL2 si lo usas) [s/N]').Trim().ToUpperInvariant()
         [bool] $vbsToo = ($vbsAns -eq 'S' -or $vbsAns -eq 'SI' -or $vbsAns -eq 'Y' -or $vbsAns -eq 'YES')
         [string[]] $lines = @(

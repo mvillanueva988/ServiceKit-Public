@@ -192,7 +192,7 @@ try {
 
     # same detached launch as Invoke-UninstallToolkit
     Start-Process -FilePath 'powershell.exe' -ArgumentList @(
-        '-NoProfile','-ExecutionPolicy','Bypass','-NonInteractive','-File',$deleterPath
+        '-NoProfile','-ExecutionPolicy','Bypass','-NonInteractive','-File',('"{0}"' -f $deleterPath)
     ) -WindowStyle Hidden -ErrorAction Stop
     Pass 'deleter launched detached (-WindowStyle Hidden)'
 

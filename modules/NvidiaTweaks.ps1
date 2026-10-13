@@ -173,7 +173,7 @@ function Set-NvidiaSysmemFallback {
 
         [object] $proc = Start-Process `
             -FilePath     $inspPath `
-            -ArgumentList $nipPath  `
+            -ArgumentList ('"{0}"' -f $nipPath) `
             -Wait -PassThru -NoNewWindow -ErrorAction Stop
         [int] $exitCode = [int]$proc.ExitCode
 

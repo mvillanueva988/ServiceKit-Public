@@ -378,7 +378,7 @@ function Invoke-UninstallToolkit {
     try {
         Start-Process -FilePath 'powershell.exe' -ArgumentList @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass',
-            '-NonInteractive', '-File', $deleterPath
+            '-NonInteractive', '-File', ('"{0}"' -f $deleterPath)   # %TEMP% con espacios (#86)
         ) -WindowStyle Hidden -ErrorAction Stop
     } catch {
         Write-PctkErr ('  [!] No se pudo lanzar el desinstalador: {0}' -f $_.Exception.Message)

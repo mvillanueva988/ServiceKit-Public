@@ -369,7 +369,9 @@ function Invoke-OOSU10Profile {
     }
 
     try {
-        $proc = Start-Process -FilePath $exe -ArgumentList @($Path, '/quiet') `
+        # PS 5.1 une -ArgumentList con espacios SIN comillas: la ruta va entrecomillada
+        # o un .cfg en una carpeta con espacios le llega partido a OOSU10 (#86).
+        $proc = Start-Process -FilePath $exe -ArgumentList @(('"{0}"' -f $Path), '/quiet') `
             -PassThru -WindowStyle Hidden -ErrorAction Stop
 
         [bool] $finished = $proc.WaitForExit($TimeoutSeconds * 1000)
