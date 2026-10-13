@@ -362,6 +362,122 @@ function Get-BatteryHealth {
     return $null
 }
 
+# ─── Energia: PERFBOOSTMODE / PROCTHROTTLEMIN / MMAgent / SysMain (#78) ──────
+# Solo lectura. Viven ACA (y no en EnergyTuning.ps1) porque el runspace del job
+# de telemetria solo dot-sourcea este archivo (ver nota de Invoke-WithTimeout).
+$script:EnergySubProcessorGuid = '54533251-82be-4824-96c1-47b60b740d00'
+$script:EnergyPerfBoostGuid    = 'be337238-0d82-4146-a960-4f3749d470c7'
+$script:EnergyThrottleMinGuid  = '893dee8e-2bef-41e0-89c6-b55d0929964c'
+
+function ConvertFrom-PowercfgQhIndices {
+    <#
+    .SYNOPSIS
+        Extrae los indices AC/DC de la salida de `powercfg /qh <scheme> <sub> <setting>`.
+        Funcion pura.
+    .DESCRIPTION
+        NO se lee por el texto de la linea: en Windows en espanol dice "corriente
+        alterna / continua", en pt-BR "CA / CC", en en-US "AC / DC". Se lee por
+        POSICION: los dos ULTIMOS valores hex (0x...) de la salida son AC y DC
+        (powercfg los imprime siempre en ese orden, al final). Los hex anteriores
+        son minimo/maximo/incremento del rango y no cuentan.
+    .OUTPUTS
+        PSCustomObject { Ac; Dc } con [Nullable[int]]: $null si no hay dos valores.
+    #>
+    [CmdletBinding()]
+    param([Parameter()] [AllowNull()] [AllowEmptyString()] [string] $Text)
+
+    [Nullable[int]] $ac = $null
+    [Nullable[int]] $dc = $null
+    if (-not [string]::IsNullOrWhiteSpace($Text)) {
+        [object[]] $hex = @([regex]::Matches($Text, '(?m):\s*0x([0-9a-fA-F]{1,8})\s*$'))
+        if ($hex.Count -ge 2) {
+            $ac = [Convert]::ToInt32($hex[$hex.Count - 2].Groups[1].Value, 16)
+            $dc = [Convert]::ToInt32($hex[$hex.Count - 1].Groups[1].Value, 16)
+        }
+    }
+    return [PSCustomObject]@{ Ac = $ac; Dc = $dc }
+}
+
+function Get-ProcessorPowerSetting {
+    <#
+    .SYNOPSIS
+        Lee AC/DC de un setting de SUB_PROCESSOR en el esquema activo con /qh
+        (la `h` incluye los ocultos). Read-only.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $SettingGuid)
+
+    # Exe nativo + EAP=Stop (main.ps1) = NativeCommandError terminante (CLAUDE.md).
+    $ErrorActionPreference = 'Continue'
+    [string] $txt = ''
+    try { $txt = (& powercfg /qh SCHEME_CURRENT $script:EnergySubProcessorGuid $SettingGuid 2>&1) -join "`n" } catch { }
+    return (ConvertFrom-PowercfgQhIndices -Text $txt)
+}
+
+function Get-MMAgentState {
+    <#
+    .SYNOPSIS
+        MemoryCompression y ApplicationLaunchPrefetching via Get-MMAgent.
+        Si el cmdlet no existe o falla (sin admin, Win10 viejo, Sandbox), Available
+        queda $false y los campos en $null. Nunca tira.
+    #>
+    [CmdletBinding()]
+    param()
+
+    [bool] $avail = $false
+    [Nullable[bool]] $mc = $null
+    [Nullable[bool]] $pf = $null
+    try {
+        if (Get-Command -Name 'Get-MMAgent' -ErrorAction SilentlyContinue) {
+            $mm = Get-MMAgent -ErrorAction Stop
+            if ($null -ne $mm) {
+                if ($mm.PSObject.Properties['MemoryCompression'])           { $mc = [bool] $mm.MemoryCompression }
+                if ($mm.PSObject.Properties['ApplicationLaunchPrefetching']) { $pf = [bool] $mm.ApplicationLaunchPrefetching }
+                $avail = ($null -ne $mc -or $null -ne $pf)
+            }
+        }
+    } catch { }
+    return [PSCustomObject]@{
+        Available                    = $avail
+        MemoryCompression            = $mc
+        ApplicationLaunchPrefetching = $pf
+    }
+}
+
+function Get-EnergyTuningState {
+    <#
+    .SYNOPSIS
+        Estado de energia/memoria para el diagnostico (campo `Energy` del snapshot).
+        Solo lectura. Cada sub-lectura falla por separado a $null / 'no disponible'.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $boost    = Get-ProcessorPowerSetting -SettingGuid $script:EnergyPerfBoostGuid
+    $throttle = Get-ProcessorPowerSetting -SettingGuid $script:EnergyThrottleMinGuid
+    $mm       = Get-MMAgentState
+
+    [string] $sysStatus = 'no disponible'
+    [string] $sysStart  = 'no disponible'
+    try {
+        $svc = Get-Service -Name 'SysMain' -ErrorAction Stop
+        $sysStatus = [string] $svc.Status
+        $sysStart  = [string] $svc.StartType
+    } catch { }
+
+    return [PSCustomObject]@{
+        PerfBoostModeAc              = $boost.Ac
+        PerfBoostModeDc              = $boost.Dc
+        ProcThrottleMinAc            = $throttle.Ac
+        ProcThrottleMinDc            = $throttle.Dc
+        MmAgentAvailable             = [bool] $mm.Available
+        MemoryCompression            = $mm.MemoryCompression
+        ApplicationLaunchPrefetching = $mm.ApplicationLaunchPrefetching
+        SysMainStatus                = $sysStatus
+        SysMainStartType             = $sysStart
+    }
+}
+
 # ─── Get-SystemSnapshot ───────────────────────────────────────────────────────
 function Get-SystemSnapshot {
     <#
@@ -964,6 +1080,12 @@ function Get-SystemSnapshot {
     $qt['powercfg'] = [int] $sw.ElapsedMilliseconds
     $powerPlan = $ppEnv.Value | Select-Object -First 1
 
+    # ── Energia / MMAgent / SysMain (#78): solo lectura, falla a $null ────────
+    $sw.Restart()
+    $energy = $null
+    try { $energy = Get-EnergyTuningState } catch { $energy = $null }
+    $qt['energy'] = [int] $sw.ElapsedMilliseconds
+
     # ── Retorno garantizado (§3c: partial-snapshot invariant) ─────────────────
     # T-N2: shape invariante — NUNCA renombrar ni remover campos existentes.
     # Campos nuevos agregados al final.
@@ -1006,6 +1128,8 @@ function Get-SystemSnapshot {
         IsVirtualMachine  = [bool]      $isVM
         VmVendor          = [string]    $vmVendor
         QueryTimings      = [hashtable] $qt
+        # ── #78: energia / MMAgent / SysMain (al final: shape invariante) ─────
+        Energy            = $energy
     }
 }
 

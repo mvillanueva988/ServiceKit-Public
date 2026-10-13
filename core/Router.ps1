@@ -1208,6 +1208,7 @@ function Invoke-IndividualActionDispatch {
         '17' { Invoke-ActionDiskMaintenance -MachineProfile $MachineProfile; return }
         '18' { Invoke-ActionEncryption      -MachineProfile $MachineProfile; return }
         '19' { Invoke-ActionDefenderScan    -MachineProfile $MachineProfile; return }
+        '20' { Invoke-ActionEnergyLaptop    -MachineProfile $MachineProfile; return }
         default {
             Write-PctkErr '  Opcion invalida.'
         }
