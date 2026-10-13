@@ -4062,7 +4062,8 @@ function Invoke-Apps77Harness {
         [object[]]    $Win32,
         [string[]]    $Answers,
         [scriptblock] $ExitFor = { param($f, $a) 0 },
-        [switch]      $Unattended
+        [switch]      $Unattended,
+        [object[]]    $Uwp = @()
     )
     $ErrorActionPreference = 'Stop'
     Set-StrictMode -Version Latest
@@ -4071,9 +4072,10 @@ function Invoke-Apps77Harness {
     $script:Apps77 = @{
         Ev = $ev; Audit = [System.Collections.Generic.List[object]]::new()
         Sp = [System.Collections.Generic.List[object]]::new()
+        Appx = [System.Collections.Generic.List[object]]::new()
         Jobs = [System.Collections.Generic.List[bool]]::new()
         Answers = [System.Collections.Generic.Queue[string]]::new()
-        Win32 = $Win32; ExitFor = $ExitFor
+        Win32 = $Win32; Uwp = $Uwp; ExitFor = $ExitFor
     }
     foreach ($x in $Answers) { $script:Apps77.Answers.Enqueue($x) }
 
@@ -4099,9 +4101,14 @@ function Invoke-Apps77Harness {
         foreach ($j in @($Jobs)) {
             if ($j.Kind -eq 'w32') {
                 $out += , @($script:Apps77.Win32 | Where-Object { $j.Sys -or -not $_.IsSystemComponent })
-            } else { $out += , @() }
+            } else { $out += , @($script:Apps77.Uwp) }
         }
         return , $out }
+    # #83: nunca el Remove-AppxPackage real. Registra el $ProgressPreference que ve
+    # el cmdlet al ser llamado (resolucion dinamica: el del scope de Invoke-UwpUninstall).
+    function Remove-AppxPackage { [CmdletBinding()] param([string]$Package)   # CmdletBinding: acepta -ErrorAction
+        $script:Apps77.Appx.Add([PSCustomObject]@{ Package = $Package; PP = [string] $ProgressPreference })
+        $script:Apps77.Ev.Add('appx:' + $Package) }
     function Start-Process { param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru, [switch]$NoNewWindow)
         $script:Apps77.Sp.Add([PSCustomObject]@{ FilePath = $FilePath; Args = $ArgumentList })
         $script:Apps77.Ev.Add('sp:' + $FilePath)
@@ -4233,6 +4240,47 @@ Test-SmokeFunction 'Apps' '#77 handler: toggle [C] de componentes del sistema (o
     # C dos veces -> vuelve a off (la lista final vuelve a no tenerlo)
     $twice = Invoke-Apps77Harness -Win32 @($n, $s) -Answers @('C', 'C', 'V')
     if ($twice.Jobs.Count -ne 3 -or $twice.Jobs[2]) { throw 'segundo C debe recargar SIN el flag' }
+}
+
+Test-SmokeFunction 'Apps' '#83 handler: Remove-AppxPackage corre con progreso suprimido y $ProgressPreference no se filtra al llamador' {
+    # POR QUE: un cliente real vio en [A][8] el bloque de progreso de deployment de
+    # AppX dibujado encima del menu al volver. El fix suprime el progreso LOCAL a
+    # Invoke-UwpUninstall. Corre el HANDLER (Invoke-ActionApps), no la funcion suelta.
+    # (a) el cmdlet ve SilentlyContinue; (b) el llamador sigue viendo lo que veia
+    # antes: ni $global: ni $script: cambiaron (un fix que se filtra apaga TODO el
+    # progreso del toolkit de ahi en adelante).
+    $ErrorActionPreference = 'Stop'
+    [string] $prevGlobal = [string] $global:ProgressPreference
+    $global:ProgressPreference = 'Continue'
+    try {
+        $sv = Get-Variable -Name ProgressPreference -Scope Script -ErrorAction SilentlyContinue
+        [string] $scriptBefore = '<sin variable>'
+        if ($null -ne $sv) { $scriptBefore = [string] $sv.Value }
+        [string] $seenBefore = [string] $ProgressPreference
+
+        $app = [PSCustomObject]@{ DisplayName = 'Foo UWP'; Name = 'Foo.Uwp'; IsMicrosoft = $false
+                                  PackageFullName = 'Foo.Uwp_1.0.0.0_x64__8wekyb3d8bbwe' }
+        $r = Invoke-Apps77Harness -Win32 @() -Uwp @($app) -Answers @('0')   # coleccion de 1
+
+        if ($r.Appx.Count -ne 1) { throw ('Remove-AppxPackage x{0}, esperaba 1' -f $r.Appx.Count) }
+        if ($r.Appx[0].Package -ne $app.PackageFullName) { throw ('Package={0}' -f $r.Appx[0].Package) }
+        if ($r.Appx[0].PP -ne 'SilentlyContinue') {
+            throw ('(a) Remove-AppxPackage vio $ProgressPreference={0}; esperaba SilentlyContinue' -f $r.Appx[0].PP)
+        }
+
+        $sv = Get-Variable -Name ProgressPreference -Scope Script -ErrorAction SilentlyContinue
+        [string] $scriptAfter = '<sin variable>'
+        if ($null -ne $sv) { $scriptAfter = [string] $sv.Value }
+        if ([string] $global:ProgressPreference -ne 'Continue') {
+            throw ('(b) se filtro a $global:ProgressPreference={0}' -f $global:ProgressPreference)
+        }
+        if ($scriptAfter -ne $scriptBefore) { throw ('(b) se filtro a $script:ProgressPreference: {0} -> {1}' -f $scriptBefore, $scriptAfter) }
+        if ([string] $ProgressPreference -ne $seenBefore) { throw ('(b) el llamador veia {0} y ahora ve {1}' -f $seenBefore, $ProgressPreference) }
+
+        $per = @($r.Audit | Where-Object { $_.Action -eq 'Apps.Uninstall' })
+        if ($per.Count -ne 1 -or $per[0].Status -ne 'Success') { throw 'la desinstalacion UWP debe auditar Success' }
+    }
+    finally { $global:ProgressPreference = $prevGlobal }
 }
 
 Test-SmokeFunction 'Apps' '#77 Get-InstalledWin32Apps: SystemComponent fuera por default, dentro con el switch (coleccion de 1)' {

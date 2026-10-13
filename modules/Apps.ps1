@@ -276,6 +276,10 @@ function Invoke-UwpUninstall {
         }
     }
 
+    # #83: el deployment de AppX dibuja su propio bloque de progreso y queda pintado
+    # encima del menu al volver. LOCAL a esta funcion (auto-revierte al return): con
+    # $global:/$script: se apagaria el progreso del resto del toolkit.
+    $ProgressPreference = 'SilentlyContinue'
     try {
         Remove-AppxPackage -Package $pfn -ErrorAction Stop
         return [PSCustomObject]@{
