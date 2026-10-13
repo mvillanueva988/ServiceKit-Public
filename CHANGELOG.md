@@ -2,6 +2,36 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.9.0] - 2026-10-13
+
+Release: **el toolkit deja de cerrarse en la cara del cliente**. Un error en cualquier opción del menú cerraba PCTk entero sin dejar leer el error; ahora la acción se cancela, el detalle queda en pantalla y en el audit, y el menú sigue. Suma además el ajuste de energía para laptops gaming, el desinstalador que resuelve los casos que antes quedaban a mano, y el menú que entra en Windows Terminal.
+
+Va como *minor* porque agrega funcionalidad (`[A][20]`), igual que el resto del changelog.
+
+### Added
+
+- **#78 - energía: el setting oculto de boost del procesador, a la vista (`modules/EnergyTuning.ps1`, `modules/Telemetry.ps1`, `core/ActionHandlers.ps1`)**: nuevo `[A][20]`. Muestra el modo de boost del procesador (PERFBOOSTMODE, oculto en Opciones de energía), el throttle mínimo, la compresión de memoria, el prefetch y SysMain; puede destapar el setting en el panel de Windows y aplicar el ajuste *laptop gaming* (boost en modo 4, *eficiente agresivo*, + throttle mínimo 5 %) con respaldo del valor anterior y reversión.
+
+  **Sólo laptops y sólo a pedido**: pide confirmación y no corre dentro del `[1]`. Cambia únicamente los valores con cargador (AC); los de batería (DC) no se tocan.
+
+  El snapshot PRE/POST releva esos cinco valores y la comparación los muestra en una sección `[ENERGIA]`. Un snapshot de antes de esta versión sale como *sin dato*, no rompe. El reporte de cliente `[8]` no cambia.
+
+### Fixed
+
+- **#52 - una opción que falla ya no cierra PCTk (`core/Router.ps1`)**: ningún menú atrapaba los errores, así que cualquier falla de cualquier opción cerraba el toolkit antes de poder leer qué pasó (así se perdió el error del listado de apps en una PC de cliente). Ahora la acción se cancela, el detalle completo sale en pantalla **y queda en `output\audit\`**, que sobrevive al scroll de una sesión AnyDesk, y el menú sigue vivo.
+
+  Y la causa de aquel caso: una app con el tamaño guardado en un formato raro del registro mataba el listado entero de `[A][8]`. Ahora ese dato queda vacío y el listado sale igual.
+
+- **#77 - el desinstalador de `[A][8]` resuelve lo que antes quedaba a mano (`modules/Apps.ps1`, `core/ActionHandlers.ps1`)**:
+  - Rutas de desinstalador **con espacios y sin comillas**: se resuelven en vez de fallar.
+  - Los códigos 3010/1641 (*"listo, falta reiniciar"*) cuentan como éxito, con **un solo** aviso de reinicio al final.
+  - Toggle `[C]` para listar también los componentes del sistema (apagado por defecto, marcados al prenderlo).
+  - Un desinstalador que abre su propia ventana: en modo desatendido no se lanza y queda como manual; en interactivo avisa antes.
+
+- **#46 - el menú entra en Windows Terminal (`utils/ConsoleMenu.ps1`, `core/Router.ps1`)**: Windows Terminal no deja que PCTk agrande la ventana, y el menú se dibujaba como si hubiera podido: no entraba, la consola scrolleaba y el resaltado de las flechas caía en la fila equivocada. Ahora el menú mide el alto real y se adapta (compacto, o paginado siguiendo el resaltado); si la ventana es demasiado chica, lo avisa y espera un Enter en vez de borrar el aviso al instante.
+
+  De paso, el banner consultaba el procesador al sistema en cada redibujo (~1 s cada vez): con el menú paginado, bajar con las flechas se encolaba. Ahora lo consulta una vez por sesión.
+
 ## [2.8.0] - 2026-08-17
 
 Release: **la clave de BitLocker deja de depender de una sola PC**. La clave de recuperación que el `[A][18][C]` captura quedaba en dos lugares frágiles: la pantalla (la foto del operador) y `output\recovery\` de la PC del cliente, que el desinstalador borra. Ahora se puede depositar, cifrada de punta a punta, en la bóveda del CRM.
