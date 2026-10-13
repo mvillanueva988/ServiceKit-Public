@@ -3274,6 +3274,202 @@ Test-SmokeFunction 'Apps' '#52: Invoke-ActionApps completo con el job REAL (hand
     Invoke-ActionApps -MachineProfile ([PSCustomObject]@{ Dummy = $true })
 }
 
+# ─── #77: desinstalador de Apps.ps1 (parser, 3010/1641, componentes del sistema, UI) ───
+# Harness: corre el HANDLER REAL (Invoke-ActionApps) con Win32AppsJob/UwpAppsJob/
+# Invoke-JobWithProgress, Read-Host, Confirm-Action, Start-Process y Write-* shadoweados.
+# Invoke-Win32Uninstall, _Invoke-UninstallCommand y _Parse-UninstallCommand corren REALES.
+function Invoke-Apps77Harness {
+    param(
+        [object[]]    $Win32,
+        [string[]]    $Answers,
+        [scriptblock] $ExitFor = { param($f, $a) 0 },
+        [switch]      $Unattended
+    )
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+
+    $ev = [System.Collections.Generic.List[string]]::new()
+    $script:Apps77 = @{
+        Ev = $ev; Audit = [System.Collections.Generic.List[object]]::new()
+        Sp = [System.Collections.Generic.List[object]]::new()
+        Jobs = [System.Collections.Generic.List[bool]]::new()
+        Answers = [System.Collections.Generic.Queue[string]]::new()
+        Win32 = $Win32; ExitFor = $ExitFor
+    }
+    foreach ($x in $Answers) { $script:Apps77.Answers.Enqueue($x) }
+
+    function Read-Host { param([string]$Prompt)
+        if ($script:Apps77.Answers.Count -eq 0) { return 'V' }
+        return $script:Apps77.Answers.Dequeue() }
+    function Confirm-Action { param($Title, $Lines, $DefaultYes) return $true }
+    function Write-Host { param($Object) $script:Apps77.Ev.Add('host:' + ($Object -join ' ')) }
+    function Write-PctkWork { param($Text) $script:Apps77.Ev.Add('work:' + $Text) }
+    function Write-PctkHint { param($Text) $script:Apps77.Ev.Add('hint:' + $Text) }
+    function Write-PctkWarn { param($Text) $script:Apps77.Ev.Add('warn:' + $Text) }
+    function Write-PctkOk   { param($Text) $script:Apps77.Ev.Add('ok:' + $Text) }
+    function Write-PctkErr  { param($Text) $script:Apps77.Ev.Add('err:' + $Text) }
+    function Write-PctkLine { param($Text, $Color, [switch]$NoNewline) $script:Apps77.Ev.Add('line:' + $Text) }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details)
+        $script:Apps77.Audit.Add([PSCustomObject]@{ Action = $Action; Status = $Status; Summary = $Summary; Details = $Details }) }
+    function Start-Win32AppsJob { param([switch]$IncludeSystemComponents)
+        $script:Apps77.Jobs.Add([bool]$IncludeSystemComponents)
+        return [PSCustomObject]@{ Kind = 'w32'; Sys = [bool]$IncludeSystemComponents } }
+    function Start-UwpAppsJob { return [PSCustomObject]@{ Kind = 'uwp'; Sys = $false } }
+    function Invoke-JobWithProgress { param($Jobs, $Activity, $TimeoutSeconds)
+        $out = @()
+        foreach ($j in @($Jobs)) {
+            if ($j.Kind -eq 'w32') {
+                $out += , @($script:Apps77.Win32 | Where-Object { $j.Sys -or -not $_.IsSystemComponent })
+            } else { $out += , @() }
+        }
+        return , $out }
+    function Start-Process { param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru, [switch]$NoNewWindow)
+        $script:Apps77.Sp.Add([PSCustomObject]@{ FilePath = $FilePath; Args = $ArgumentList })
+        $script:Apps77.Ev.Add('sp:' + $FilePath)
+        return [PSCustomObject]@{ ExitCode = [int](& $script:Apps77.ExitFor $FilePath $ArgumentList) } }
+
+    Invoke-ActionApps -MachineProfile ([PSCustomObject]@{ Dummy = $true }) -Unattended:$Unattended
+    $res = $script:Apps77
+    Remove-Variable -Name Apps77 -Scope Script -ErrorAction SilentlyContinue
+    return $res
+}
+
+function New-Apps77Fixture {
+    # Arbol real en %TEMP% con espacios en la ruta: "pctk 77 <guid>\Program Files X\Foo App\unins000.exe"
+    [string] $root = Join-Path $env:TEMP ('pctk 77 ' + [guid]::NewGuid().ToString('N'))
+    [string] $dir  = Join-Path $root 'Program Files X\Foo App'
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    [string] $exe = Join-Path $dir 'unins000.exe'
+    [System.IO.File]::WriteAllBytes($exe, [byte[]](0x4D, 0x5A))
+    return [PSCustomObject]@{ Root = $root; Exe = $exe }
+}
+
+function New-Apps77App {
+    param([string]$Name, [string]$Uninstall, [string]$Quiet = '', [bool]$Sys = $false)
+    return [PSCustomObject]@{ Name = $Name; Version = '1.0'; Publisher = 'Acme'; UninstallString = $Uninstall
+                              QuietUninstallString = $Quiet; SizeMB = $null; IsSystemComponent = $Sys }
+}
+
+Test-SmokeFunction 'Apps' '#77 parser: ruta SIN comillas con espacios, con comillas, y MsiExec' {
+    $ErrorActionPreference = 'Stop'
+    $fx = New-Apps77Fixture
+    try {
+        # sin comillas, con espacios, con argumentos
+        $p = _Parse-UninstallCommand -CmdStr ($fx.Exe + ' /S /norestart')
+        if (-not $p.Success)            { throw ('sin comillas: Success=false ({0})' -f $p.Error) }
+        if ($p.Executable -ne $fx.Exe)  { throw ('sin comillas: exe={0}' -f $p.Executable) }
+        if ($p.Arguments -ne '/S /norestart') { throw ('sin comillas: args={0}' -f $p.Arguments) }
+        # sin comillas, sin argumentos
+        $p = _Parse-UninstallCommand -CmdStr $fx.Exe
+        if (-not $p.Success -or $p.Executable -ne $fx.Exe -or $p.Arguments -ne '') { throw 'sin comillas ni args: mal parseado' }
+        # con comillas: sin cambios
+        $p = _Parse-UninstallCommand -CmdStr ('"' + $fx.Exe + '" /x')
+        if (-not $p.Success -or $p.Executable -ne $fx.Exe -or $p.Arguments -ne '/x') { throw 'con comillas: mal parseado' }
+        # ruta sin comillas que no existe: falla limpio (no inventa 'C:\Program')
+        $p = _Parse-UninstallCommand -CmdStr 'C:\Program Files\NoExiste\x.exe /S'
+        if ($p.Success) { throw 'ruta inexistente no debe dar Success' }
+        # MsiExec: el preview lo toma como MSI con el GUID
+        $pv = Get-Win32UninstallPreview -App (New-Apps77App 'M' 'MsiExec.exe /X{12345678-1234-1234-1234-1234567890AB}')
+        if ($pv.Method -ne 'MSI' -or $pv.Arguments -notmatch '^/X\{12345678-1234-1234-1234-1234567890AB\} /qn') { throw ('MsiExec mal: {0} {1}' -f $pv.Method, $pv.Arguments) }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Apps' '#77 handler: sin comillas con espacios llega a Start-Process con el exe correcto' {
+    $ErrorActionPreference = 'Stop'
+    $fx = New-Apps77Fixture
+    try {
+        $app = New-Apps77App 'Foo' ($fx.Exe + ' /x')
+        $r = Invoke-Apps77Harness -Win32 @($app) -Answers @('0')
+        if ($r.Sp.Count -ne 1)                 { throw ('Start-Process x{0}, esperaba 1' -f $r.Sp.Count) }
+        if ($r.Sp[0].FilePath -ne $fx.Exe)     { throw ('FilePath={0}' -f $r.Sp[0].FilePath) }
+        if ($r.Sp[0].Args -ne '/x')            { throw ('Args={0}' -f $r.Sp[0].Args) }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Apps' '#77 handler: 3010 y 1641 = exito con UN aviso de reinicio; el audit distingue ok de ok-reinicio' {
+    $ErrorActionPreference = 'Stop'
+    $a1 = New-Apps77App 'A3010' 'MsiExec.exe /X{AAAAAAAA-1234-1234-1234-1234567890AB}'
+    $a2 = New-Apps77App 'B1641' 'MsiExec.exe /X{BBBBBBBB-1234-1234-1234-1234567890AB}'
+    $a3 = New-Apps77App 'C0'    'MsiExec.exe /X{CCCCCCCC-1234-1234-1234-1234567890AB}'
+    $exit = { param($f, $a) if ($a -match 'AAAAAAAA') { 3010 } elseif ($a -match 'BBBBBBBB') { 1641 } else { 0 } }
+    $r = Invoke-Apps77Harness -Win32 @($a1, $a2, $a3) -Answers @('0,1,2') -ExitFor $exit
+    $per = @($r.Audit | Where-Object { $_.Action -eq 'Apps.Uninstall' })
+    if ($per.Count -ne 3) { throw ('audit por app x{0}' -f $per.Count) }
+    if (@($per | Where-Object { $_.Status -eq 'Success' }).Count -ne 3) { throw '3010/1641/0 deben ser Success' }
+    if ($per[0].Details.Outcome -ne 'ok-reinicio' -or $per[1].Details.Outcome -ne 'ok-reinicio') { throw 'Outcome ok-reinicio faltante en 3010/1641' }
+    if ($per[2].Details.Outcome -ne 'ok') { throw ('Outcome de exit 0 = {0}' -f $per[2].Details.Outcome) }
+    $avisos = @($r.Ev | Where-Object { $_ -match 'REINICIAR' })
+    if ($avisos.Count -ne 1) { throw ('aviso de reinicio x{0}, esperaba exactamente 1' -f $avisos.Count) }
+    $batch = @($r.Audit | Where-Object { $_.Action -eq 'Apps.Uninstall.Batch' })[0]
+    if ($batch.Summary -notmatch 'OK=3 .*OkReinicio=2') { throw ('batch: {0}' -f $batch.Summary) }
+}
+
+Test-SmokeFunction 'Apps' '#77 handler: exit de fallo real sigue siendo fallo, y sin reinicio no hay aviso' {
+    $ErrorActionPreference = 'Stop'
+    $a1 = New-Apps77App 'Rota' 'MsiExec.exe /X{DDDDDDDD-1234-1234-1234-1234567890AB}'
+    $r = Invoke-Apps77Harness -Win32 @($a1) -Answers @('0') -ExitFor { param($f, $a) 1603 }   # coleccion de 1
+    $per = @($r.Audit | Where-Object { $_.Action -eq 'Apps.Uninstall' })
+    if ($per.Count -ne 1 -or $per[0].Status -ne 'Failed') { throw 'exit 1603 debe quedar Failed' }
+    if (@($r.Ev | Where-Object { $_ -match 'REINICIAR' }).Count -ne 0) { throw 'aviso de reinicio sin 3010/1641' }
+}
+
+Test-SmokeFunction 'Apps' '#77 handler: desatendido NO lanza la UI (queda manual); interactivo avisa ANTES de lanzar' {
+    $ErrorActionPreference = 'Stop'
+    $fx = New-Apps77Fixture
+    try {
+        $app = New-Apps77App 'ConUI' ('"' + $fx.Exe + '"')   # solo UninstallString: prioridad 3
+        # desatendido
+        $u = Invoke-Apps77Harness -Win32 @($app) -Answers @('0') -Unattended
+        if ($u.Sp.Count -ne 0) { throw ('desatendido llamo a Start-Process x{0}' -f $u.Sp.Count) }
+        $man = @($u.Audit | Where-Object { $_.Action -eq 'Apps.Uninstall' -and $_.Status -eq 'Manual' })
+        if ($man.Count -ne 1) { throw 'desatendido: falta audit Status=Manual' }
+        if (@($u.Ev | Where-Object { $_ -match '^hint:\s+- ConUI' }).Count -ne 1) { throw 'desatendido: la app no figura en el resumen manual' }
+        # interactivo
+        $i = Invoke-Apps77Harness -Win32 @($app) -Answers @('0')
+        if ($i.Sp.Count -ne 1) { throw ('interactivo Start-Process x{0}, esperaba 1' -f $i.Sp.Count) }
+        [int] $iw = [array]::FindIndex([string[]]$i.Ev.ToArray(), [Predicate[string]]{ param($s) $s -match '^warn:.*Se va a abrir el desinstalador de ConUI' })
+        [int] $isp = [array]::FindIndex([string[]]$i.Ev.ToArray(), [Predicate[string]]{ param($s) $s -like 'sp:*' })
+        if ($iw -lt 0)    { throw 'interactivo: falta el aviso previo' }
+        if ($iw -gt $isp) { throw 'interactivo: el aviso salio DESPUES de lanzar el desinstalador' }
+        # y una app con metodo silencioso (MSI) se desinstala igual en desatendido
+        $msi = New-Apps77App 'Msi' 'MsiExec.exe /X{EEEEEEEE-1234-1234-1234-1234567890AB}'
+        $m = Invoke-Apps77Harness -Win32 @($msi) -Answers @('0') -Unattended
+        if ($m.Sp.Count -ne 1) { throw 'desatendido: el MSI silencioso debe lanzarse igual' }
+    } finally { Remove-Item -LiteralPath $fx.Root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Apps' '#77 handler: toggle [C] de componentes del sistema (off por default; ON los muestra marcados)' {
+    $ErrorActionPreference = 'Stop'
+    $n = New-Apps77App 'Normal App' 'x'
+    $s = New-Apps77App 'Sys Comp'   'x' -Sys $true
+    # off: no pide componentes, no los muestra
+    $off = Invoke-Apps77Harness -Win32 @($n, $s) -Answers @('V')
+    if ($off.Jobs.Count -ne 1 -or $off.Jobs[0]) { throw 'la carga inicial debe ser SIN componentes del sistema (off por default)' }
+    if (@($off.Ev | Where-Object { $_ -match 'Sys Comp' }).Count -ne 0) { throw 'off: aparecio el componente del sistema' }
+    # on: C + V -> recarga con el flag y lo muestra marcado
+    $on = Invoke-Apps77Harness -Win32 @($n, $s) -Answers @('C', 'V')
+    if ($on.Jobs.Count -ne 2 -or -not $on.Jobs[1]) { throw 'C debe recargar con -IncludeSystemComponents' }
+    $row = @($on.Ev | Where-Object { $_ -match 'Sys Comp' })
+    if ($row.Count -ne 1 -or $row[0] -notmatch 'componente del sistema') { throw 'on: falta la fila marcada como componente del sistema' }
+    # C dos veces -> vuelve a off (la lista final vuelve a no tenerlo)
+    $twice = Invoke-Apps77Harness -Win32 @($n, $s) -Answers @('C', 'C', 'V')
+    if ($twice.Jobs.Count -ne 3 -or $twice.Jobs[2]) { throw 'segundo C debe recargar SIN el flag' }
+}
+
+Test-SmokeFunction 'Apps' '#77 Get-InstalledWin32Apps: SystemComponent fuera por default, dentro con el switch (coleccion de 1)' {
+    $ErrorActionPreference = 'Stop'
+    function Get-ItemProperty { param($Path, $ErrorAction)
+        [PSCustomObject]@{ DisplayName = 'Visible App'; DisplayVersion = '1'; UninstallString = 'x' }
+        [PSCustomObject]@{ DisplayName = 'Hidden Comp'; SystemComponent = 1; UninstallString = 'y' } }
+    $off = @(Get-InstalledWin32Apps)
+    if ($off.Count -ne 1 -or $off[0].Name -ne 'Visible App') { throw ('off: {0} items' -f $off.Count) }
+    if ($off[0].IsSystemComponent) { throw 'Visible App marcada como componente' }
+    $on = @(Get-InstalledWin32Apps -IncludeSystemComponents)
+    if ($on.Count -ne 2) { throw ('on: {0} items' -f $on.Count) }
+    $h = @($on | Where-Object Name -eq 'Hidden Comp')
+    if ($h.Count -ne 1 -or -not $h[0].IsSystemComponent) { throw 'on: Hidden Comp no marcado' }
+}
+
 Test-SmokeFunction 'Apps' '#52: SizeMB es numerico o null, nunca revienta por un EstimatedSize raro' {
     # EstimatedSize es DWORD por convencion pero el registro no lo garantiza: con
     # REG_BINARY / REG_MULTI_SZ la division tiraba ("no contiene op_Division") y con

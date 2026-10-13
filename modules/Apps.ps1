@@ -10,7 +10,10 @@ function Get-InstalledWin32Apps {
     #>
     [CmdletBinding()]
     param(
-        [string] $Filter = ''
+        [string] $Filter = '',
+        # #77: por default los componentes del sistema (SystemComponent=1) NO se listan.
+        # Con el switch aparecen, marcados con IsSystemComponent=$true.
+        [switch] $IncludeSystemComponents
     )
 
     [string[]] $regPaths = if ([Environment]::Is64BitOperatingSystem) {
@@ -39,7 +42,8 @@ function Get-InstalledWin32Apps {
 
             # Excluir: sin nombre, componentes del sistema, sub-entradas de padre visible
             if ($null -eq $pDN  -or [string]::IsNullOrWhiteSpace($pDN.Value))             { continue }
-            if ($null -ne $pSC  -and $pSC.Value -eq 1)                                    { continue }
+            [bool] $isSysComp = ($null -ne $pSC -and $pSC.Value -eq 1)
+            if ($isSysComp -and -not $IncludeSystemComponents)                            { continue }
             if ($null -ne $pPKN -and -not [string]::IsNullOrWhiteSpace($pPKN.Value))      { continue }
             if (-not $seen.Add(([string] $pDN.Value).Trim()))                              { continue }  # dedup
 
@@ -70,6 +74,7 @@ function Get-InstalledWin32Apps {
                 UninstallString      = if ($null -ne $pUS)  { [string] $pUS.Value  } else { '' }
                 QuietUninstallString = if ($null -ne $pQUS) { [string] $pQUS.Value } else { '' }
                 SizeMB               = $sizeMB
+                IsSystemComponent    = $isSysComp
             })
         }
     }
@@ -154,7 +159,10 @@ function Invoke-Win32Uninstall {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [PSCustomObject] $App
+        [PSCustomObject] $App,
+
+        # Mismo vocabulario que ProfileEngine (-Unattended): sin operador presente.
+        [switch] $Unattended
     )
 
     [PSCustomObject] $preview = Get-Win32UninstallPreview -App $App
@@ -180,12 +188,15 @@ function Invoke-Win32Uninstall {
             $proc = Start-Process -FilePath 'msiexec.exe' `
                                   -ArgumentList "/X{$guid} /qn /norestart" `
                                   -Wait -PassThru -NoNewWindow
+            [string] $msiOutcome = Get-UninstallOutcome -ExitCode ([int] $proc.ExitCode)
             return [PSCustomObject]@{
-                Success  = ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 1605)
-                Method   = 'MSI'
-                App      = $App.Name
-                ExitCode = $proc.ExitCode
-                Error    = ''
+                Success        = ($msiOutcome -ne 'fail')
+                Method         = 'MSI'
+                App            = $App.Name
+                ExitCode       = $proc.ExitCode
+                Error          = ''
+                Outcome        = $msiOutcome
+                RebootRequired = ($msiOutcome -eq 'ok-reinicio')
             }
         }
         catch {
@@ -193,12 +204,42 @@ function Invoke-Win32Uninstall {
         }
     }
 
-    # ── Prioridad 3: UninstallString directo (puede abrir UI) ────────────────
+    # ── Prioridad 3: UninstallString directo (puede abrir UI, sin timeout) ───
+    # #77: desatendido NO lo lanza (nadie va a cerrar la UI): queda "requiere
+    # desinstalacion manual". Interactivo: el handler avisa antes de llamar aca.
     if (-not [string]::IsNullOrWhiteSpace($App.UninstallString)) {
+        if ($Unattended) {
+            return [PSCustomObject]@{
+                Success        = $false
+                Method         = 'Manual'
+                App            = $App.Name
+                Command        = $App.UninstallString
+                ExitCode       = $null
+                Error          = 'Requiere desinstalacion manual (el desinstalador abre una UI y esta corrida es desatendida)'
+                Outcome        = 'manual'
+                RebootRequired = $false
+                ManualRequired = $true
+            }
+        }
         return _Invoke-UninstallCommand -CmdStr $App.UninstallString -Method 'Interactive' -AppName $App.Name
     }
 
     return [PSCustomObject]@{ Success = $false; Method = 'None'; App = $App.Name; Command = ''; ExitCode = $null; Error = 'Sin UninstallString en el registro' }
+}
+
+# ─── Get-UninstallOutcome ─────────────────────────────────────────────────────
+function Get-UninstallOutcome {
+    <#
+    .SYNOPSIS
+        Clasifica el exit code de un desinstalador: 'ok' (0, 1605 = ya no estaba),
+        'ok-reinicio' (3010 / 1641 = exito, hace falta reiniciar) o 'fail'.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [int] $ExitCode)
+
+    if ($ExitCode -eq 3010 -or $ExitCode -eq 1641) { return 'ok-reinicio' }
+    if ($ExitCode -eq 0    -or $ExitCode -eq 1605) { return 'ok' }
+    return 'fail'
 }
 
 # ─── Invoke-UwpUninstall ─────────────────────────────────────────────────────
@@ -379,13 +420,16 @@ function _Invoke-UninstallCommand {
         if ($Method -eq 'Quiet')     { $startParams['NoNewWindow']  = $true }
 
         $proc = Start-Process @startParams
+        [string] $outcome = Get-UninstallOutcome -ExitCode ([int] $proc.ExitCode)
         return [PSCustomObject]@{
-            Success  = ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 1605)
-            Method   = $Method
-            App      = $AppName
-            Command  = $parsed.CommandLine
-            ExitCode = $proc.ExitCode
-            Error    = ''
+            Success        = ($outcome -ne 'fail')
+            Method         = $Method
+            App            = $AppName
+            Command        = $parsed.CommandLine
+            ExitCode       = $proc.ExitCode
+            Error          = ''
+            Outcome        = $outcome
+            RebootRequired = ($outcome -eq 'ok-reinicio')
         }
     }
     catch {
@@ -410,6 +454,28 @@ function _Parse-UninstallCommand {
     elseif ($CmdStr -match '^(\S+)\s*(.*)$') {
         $exe = $Matches[1]
         $cmdArgs = $Matches[2].Trim()
+
+        # #77: ruta SIN comillas con espacios ("C:\Program Files\X\unins000.exe /S").
+        # Como Windows: prefijos cada vez mas largos (cortados en un espacio) hasta el
+        # primero que exista como archivo; el resto son argumentos.
+        [string] $firstTok = $exe
+        [string] $trimmed  = $CmdStr.Trim()
+        if ([System.IO.Path]::IsPathRooted($trimmed)) {
+            [int[]] $cuts = @(
+                [regex]::Matches($trimmed, '\s') | ForEach-Object { [int] $_.Index }
+            ) + @([int] $trimmed.Length)
+            foreach ($cut in $cuts) {
+                [string] $prefix = $trimmed.Substring(0, $cut)
+                foreach ($cand in @($prefix, ($prefix + '.exe'))) {
+                    if (Test-Path -LiteralPath $cand -PathType Leaf -ErrorAction SilentlyContinue) {
+                        $exe = $cand
+                        $cmdArgs = $trimmed.Substring($cut).Trim()
+                        break
+                    }
+                }
+                if ($exe -ne $firstTok) { break }
+            }
+        }
     }
     else {
         return [PSCustomObject]@{
@@ -463,16 +529,19 @@ function Start-Win32AppsJob {
     <#
     .SYNOPSIS
         Carga la lista completa de apps Win32 instaladas de forma asíncrona.
+        -IncludeSystemComponents: incluye las entradas SystemComponent=1 (#77).
     #>
     [CmdletBinding()]
-    param()
+    param([switch] $IncludeSystemComponents)
+
+    [string] $sysFlag = if ($IncludeSystemComponents) { ' -IncludeSystemComponents' } else { '' }
 
     [string] $fnBody = ${Function:Get-InstalledWin32Apps}.ToString()
     [scriptblock] $jobBlock = [scriptblock]::Create(@"
 function Get-InstalledWin32Apps {
 $fnBody
 }
-Get-InstalledWin32Apps
+Get-InstalledWin32Apps$sysFlag
 "@)
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'Win32AppsLoad'
 }

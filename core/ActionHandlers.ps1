@@ -427,8 +427,14 @@ function Invoke-ActionDriverBackup {
 
 function Invoke-ActionApps {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile,
+        # #77: mismo vocabulario que ProfileEngine. Desatendido = las apps cuyo unico
+        # metodo abre una UI de desinstalacion NO se lanzan: quedan como "manual".
+        [Parameter()] [switch] $Unattended
+    )
     $null = $MachineProfile
+    [bool] $showSysComp = $false   # #77: toggle [C], apagado por default
 
     Write-ActionAudit -Action 'Apps.List' -Status 'Started'
     Write-PctkWork '  Listando apps Win32 + UWP (puede tardar)...'
@@ -447,9 +453,10 @@ function Invoke-ActionApps {
         return
     }
 
-    # Build unified index list: Win32 first, UWP after
-    [System.Collections.Generic.List[PSCustomObject]] $allApps =
-        [System.Collections.Generic.List[PSCustomObject]]::new()
+    [string] $raw = ''
+    while ($true) {
+    # Build unified index list: Win32 first, UWP after (se rearma al alternar [C])
+    $allApps = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($a in $win32) { $allApps.Add([PSCustomObject]@{ Type = 'Win32'; App = $a }) }
     foreach ($a in $uwp)   { $allApps.Add([PSCustomObject]@{ Type = 'UWP';   App = $a }) }
 
@@ -462,7 +469,8 @@ function Invoke-ActionApps {
             if ($nm.Length -gt 38) { $nm = $nm.Substring(0, 35) + '...' }
             [string] $ver = if (-not [string]::IsNullOrWhiteSpace($a.Version))   { $a.Version.Substring(0, [Math]::Min($a.Version.Length, 12)) }   else { '' }
             [string] $pub = if (-not [string]::IsNullOrWhiteSpace($a.Publisher)) { $a.Publisher.Substring(0, [Math]::Min($a.Publisher.Length, 28)) } else { '' }
-            Write-Host ('  [{0,3}] {1,-38}  {2,-12}  {3}' -f $i, $nm, $ver, $pub)
+            [string] $sysTag = if ($a.PSObject.Properties['IsSystemComponent'] -and $a.IsSystemComponent) { '  [componente del sistema]' } else { '' }
+            Write-Host ('  [{0,3}] {1,-38}  {2,-12}  {3}{4}' -f $i, $nm, $ver, $pub, $sysTag)
         }
     }
 
@@ -481,8 +489,18 @@ function Invoke-ActionApps {
     }
 
     Write-Host ''
-    Write-PctkHint ('  Total: {0} Win32 + {1} UWP = {2}. Numeros, lista (3,7), rango (4-8) o V para volver:' -f $win32.Count, $uwp.Count, $allApps.Count)
-    [string] $raw = (Read-Host '  >').Trim()
+    Write-PctkHint ('  Total: {0} Win32 + {1} UWP = {2}. Numeros, lista (3,7), rango (4-8), [C] componentes del sistema: {3}, o V para volver:' -f $win32.Count, $uwp.Count, $allApps.Count, $(if ($showSysComp) { 'ON' } else { 'off' }))
+    $raw = (Read-Host '  >').Trim()
+    if ($raw.ToUpperInvariant() -eq 'C') {
+        $showSysComp = -not $showSysComp
+        Write-PctkWork ('  Componentes del sistema: {0}' -f $(if ($showSysComp) { 'ON' } else { 'off' }))
+        $reload = (Invoke-JobWithProgress -Jobs @((Start-Win32AppsJob -IncludeSystemComponents:$showSysComp)) -Activity 'Listado de apps' -TimeoutSeconds 180)
+        $win32 = @()
+        if ($reload.Count -ge 1 -and $null -ne $reload[0]) { $win32 = @($reload[0]) }
+        continue
+    }
+    break
+    }
     if ([string]::IsNullOrWhiteSpace($raw) -or $raw.ToUpperInvariant() -eq 'V') { return }
 
     # Parse multi-selection: numeros sueltos, lista con coma/espacio, rangos N-M
@@ -555,18 +573,36 @@ function Invoke-ActionApps {
     Write-Host ''
     [int] $okCount   = 0
     [int] $failCount = 0
+    [int] $rebootCount = 0
+    [System.Collections.Generic.List[string]] $manualApps = [System.Collections.Generic.List[string]]::new()
     foreach ($item in $queue) {
+        if ($item.Entry.Type -eq 'Win32' -and -not $Unattended -and $item.Preview.Method -eq 'Interactive') {
+            # #77: el desinstalador abre una UI y se espera sin timeout: avisar ANTES.
+            Write-PctkWarn ('  [!] Se va a abrir el desinstalador de {0}; terminalo y volve.' -f $item.AppName)
+        }
         Write-PctkLine ('  Desinstalando: {0}...' -f $item.AppName) 'work' -NoNewline
         if ($item.Entry.Type -eq 'Win32') {
-            $r = Invoke-Win32Uninstall -App $item.Entry.App
+            $r = Invoke-Win32Uninstall -App $item.Entry.App -Unattended:$Unattended
         } else {
             $r = Invoke-UwpUninstall -App $item.Entry.App
         }
-        if ($r.Success) {
+        $rManual = ($null -ne $r.PSObject.Properties['ManualRequired'] -and $r.ManualRequired)
+        $rReboot = ($null -ne $r.PSObject.Properties['RebootRequired'] -and $r.RebootRequired)
+        if ($rManual) {
+            $manualApps.Add([string] $item.AppName)
+            Write-PctkWarn ' [manual] requiere desinstalacion manual'
+            Write-ActionAudit -Action 'Apps.Uninstall' -Status 'Manual' `
+                -Summary ('{0} via {1} [manual]' -f $item.AppName, $r.Method) -Details $r
+        } elseif ($r.Success) {
             $okCount++
-            Write-PctkOk ' [OK]'
+            if ($rReboot) {
+                $rebootCount++
+                Write-PctkOk ' [OK - reinicio pendiente]'
+            } else {
+                Write-PctkOk ' [OK]'
+            }
             Write-ActionAudit -Action 'Apps.Uninstall' -Status 'Success' `
-                -Summary ('{0} via {1}' -f $item.AppName, $r.Method) -Details $r
+                -Summary ('{0} via {1} [{2}]' -f $item.AppName, $r.Method, $(if ($rReboot) { 'ok-reinicio' } else { 'ok' })) -Details $r
         } else {
             $failCount++
             Write-PctkErr (' [!] {0}' -f $r.Error)
@@ -577,9 +613,16 @@ function Invoke-ActionApps {
 
     # Resumen + audit batch
     Write-Host ''
-    Write-PctkLine ('  Resultado: {0} OK / {1} fallidas' -f $okCount, $failCount) $(if ($failCount -gt 0) { 'warn' } else { 'ok' })
+    Write-PctkLine ('  Resultado: {0} OK / {1} fallidas / {2} manuales' -f $okCount, $failCount, $manualApps.Count) $(if ($failCount -gt 0 -or $manualApps.Count -gt 0) { 'warn' } else { 'ok' })
+    if ($manualApps.Count -gt 0) {
+        Write-PctkWarn '  Requieren desinstalacion manual (no se lanzo su desinstalador):'
+        foreach ($m in $manualApps) { Write-PctkHint ('    - {0}' -f $m) }
+    }
+    if ($rebootCount -gt 0) {
+        Write-PctkWarn ('  [!] Hace falta REINICIAR la PC para terminar de desinstalar ({0} app(s) lo pidieron).' -f $rebootCount)
+    }
     Write-ActionAudit -Action 'Apps.Uninstall.Batch' -Status 'Success' `
-        -Summary ('OK={0} Failed={1}' -f $okCount, $failCount)
+        -Summary ('OK={0} Failed={1} Manual={2} OkReinicio={3}' -f $okCount, $failCount, $manualApps.Count, $rebootCount)
 }
 
 function Invoke-ActionPrivacy {
