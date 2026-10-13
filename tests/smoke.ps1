@@ -2629,6 +2629,178 @@ Test-SmokeFunction 'ConsoleTheme' 'Get-PctkKindSpec: shape + 16-color por kind' 
     if ((Get-PctkKindSpec 'zzz').C16  -ne 'Gray')     { throw "kind desconocido C16 != Gray (default value)" }
 }
 
+# --- P5: Release.ps1 falla con exit 1 y verifica lo publicado contra la API ---
+# v2.7.0 quedo 9 dias como tag SIN release: el token habia vencido, el catch de
+# Release.ps1 imprimio un mensaje rojo y el script termino con exit 0. Nadie lo vio.
+#
+# Se corre el SCRIPT REAL (una copia byte a byte en TEMP, para que dist\ caiga ahi
+# y no en el repo), invocado como lo invoca el flujo de release, y se mira el exit
+# code. NO una funcion suelta: el bug vivia en el wiring (catch -> fin normal).
+#
+# SEGURIDAD: los bordes que salen a la red o a git estan shadoweados por dobles que
+# TIRAN ante cualquier llamada inesperada (otra URL, otro repo, otro token). El
+# token de la sesion se reemplaza por uno falso mientras corre el escenario y se
+# restaura al final: aunque la maquina tenga GITHUB_TOKEN configurado, publicar de
+# verdad desde aca es imposible.
+function Invoke-ReleaseSmokeScenario {
+    param(
+        [Parameter(Mandatory)] [string] $Scenario,
+        [switch] $Dirty
+    )
+
+    # Espejo de produccion: Release.ps1 corre via -File, con EAP por defecto.
+    $ErrorActionPreference = 'Continue'
+
+    [string] $srcScript = Join-Path $repoRoot 'Release.ps1'
+    [string] $tmpRoot   = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-release-smoke-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $tmpRoot | Out-Null
+    Copy-Item -LiteralPath $srcScript -Destination (Join-Path $tmpRoot 'Release.ps1')
+    [System.IO.File]::WriteAllText((Join-Path $tmpRoot 'Launch.ps1'), "`$GitHubRepo = 'smoke-test/no-existe'`n")
+
+    $relCtx = @{
+        Scenario = $Scenario
+        Repo     = 'smoke-test/no-existe'
+        Version  = '0.0.0-smoke'
+        Token    = 'smoke-token-falso-no-publica'
+        Calls    = [System.Collections.Generic.List[string]]::new()
+        Uploads  = @{}
+        GetDone  = $false
+    }
+
+    # Doble de git: solo 'status' (guard de arbol sucio) y 'archive' (ZIP falso).
+    function git {
+        [object[]] $a = @($args)
+        [void] $relCtx.Calls.Add('git ' + ($a -join ' '))
+        if ($a -contains 'status') {
+            $global:LASTEXITCODE = 0
+            if ($relCtx.Scenario -eq 'dirty') { return ' M algo.ps1' }
+            return ''
+        }
+        if ($a -contains 'archive') {
+            if ($relCtx.Scenario -eq 'archive-fail') { $global:LASTEXITCODE = 128; return }
+            [int] $i = [array]::IndexOf($a, '-o')
+            if ($i -lt 0) { throw 'DOBLE git: archive sin -o' }
+            [byte[]] $fake = [byte[]] (@(80, 75, 5, 6) + @(0) * 18)
+            [System.IO.File]::WriteAllBytes([string] $a[$i + 1], $fake)
+            $global:LASTEXITCODE = 0
+            return
+        }
+        throw ('DOBLE git: llamada inesperada: git {0}' -f ($a -join ' '))
+    }
+
+    # Doble de la API de GitHub. Tira ante cualquier cosa que no sea el repo de
+    # prueba con el token falso.
+    function Invoke-RestMethod {
+        [CmdletBinding()]
+        param(
+            [string] $Uri,
+            [string] $Method = 'Get',
+            [System.Collections.IDictionary] $Headers,
+            [string] $ContentType,
+            [object] $Body
+        )
+        if ($null -eq $Headers -or [string] $Headers['Authorization'] -ne ('token ' + $relCtx.Token)) {
+            throw ('DOBLE: Authorization inesperado en {0} {1}' -f $Method, $Uri)
+        }
+        [void] $relCtx.Calls.Add(('{0} {1}' -f $Method.ToUpperInvariant(), $Uri))
+        [string] $api    = 'https://api.github.com/repos/' + $relCtx.Repo
+        [string] $upload = 'https://uploads.github.com/repos/' + $relCtx.Repo + '/releases/1/assets?name='
+
+        if ($Method -eq 'Post' -and $Uri -eq ($api + '/releases')) {
+            if ($relCtx.Scenario -eq 'post401') { throw 'El servidor remoto devolvio un error: (401) No autorizado.' }
+            return [pscustomobject] @{
+                id         = 1
+                upload_url = 'https://uploads.github.com/repos/' + $relCtx.Repo + '/releases/1/assets{?name,label}'
+                html_url   = 'https://github.com/' + $relCtx.Repo + '/releases/tag/v' + $relCtx.Version
+            }
+        }
+        if ($Method -eq 'Post' -and $Uri.StartsWith($upload)) {
+            [string] $name = $Uri.Substring($upload.Length)
+            if ($relCtx.Scenario -eq 'upload-fail' -and $name -like '*.zip') { throw 'El servidor remoto devolvio un error: (502) Puerta de enlace no valida.' }
+            [int] $len = @($Body).Count
+            if ($Body -is [byte[]]) { $len = $Body.Length }
+            $relCtx.Uploads[$name] = $len
+            return [pscustomobject] @{ name = $name; state = 'uploaded'; size = $len }
+        }
+        if ($Method -eq 'Get' -and $Uri -eq ($api + '/releases/tags/v' + $relCtx.Version)) {
+            $relCtx.GetDone = $true
+            [System.Collections.Generic.List[object]] $assets = [System.Collections.Generic.List[object]]::new()
+            foreach ($k in @($relCtx.Uploads.Keys)) {
+                [int] $size = [int] $relCtx.Uploads[$k]
+                if ($relCtx.Scenario -eq 'verify-missing' -and $k -like '*.sha256') { continue }
+                if ($relCtx.Scenario -eq 'verify-size' -and $k -like '*.zip') { $size = $size + 1 }
+                [void] $assets.Add([pscustomobject] @{ name = $k; state = 'uploaded'; size = $size })
+            }
+            return [pscustomobject] @{
+                tag_name = 'v' + $relCtx.Version
+                draft    = $false
+                html_url = 'https://github.com/' + $relCtx.Repo + '/releases/tag/v' + $relCtx.Version
+                assets   = $assets.ToArray()
+            }
+        }
+        throw ('DOBLE: llamada inesperada a la API: {0} {1}' -f $Method, $Uri)
+    }
+    function Invoke-WebRequest { throw 'DOBLE: Invoke-WebRequest no esperado en Release.ps1' }
+
+    [string] $prevToken = $env:GITHUB_TOKEN
+    try {
+        $env:GITHUB_TOKEN = $relCtx.Token
+        $global:LASTEXITCODE = -999
+        if ($Dirty) {
+            & (Join-Path $tmpRoot 'Release.ps1') -Version $relCtx.Version -Repo $relCtx.Repo -Publish *> $null
+        } else {
+            & (Join-Path $tmpRoot 'Release.ps1') -Version $relCtx.Version -Repo $relCtx.Repo -Publish -AllowDirty *> $null
+        }
+        [int] $code = $global:LASTEXITCODE
+    }
+    finally {
+        $env:GITHUB_TOKEN = $prevToken
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    return [pscustomobject] @{
+        ExitCode = $code
+        Calls    = @($relCtx.Calls)
+        GetDone  = [bool] $relCtx.GetDone
+        Uploads  = $relCtx.Uploads
+    }
+}
+
+Test-SmokeFunction 'Release' 'P5: POST de la release falla (401) -> exit 1' {
+    $r = Invoke-ReleaseSmokeScenario -Scenario 'post401'
+    if ($r.ExitCode -ne 1) { throw ('exit {0}, esperaba 1 (el 401 no puede terminar "bien")' -f $r.ExitCode) }
+}
+Test-SmokeFunction 'Release' 'P5: falla el upload del ZIP -> exit 1' {
+    $r = Invoke-ReleaseSmokeScenario -Scenario 'upload-fail'
+    if ($r.ExitCode -ne 1) { throw ('exit {0}, esperaba 1' -f $r.ExitCode) }
+}
+Test-SmokeFunction 'Release' 'P5: publica OK pero el GET no ve el checksum -> exit 1' {
+    $r = Invoke-ReleaseSmokeScenario -Scenario 'verify-missing'
+    if (-not $r.GetDone)   { throw 'no verifico contra la API (sin GET de releases/tags)' }
+    if ($r.ExitCode -ne 1) { throw ('exit {0}, esperaba 1 (falta un asset)' -f $r.ExitCode) }
+}
+Test-SmokeFunction 'Release' 'P5: publica OK pero el ZIP publicado tiene otro tamano -> exit 1' {
+    $r = Invoke-ReleaseSmokeScenario -Scenario 'verify-size'
+    if (-not $r.GetDone)   { throw 'no verifico contra la API (sin GET de releases/tags)' }
+    if ($r.ExitCode -ne 1) { throw ('exit {0}, esperaba 1 (tamano distinto)' -f $r.ExitCode) }
+}
+Test-SmokeFunction 'Release' 'P5: todo OK -> exit 0, dos assets subidos y verificados' {
+    $r = Invoke-ReleaseSmokeScenario -Scenario 'ok'
+    if ($r.ExitCode -ne 0) { throw ('exit {0}, esperaba 0' -f $r.ExitCode) }
+    if (-not $r.GetDone)   { throw 'termino OK sin verificar contra la API (sin GET de releases/tags)' }
+    if ($r.Uploads.Count -ne 2) { throw ('subio {0} assets, esperaba 2 (ZIP + checksum)' -f $r.Uploads.Count) }
+}
+Test-SmokeFunction 'Release' 'P5: git archive falla -> exit 1' {
+    $r = Invoke-ReleaseSmokeScenario -Scenario 'archive-fail'
+    if ($r.ExitCode -ne 1) { throw ('exit {0}, esperaba 1' -f $r.ExitCode) }
+    if (@($r.Calls | Where-Object { $_ -like 'POST *' }).Count -gt 0) { throw 'publico aunque git archive fallo' }
+}
+Test-SmokeFunction 'Release' 'P5: arbol sucio sin -AllowDirty -> exit 1' {
+    $r = Invoke-ReleaseSmokeScenario -Scenario 'dirty' -Dirty
+    if ($r.ExitCode -ne 1) { throw ('exit {0}, esperaba 1' -f $r.ExitCode) }
+    if (@($r.Calls | Where-Object { $_ -like 'git *archive*' }).Count -gt 0) { throw 'empaqueto aunque el arbol estaba sucio' }
+}
+
 # ─── DiskMaintenance: Resolve-VolumeMaintenanceOp (funcion pura) ─────────────
 Test-SmokeFunction 'DiskMaintenance' 'Resolve-VolumeMaintenanceOp: SSD->ReTrim' {
     $ErrorActionPreference = 'Stop'
