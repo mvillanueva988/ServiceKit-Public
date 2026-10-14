@@ -945,10 +945,13 @@ function Invoke-ActionCoreIsolation {
     if ($sub -eq 'D') {
         # #27(a): aviso anti-cheat kernel ANTES de todo lo demas. Solo avisa: no
         # detecta juegos ni gatea. Default N (Enter vacio = no toca nada).
+        # El texto sale de Get-HvciAntiCheatNotice (core\AntiCheatNotice.ps1), el
+        # mismo que muestra el preview de recetas nombradas (#87).
+        [string[]] $acTxt = @(Get-HvciAntiCheatNotice)
         Write-Host ''
-        Write-PctkWarn '  [!] Juegos con anti-cheat a nivel kernel (Valorant/Vanguard, FACEIT, EasyAntiCheat, BattlEye):'
-        Write-PctkWarn '      algunos exigen Memory Integrity / VBS activos y pueden dejar de abrir si se apaga.'
-        Write-PctkHint '      Preguntale al cliente a que juega antes de seguir. Se revierte con [E].'
+        Write-PctkWarn ('  [!] ' + $acTxt[0])
+        Write-PctkWarn ('      ' + $acTxt[1])
+        Write-PctkHint ('      ' + $acTxt[2] + ' Se revierte con [E].')
         [string] $acAns = (Read-Host '  Deshabilitar HVCI igual? [s/N]').Trim().ToUpperInvariant()
         if (-not ($acAns -eq 'S' -or $acAns -eq 'SI' -or $acAns -eq 'Y' -or $acAns -eq 'YES')) {
             Write-PctkHint '  Cancelado.'

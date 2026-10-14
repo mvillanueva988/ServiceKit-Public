@@ -261,6 +261,10 @@ function Get-NamedProfilePreviewLines {
     [object] $hvP = $gt.PSObject.Properties['hvci']
     if ($null -ne $hvP -and ([string]$hvP.Value) -eq 'off') {
         $lines.Add('[i] HVCI off: VBS se preserva (WSL2/Hyper-V no se rompen).')
+        # #87: mismo aviso anti-cheat que el [A][12] [D] (#27a), misma fuente. Solo
+        # avisa: la confirmacion es la del preview, sin gate ni deteccion de juegos.
+        foreach ($acL in @(Get-HvciAntiCheatNotice)) { $lines.Add('[AVISO] ' + $acL) }
+        $lines.Add('[AVISO] Se revierte con [A][12] [E] (reinicio requerido).')
     }
     [object] $hgP = $gt.PSObject.Properties['hags']
     if ($null -ne $hgP -and $MachineProfile.PSObject.Properties['HasIGpuOnly'] -and $MachineProfile.HasIGpuOnly) {
