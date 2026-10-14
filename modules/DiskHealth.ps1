@@ -33,35 +33,9 @@ $script:DH_SmartTimeoutSec = 12   # Get-StorageReliabilityCounter por disco (SMA
 # castear [string] dan el NUMERO crudo ('0' en vez de 'Healthy', '4' en vez de
 # 'SSD'), no el label amigable. Comparar contra 'Healthy' marcaba CRIT a discos
 # sanos. El smoke con fixtures de string nunca lo cazó — solo el HW real.
-# Mapeo oficial: HealthStatus 0=Healthy 1=Warning 2/3=Unhealthy 5=Unknown.
-function ConvertTo-DiskHealthLabel {
-    [CmdletBinding()]
-    param([object] $Raw)
-    if ($null -eq $Raw) { return '' }
-    [string] $s = ([string] $Raw).Trim()
-    if ([string]::IsNullOrWhiteSpace($s)) { return '' }
-    switch -Regex ($s) {
-        '^(0|Healthy)$'     { return 'Healthy' }
-        '^(1|Warning)$'     { return 'Warning' }
-        '^(2|3|Unhealthy)$' { return 'Unhealthy' }
-        '^(5|Unknown)$'     { return 'Unknown' }
-        default             { return $s }   # valor inesperado → crudo, no asumir
-    }
-}
-# Mapeo oficial MediaType: 0=Unspecified 3=HDD 4=SSD 5=SCM.
-function ConvertTo-DiskMediaTypeLabel {
-    [CmdletBinding()]
-    param([object] $Raw)
-    if ($null -eq $Raw) { return 'Desconocido' }
-    [string] $s = ([string] $Raw).Trim()
-    switch -Regex ($s) {
-        '^(3|HDD)$'          { return 'HDD' }
-        '^(4|SSD)$'          { return 'SSD' }
-        '^(5|SCM)$'          { return 'SCM' }
-        '^(0|Unspecified|)$' { return 'Desconocido' }
-        default              { return $s }
-    }
-}
+# ConvertTo-DiskHealthLabel y ConvertTo-DiskMediaTypeLabel viven en
+# modules\Telemetry.ps1 desde #3: el job de telemetria solo dot-sourcea ese
+# archivo y el snapshot tambien los necesita. Una sola definicion del mapeo.
 
 # ─── Get-DiskAlertLevel (lógica pura de umbral — testeable sin HW) ────────────
 function Get-DiskAlertLevel {

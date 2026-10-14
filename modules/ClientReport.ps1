@@ -271,6 +271,7 @@ function New-ClientReport {
     _CR_H '    .badge-ok   { background: #e6f4ea; color: #1e8e3e; }'
     _CR_H '    .badge-warn { background: #fef7e0; color: #b06000; }'
     _CR_H '    .badge-bad  { background: #fce8e6; color: #d32f2f; }'
+    _CR_H '    .badge-na   { background: #f1f3f4; color: #5f6368; }'
     _CR_H '    /* Pie */'
     _CR_H '    .report-footer {'
     _CR_H '      margin-top: 28px;'
@@ -381,23 +382,32 @@ function New-ClientReport {
                 foreach ($d in $disks) {
                     [string] $dName   = if ($null -ne $d.PSObject.Properties['Name'])       { [string]$d.Name }       else { 'Disco' }
                     [string] $dType   = if ($null -ne $d.PSObject.Properties['MediaType'])   { [string]$d.MediaType }  else { '' }
+                    # #3: snapshots viejos traen el enum crudo ('4'); los nuevos, el label.
+                    if (-not [string]::IsNullOrWhiteSpace($dType)) { $dType = ConvertTo-DiskMediaTypeLabel -Raw $dType }
                     [string] $dSize   = if ($null -ne $d.PSObject.Properties['SizeGb'])      { [string]$d.SizeGb }     else { '' }
                     [string] $dHealth = if ($null -ne $d.PSObject.Properties['HealthStatus']) { [string]$d.HealthStatus } else { '' }
                     [string] $dTemp   = if ($null -ne $d.PSObject.Properties['TempC'] -and [int]$d.TempC -gt 0)  { ('{0} C' -f [string]$d.TempC)    } else { '' }
                     [string] $dWear   = if ($null -ne $d.PSObject.Properties['WearPct'] -and [int]$d.WearPct -gt 0) { ('{0}%' -f [string]$d.WearPct) } else { '' }
 
-                    # Badge de salud
+                    # Badge de salud. #3: el estado se traduce a su significado para el
+                    # cliente; un snapshot viejo trae el enum crudo ('0' = Healthy) y se
+                    # normaliza igual. Un valor que no se reconoce sale crudo y en rojo:
+                    # ante la duda, no se le dice "sano" al cliente.
                     [string] $healthBadge = ''
                     if (-not [string]::IsNullOrWhiteSpace($dHealth)) {
-                        [string] $hLow = $dHealth.ToLowerInvariant()
-                        [string] $badgeCls = if ($hLow -eq 'healthy' -or $hLow -eq 'ok' -or $hLow -eq 'bueno') {
-                            'badge-ok'
+                        [string] $hLow = (ConvertTo-DiskHealthLabel -Raw $dHealth).ToLowerInvariant()
+                        [string] $badgeCls = 'badge-bad'
+                        [string] $badgeTxt = $dHealth
+                        if ($hLow -eq 'healthy' -or $hLow -eq 'ok' -or $hLow -eq 'bueno') {
+                            $badgeCls = 'badge-ok';   $badgeTxt = 'Sano'
                         } elseif ($hLow -eq 'warning' -or $hLow -eq 'advertencia' -or $hLow -eq 'caution') {
-                            'badge-warn'
-                        } else {
-                            'badge-bad'
+                            $badgeCls = 'badge-warn'; $badgeTxt = 'Con advertencias'
+                        } elseif ($hLow -eq 'unhealthy') {
+                            $badgeCls = 'badge-bad';  $badgeTxt = 'Con fallas'
+                        } elseif ($hLow -eq 'unknown') {
+                            $badgeCls = 'badge-na';   $badgeTxt = 'Sin dato'
                         }
-                        $healthBadge = (' <span class="badge {0}">{1}</span>' -f $badgeCls, (_CR_Esc $dHealth))
+                        $healthBadge = (' <span class="badge {0}">{1}</span>' -f $badgeCls, (_CR_Esc $badgeTxt))
                     }
 
                     [string] $diskLabel = $dName

@@ -149,6 +149,47 @@ function Test-IsVirtualMachine {
     }
 }
 
+# ─── Normalizadores de enum de disco (MSFT_PhysicalDisk) ──────────────────────
+# Helpers internos (T-N1): DEBEN vivir en Telemetry.ps1 porque el runspace del
+# job de telemetria solo dot-sourcea este archivo. DiskHealth.ps1 y
+# DiskMaintenance.ps1 los usan desde aca (main.ps1 dot-sourcea todo modules\);
+# ClientReport, RawAudit y ResearchPrompt tambien, para leer snapshots VIEJOS
+# que se guardaron con el numero crudo. Una sola definicion del mapeo.
+# Get-PhysicalDisk devuelve HealthStatus y MediaType como UInt16. Adentro del
+# runspace de Invoke-WithTimeout el [string] da el NUMERO ('0', '4'), no el label:
+# el snapshot guardaba health=0 y el [8] pintaba rojo un disco sano (#3, y antes
+# el BUG de DiskHealth cazado en HW 2026-05-30).
+# Doc MSFT_PhysicalDisk: HealthStatus 0=Healthy 1=Warning 2=Unhealthy 5=Unknown;
+# MediaType 0=Unspecified 3=HDD 4=SSD 5=SCM. El 3=Unhealthy no esta en esa doc:
+# se conserva por las dudas (ante un valor de falla, no decir "sano").
+function ConvertTo-DiskHealthLabel {
+    [CmdletBinding()]
+    param([object] $Raw)
+    if ($null -eq $Raw) { return '' }
+    [string] $s = ([string] $Raw).Trim()
+    if ([string]::IsNullOrWhiteSpace($s)) { return '' }
+    switch -Regex ($s) {
+        '^(0|Healthy)$'     { return 'Healthy' }
+        '^(1|Warning)$'     { return 'Warning' }
+        '^(2|3|Unhealthy)$' { return 'Unhealthy' }
+        '^(5|Unknown)$'     { return 'Unknown' }
+        default             { return $s }   # valor inesperado → crudo, no asumir
+    }
+}
+function ConvertTo-DiskMediaTypeLabel {
+    [CmdletBinding()]
+    param([object] $Raw)
+    if ($null -eq $Raw) { return 'Desconocido' }
+    [string] $s = ([string] $Raw).Trim()
+    switch -Regex ($s) {
+        '^(3|HDD)$'          { return 'HDD' }
+        '^(4|SSD)$'          { return 'SSD' }
+        '^(5|SCM)$'          { return 'SCM' }
+        '^(0|Unspecified|)$' { return 'Desconocido' }
+        default              { return $s }
+    }
+}
+
 # ─── Get-BatteryHealth ────────────────────────────────────────────────────────
 # Helpers internos (T-N1): DEBEN vivir en Telemetry.ps1 porque el runspace del
 # job de telemetría solo dot-sourcea este archivo. NO mover a ToolkitSupport.
@@ -628,11 +669,16 @@ function Get-SystemSnapshot {
         } else {
             $qt['Get-StorageReliabilityCounter'] = 'skipped'
         }
+        [string] $diskMedia = ConvertTo-DiskMediaTypeLabel -Raw $physDisk.MediaType
+        if ($diskMedia -eq 'Desconocido') { $diskMedia = 'Unspecified' }
         $diskList.Add([PSCustomObject]@{
             Name         = [string] $physDisk.FriendlyName
-            MediaType    = [string] $physDisk.MediaType
+            # #3: label, no el UInt16 crudo que da el runspace ('0' = Healthy).
+            # El dato queda en ingles (como lo da Get-PhysicalDisk en una sesion
+            # normal y como lo lee el CRM); la traduccion es de quien lo muestra.
+            MediaType    = $diskMedia
             SizeGb       = [double] [math]::Round($physDisk.Size / 1GB, 2)
-            HealthStatus = [string] $physDisk.HealthStatus
+            HealthStatus = ConvertTo-DiskHealthLabel -Raw $physDisk.HealthStatus
             TempC        = $tempC
             WearPct      = $wearPct
             ReadErrors   = $readErr

@@ -4114,6 +4114,177 @@ Test-SmokeFunction 'ClientReport' '#30: sin POST, la ficha del equipo sale del P
     }
 }
 
+# ─── #3: salud del disco = enum crudo (health=0 con SSD sano) ────────────────
+# El bug: Get-PhysicalDisk corre adentro del runspace de Invoke-WithTimeout y ahi
+# HealthStatus/MediaType (MSFT_PhysicalDisk, UInt16) salen como NUMERO: 0=Healthy,
+# 4=SSD. El snapshot guardaba '0' y el [8] pintaba un badge ROJO "0" a un disco
+# sano; el prompt del LLM decia health=0. Las fixtures traian labels ('Healthy'),
+# por eso el smoke no lo veia. Estos tests van por el camino real: el job de
+# telemetria (que SOLO dot-sourcea Telemetry.ps1) -> Save-Snapshot -> JSON en
+# disco -> el handler del [8] (Invoke-ClientReport). Y un snapshot VIEJO, guardado
+# con el numero crudo, tiene que seguir mostrandose bien (compat hacia atras).
+
+# Corre Save-Snapshot en un Start-Job como Start-TelemetryJob (runspace fresco,
+# StrictMode, dot-source de Telemetry.ps1 y nada mas), con la raiz de salida
+# redirigida a un temp. Devuelve el texto del JSON guardado. Se cachea: el job
+# toma un snapshot real y no hace falta repetirlo por test.
+$script:Hd3JobJson = $null
+function Get-Hd3JobSnapshotJson {
+    if ($null -ne $script:Hd3JobJson) { return $script:Hd3JobJson }
+    [string] $modPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'modules\Telemetry.ps1'
+    [string] $fakeRoot = Join-Path $env:TEMP ('pctk-hd3job-' + [System.Guid]::NewGuid().ToString('N'))
+    $j = Start-Job -ScriptBlock {
+        param([string] $ModPath, [string] $FakeRoot)
+        Set-StrictMode -Version Latest
+        . $ModPath
+        # Save-Snapshot deriva output\snapshots de esta variable: se apunta al temp.
+        $script:TelemetryModulePath = Join-Path $FakeRoot 'modules\Telemetry.ps1'
+        Save-Snapshot -Phase Post
+    } -ArgumentList @($modPath, $fakeRoot)
+    try {
+        if (-not (Wait-Job $j -Timeout 240)) { throw 'el job de telemetria no termino en 240 s' }
+        $saved = Receive-Job $j -ErrorAction Stop
+    } finally { Remove-Job $j -Force -ErrorAction SilentlyContinue }
+    try {
+        if ($null -eq $saved) { throw 'Save-Snapshot no devolvio resultado en el job' }
+        [string] $savedPath = [string] $saved.FilePath
+        if ($savedPath -notlike ($fakeRoot + '*')) { throw ('el snapshot no cayo en el temp: {0}' -f $savedPath) }
+        if (-not (Test-Path -LiteralPath $savedPath)) { throw ('no existe el snapshot guardado: {0}' -f $savedPath) }
+        $script:Hd3JobJson = Get-Content -LiteralPath $savedPath -Raw -Encoding UTF8
+    } finally {
+        Remove-Item -LiteralPath $fakeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return $script:Hd3JobJson
+}
+
+# Corre el HANDLER del [8] contra un snapshot dado como JSON en disco. Se sombrea
+# solo el borde: la carpeta output\ (a un temp), Compare-Snapshot, el destino del
+# HTML y Start-Process. New-ClientReport es el REAL. Devuelve el HTML.
+function Invoke-Hd3ClientReportHarness {
+    param([Parameter(Mandatory)] [string] $SnapshotJson)
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $tmpRoot = Join-Path $env:TEMP ('pctk-hd3cr-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $snapDir = Join-Path $tmpRoot 'snapshots'
+    [string] $htmlOut = Join-Path $tmpRoot 'reporte-cliente.html'
+    $null = New-Item -ItemType Directory -Path $snapDir -Force
+    $SnapshotJson | Out-File -FilePath (Join-Path $snapDir '2026-10-14_120000_post.json') -Encoding UTF8
+    $script:Hd3Opened = [System.Collections.Generic.List[string]]::new()
+    $realRender = ${function:New-ClientReport}
+
+    function Test-Path {
+        [CmdletBinding()] param([Parameter(Position = 0)] [string] $Path, [string] $LiteralPath, [string] $PathType)
+        [string] $p = if ($PSBoundParameters.ContainsKey('LiteralPath')) { $LiteralPath } else { $Path }
+        if ($p -match '[\\/]output[\\/](snapshots|reports)$') { return $true }
+        return (Microsoft.PowerShell.Management\Test-Path @PSBoundParameters)
+    }
+    function Get-ChildItem {
+        [CmdletBinding()] param([Parameter(Position = 0)] [string] $Path, [string] $Filter, [switch] $File)
+        if ($Path -match '[\\/]output[\\/]snapshots$') { $PSBoundParameters['Path'] = $snapDir }
+        Microsoft.PowerShell.Management\Get-ChildItem @PSBoundParameters
+    }
+    function Compare-Snapshot { return $null }
+    function Start-Process { param([Parameter(Position = 0)] [string] $FilePath) $script:Hd3Opened.Add($FilePath) }
+    function New-ClientReport {
+        [CmdletBinding()] param(
+            [object] $PostSnapshot, [object] $Compare, [object] $Result,
+            [string] $OutputPath, [switch] $OpenAfter
+        )
+        $PSBoundParameters['OutputPath'] = $htmlOut
+        & $realRender @PSBoundParameters
+    }
+
+    try {
+        [PSCustomObject] $mp = [PSCustomObject]@{ IsLaptop = $false; RamMB = 8192; Tier = 'Mid'; IsHome = $true }
+        Invoke-ClientReport -MachineProfile $mp | Out-Null
+        if (-not (Test-Path -LiteralPath $htmlOut)) { throw 'el handler [8] no genero el HTML' }
+        return (Get-Content -LiteralPath $htmlOut -Raw -Encoding UTF8)
+    } finally {
+        Microsoft.PowerShell.Management\Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Snapshot VIEJO tal como lo guardaba el job antes del fix: numeros como string.
+# Un disco por cada valor del enum de MSFT_PhysicalDisk.HealthStatus (0/1/2/5).
+$script:Hd3OldSnapJson = @'
+{
+  "Phase": "Post",
+  "ComputerName": "PC-HD3-VIEJO",
+  "CPU": { "Name": "AMD Ryzen 5 5600G", "Cores": 6, "Threads": 12 },
+  "RamTotalGb": 16,
+  "Disks": [
+    { "Name": "SAMSUNG MZALQ512HBLU-00BL2", "MediaType": "4", "SizeGb": 476.94, "HealthStatus": "0", "TempC": null, "WearPct": null },
+    { "Name": "ST9500325AS", "MediaType": "3", "SizeGb": 465.76, "HealthStatus": "1", "TempC": null, "WearPct": null },
+    { "Name": "WDC ROTO", "MediaType": "3", "SizeGb": 931.51, "HealthStatus": "2", "TempC": null, "WearPct": null },
+    { "Name": "DISCO RARO", "MediaType": "0", "SizeGb": 100, "HealthStatus": "5", "TempC": null, "WearPct": null }
+  ]
+}
+'@
+
+Test-SmokeFunction 'DiscoSalud' '#3 job real de telemetria (solo Telemetry.ps1): el snapshot guarda el label, no el enum crudo' {
+    $ErrorActionPreference = 'Stop'
+    [object] $snap = (Get-Hd3JobSnapshotJson) | ConvertFrom-Json
+    [object[]] $disks = @($snap.Disks)
+    if ($disks.Count -lt 1) { throw 'el job no trajo discos: sin disco no se ejercita la normalizacion' }
+    foreach ($d in $disks) {
+        [string] $h = [string] $d.HealthStatus
+        [string] $m = [string] $d.MediaType
+        if ($h -notin @('Healthy', 'Warning', 'Unhealthy', 'Unknown')) {
+            throw ('HealthStatus "{0}" en {1}: se esperaba Healthy/Warning/Unhealthy/Unknown' -f $h, $d.Name)
+        }
+        # En ingles, como lo lee el CRM (que omite 'Unspecified' del renglon).
+        if ($m -notin @('HDD', 'SSD', 'SCM', 'Unspecified')) { throw ('MediaType "{0}" en {1}: se esperaba HDD/SSD/SCM/Unspecified' -f $m, $d.Name) }
+    }
+}
+
+Test-SmokeFunction 'DiscoSalud' '#3 job -> Save-Snapshot -> handler [8]: el badge del disco dice su estado en castellano' {
+    [string] $html = Invoke-Hd3ClientReportHarness -SnapshotJson (Get-Hd3JobSnapshotJson)
+    if ($html -match 'class="badge badge-\w+">\d+</span>') { throw 'el [8] pinta un badge con el numero crudo del enum' }
+    if ($html -match 'GB\s+\[\d+\]') { throw 'el [8] muestra el tipo de disco como numero ([4]/[3])' }
+    if ($html -notmatch 'class="badge badge-(ok|warn|bad|na)">(Sano|Con advertencias|Con fallas|Sin dato)</span>') {
+        throw 'el [8] no muestra el estado del disco con su significado'
+    }
+}
+
+Test-SmokeFunction 'DiscoSalud' '#3 snapshot VIEJO con enum crudo: el handler [8] muestra Sano/advertencias/fallas/sin dato (compat)' {
+    [string] $html = Invoke-Hd3ClientReportHarness -SnapshotJson $script:Hd3OldSnapJson
+    foreach ($want in @('badge-ok">Sano<', 'badge-warn">Con advertencias<', 'badge-bad">Con fallas<', 'badge-na">Sin dato<')) {
+        if ($html -notmatch [regex]::Escape($want)) { throw ('falta {0} en el HTML del [8]' -f $want) }
+    }
+    if ($html -match 'class="badge badge-\w+">\d+</span>') { throw 'badge con numero crudo en el [8]' }
+    if ($html -notmatch '\[SSD\]' -or $html -notmatch '\[HDD\]') { throw 'el tipo de disco no sale como SSD/HDD' }
+    if ($html -match 'GB\s+\[\d+\]') { throw 'el tipo de disco sale como numero' }
+}
+
+Test-SmokeFunction 'DiscoSalud' '#3 snapshot VIEJO: el informe tecnico [I] y el prompt del LLM no dicen health=0' {
+    $ErrorActionPreference = 'Stop'
+    [object] $old = $script:Hd3OldSnapJson | ConvertFrom-Json
+    if ($null -eq $script:_snapshotResult) { $script:_snapshotResult = Get-SystemSnapshot -Phase Pre }
+    [PSCustomObject] $viejo = $script:_snapshotResult.PSObject.Copy()
+    $viejo.Disks = @($old.Disks)
+
+    [object] $ra = New-RawAuditReport -Snapshot $viejo
+    try {
+        if (-not $ra.Success) { throw 'New-RawAuditReport fallo con un snapshot viejo' }
+        [string] $body = Get-Content -LiteralPath $ra.FilePath -Raw
+        if ($body -match 'health=\d') { throw 'el informe [I] imprime health=<numero>' }
+        if ($body -notmatch 'health=Healthy' -or $body -notmatch 'health=Unhealthy') { throw 'el informe [I] no traduce el estado del disco' }
+        if ($body -match 'GB\s+\[\d+\]') { throw 'el informe [I] imprime el tipo de disco como numero' }
+    } finally {
+        if ($ra.FilePath -and (Test-Path -LiteralPath $ra.FilePath)) { Remove-Item -LiteralPath $ra.FilePath -Force -ErrorAction SilentlyContinue }
+    }
+
+    [object] $rp = New-ResearchPrompt -Template Optimization -Snapshot $old -MachineProfile ([PSCustomObject]@{ })
+    try {
+        if ($null -eq $rp -or -not $rp.Success) { throw 'New-ResearchPrompt fallo con un snapshot viejo' }
+        [string] $prompt = Get-Content -LiteralPath $rp.FilePath -Raw -Encoding UTF8
+        if ($prompt -match 'health=\d') { throw 'el prompt del LLM dice health=<numero>' }
+        if ($prompt -notmatch '\[SSD\] health=Healthy') { throw 'el prompt del LLM no traduce el disco sano (SSD/Healthy)' }
+    } finally {
+        if ($null -ne $rp -and $rp.FilePath -and (Test-Path -LiteralPath $rp.FilePath)) { Remove-Item -LiteralPath $rp.FilePath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 Test-SmokeFunction 'Diagnostics' 'BSOD: BsodCount y PowerCount se cuentan por separado' {
     $ErrorActionPreference = 'Stop'
     # Regresion del caso Olivo: 1 BSOD + 5 apagones se leia como "6 crashes".

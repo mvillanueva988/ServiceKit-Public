@@ -227,8 +227,11 @@ function New-ResearchPrompt {
         foreach ($d in @($disksProp.Value)) {
             [string] $dName   = [string] (_Rp_Prop $d 'Name'      'N/A')
             [double] $dSize   = if ($d.PSObject.Properties['SizeGb'] -and $null -ne $d.SizeGb) { [double] $d.SizeGb } else { 0 }
+            # #3: un snapshot viejo trae el enum crudo ('0' = Healthy, '4' = SSD):
+            # el LLM leia "health=0" como salud cero.
             [string] $dMedia  = [string] (_Rp_Prop $d 'MediaType' '?')
-            [string] $dHealth = if ($d.PSObject.Properties['HealthStatus'] -and $null -ne $d.HealthStatus) { [string] $d.HealthStatus } else { '?' }
+            if ($dMedia -ne '?') { $dMedia = ConvertTo-DiskMediaTypeLabel -Raw $dMedia }
+            [string] $dHealth = if ($d.PSObject.Properties['HealthStatus'] -and $null -ne $d.HealthStatus) { ConvertTo-DiskHealthLabel -Raw $d.HealthStatus } else { '?' }
             $L.Add(('- **Disco**: {0} {1:N1} GB [{2}] health={3}' -f $dName, $dSize, $dMedia, $dHealth))
         }
     }

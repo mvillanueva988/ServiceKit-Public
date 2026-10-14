@@ -5,7 +5,7 @@
 # Accion [A][17] del menu individual.
 #
 # GUARDRAIL CENTRAL: jamas defragmentar un SSD. La operacion se decide por
-# MediaType normalizado (ConvertTo-DiskMediaTypeLabel de DiskHealth.ps1, que ya
+# MediaType normalizado (ConvertTo-DiskMediaTypeLabel de Telemetry.ps1, que ya
 # esta dot-sourced por main.ps1). Ante cualquier duda -> Skip.
 #
 # TRAMPA StrictMode: acumular con [object[]] $plan = @() + asignacion por
