@@ -336,7 +336,7 @@ function Invoke-AutoProfile {
                 LatestRp      = $rpRaw.LatestRp
                 Message       = [string]$rpRaw.Reason
             }
-            Write-PctkHint ('  [i] RP cooldown activo — hay un RP reciente como ancla. {0}' -f $rpRaw.Reason)
+            Write-PctkHint ('  [i] RP cooldown activo - hay un RP reciente como ancla. {0}' -f $rpRaw.Reason)
         }
         else {
             # Falla dura: System Restore deshabilitado o error

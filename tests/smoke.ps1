@@ -1982,6 +1982,53 @@ Test-SmokeFunction 'LintAst' 'ARCHIVE: caza el comando en cualquier carpeta y NO
     }
 }
 
+# --- U1 (#95): glifos que la consola del cliente no muestra (lint GLYPH) ---
+# conhost con fuente raster / AnyDesk / salida redirigida: lo que no esta en la
+# code page OEM 850 sale como '?' o cuadrado. Razon del conjunto: lint-ast.ps1,
+# $script:LintGlyphCodePage.
+Test-SmokeFunction 'LintAst' 'GLYPH: ningun literal de consola fuera de CP850 en producto; allowlist sin entradas podridas (U1/#95)' {
+    # piso: si el barrido no ve literales, el guard quedo verde por vacuidad
+    if ($script:LintAstReport.GlyphStrings -lt 5000) { throw ('el barrido GLYPH vio {0} literales (<5000): guard vacio' -f $script:LintAstReport.GlyphStrings) }
+    [object[]] $h = @($script:LintAstReport.GlyphHits)
+    if ($h.Count -gt 0) {
+        throw ('literal fuera de CP850 (no se ve en conhost/AnyDesk; usar ASCII o box-drawing de 850): {0}' -f (($h | ForEach-Object { '{0}:{1} {2} en {3}' -f $_.File, $_.Line, $_.Chars, $_.Function }) -join ', '))
+    }
+    [object[]] $s = @($script:LintAstReport.GlyphStale)
+    if ($s.Count -gt 0) { throw ('allowlist GLYPH sin uso (sacar la entrada): {0}' -f ($s -join ', ')) }
+}
+
+Test-SmokeFunction 'LintAst' 'GLYPH: caza constante/expandible/here-string en cualquier carpeta; NO comentario, NO tests\, NO tildes/box 850; allowlist y entrada podrida (mutacion)' {
+    [string] $tmp = Join-Path $env:TEMP ('pctk-lintglyph-' + [guid]::NewGuid().ToString('N'))
+    [string] $em = [string][char]0x2014; [string] $heavy = [string][char]0x2501
+    [string] $ok850 = 'Atenci' + [char]0x00F3 + 'n ' + [char]0x00F1 + ' ' + [char]0x2500 + [char]0x2502 + [char]0x2550 + [char]0x2591 + [char]0x2588
+    try {
+        [void] (New-Item -ItemType Directory -Path (Join-Path $tmp 'modules') -Force)
+        [void] (New-Item -ItemType Directory -Path (Join-Path $tmp 'nueva') -Force)
+        [void] (New-Item -ItemType Directory -Path (Join-Path $tmp 'tests') -Force)
+        Set-Content -LiteralPath (Join-Path $tmp 'nueva\Nuevo.ps1') -Encoding UTF8 -Value @(
+            ('# comentario con ' + $em + ' no cuenta'),
+            ('function Get-A { Write-Host ''Hibernacion ' + $em + ' x'' }'),
+            ('function Get-B { Write-Host "div $x ' + $heavy + '" }'),
+            ('function Get-C { Write-Host ''' + $ok850 + ''' }'),
+            '$h = @''', 'linea sana', ('gruesa ' + $heavy), '''@')
+        Set-Content -LiteralPath (Join-Path $tmp 'tests\T.ps1') -Encoding UTF8 -Value ('Write-Host ''' + $em + '''')
+        # allowlist real: New-WslConfig va a archivo -> no es hit; ResearchPrompt.ps1
+        # existe pero sin glifos -> sus 2 entradas quedan podridas.
+        Set-Content -LiteralPath (Join-Path $tmp 'modules\Wsl.ps1') -Encoding UTF8 -Value ('function New-WslConfig { ''# Generated ' + $em + ''' }')
+        Set-Content -LiteralPath (Join-Path $tmp 'modules\ResearchPrompt.ps1') -Encoding UTF8 -Value 'function New-ResearchPrompt { ''sano'' }'
+        $rep = Get-LintAstReport -RepoRoot $tmp
+        [string] $got = (@($rep.GlyphHits) | ForEach-Object { '{0}:{1}:{2}' -f $_.File, $_.Line, $_.Chars }) -join ' '
+        [string] $want = 'nueva\Nuevo.ps1:2:U+2014 nueva\Nuevo.ps1:3:U+2501 nueva\Nuevo.ps1:5:U+2501'
+        if ($got -ne $want) { throw ("hits='{0}'; esperaba '{1}'" -f $got, $want) }
+        [string] $allowed = (@($rep.GlyphAllowed) | ForEach-Object { $_.Key }) -join ' '
+        if ($allowed -ne 'modules\Wsl.ps1|New-WslConfig') { throw ("allowed='{0}'; esperaba modules\Wsl.ps1|New-WslConfig" -f $allowed) }
+        [string] $stale = (@($rep.GlyphStale) | Sort-Object) -join ' '
+        if ($stale -ne 'modules\ResearchPrompt.ps1|<top-level> modules\ResearchPrompt.ps1|New-ResearchPrompt') { throw ("stale='{0}'" -f $stale) }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Test-SmokeFunction 'LintAst' 'UNROLL: caza el codigo PRE-fix de a0ec87b / 7e33ae6 / f762458 y no el POST-fix' {
     # Extractos literales de `git show <c>^:<archivo>` (pre) y `git show <c>:<archivo>` (post).
     $cases = @(

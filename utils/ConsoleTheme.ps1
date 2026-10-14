@@ -249,12 +249,14 @@ function Write-PctkDivider {
     <#
     .SYNOPSIS
         Divisor (e3): linea con gradiente ambar->dim con VT; '─' DarkGray sin VT.
+        El trazo es '─' (U+2500, 0xC4 en CP850) en los dos casos: el grueso
+        U+2501 no esta en CP850 y no se ve en conhost/AnyDesk (U1, #95).
     #>
     [CmdletBinding()]
     param([int] $Width = 60)
     if ($Width -lt 1) { $Width = 1 }
     if ($script:PctkVT) {
-        Write-Host ('  ' + (Get-PctkGrad ('━' * $Width) 255 170 40 95 108 124))
+        Write-Host ('  ' + (Get-PctkGrad ('─' * $Width) 255 170 40 95 108 124))
     } else {
         Write-Host ('  ' + ('─' * $Width)) -ForegroundColor DarkGray
     }

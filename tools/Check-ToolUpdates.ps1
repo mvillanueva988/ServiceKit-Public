@@ -118,7 +118,7 @@ function _Compare-Versions {
 }
 
 Write-Host ''
-Write-Host 'PCTk — Tool update checker' -ForegroundColor Cyan
+Write-Host 'PCTk - Tool update checker' -ForegroundColor Cyan
 Write-Host '============================'
 
 foreach ($tool in $manifest.tools) {
@@ -192,10 +192,10 @@ $results | Format-Table -AutoSize -Property Name, Current, Upstream, Status, Not
 
 Write-Host ''
 if ($outdated -gt 0) {
-    Write-Host ("  [!] {0} tool(s) OUTDATED — bump version + url en manifest.json y verificar SHA-256." -f $outdated) -ForegroundColor Yellow
+    Write-Host ("  [!] {0} tool(s) OUTDATED - bump version + url en manifest.json y verificar SHA-256." -f $outdated) -ForegroundColor Yellow
 }
 if ($unknown -gt 0) {
-    Write-Host ("  [?] {0} tool(s) sin verificar — chequear manualmente." -f $unknown) -ForegroundColor DarkGray
+    Write-Host ("  [?] {0} tool(s) sin verificar - chequear manualmente." -f $unknown) -ForegroundColor DarkGray
 }
 Write-Host ("  [OK] {0} tool(s) up-to-date." -f $current) -ForegroundColor Green
 

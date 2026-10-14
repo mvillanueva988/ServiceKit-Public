@@ -206,7 +206,7 @@ function Set-SystemTweaks {
         try {
             & powercfg /h off 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) {
-                $applied.Add('[OFF] Hibernacion — libera hiberfil.sys (75% de RAM en disco)')
+                $applied.Add('[OFF] Hibernacion - libera hiberfil.sys (75% de RAM en disco)')
             } else {
                 $errors.Add('powercfg /h off retorno codigo ' + $LASTEXITCODE)
             }
