@@ -101,10 +101,12 @@ function New-RawAuditReport {
     # ── Storage ──────────────────────────────────────────────────────────────
     _Section 'STORAGE'
     foreach ($d in $Snapshot.Disks) {
-        [string] $health = if ($null -ne $d.HealthStatus) { $d.HealthStatus } else { '?' }
+        # #3: un snapshot viejo trae el enum crudo ('0' = Healthy, '4' = SSD).
+        [string] $health = if ($null -ne $d.HealthStatus) { ConvertTo-DiskHealthLabel -Raw $d.HealthStatus } else { '?' }
+        [string] $media  = ConvertTo-DiskMediaTypeLabel -Raw $d.MediaType
         [string] $temp   = if ($null -ne $d.TempC -and $d.TempC -gt 0) { $d.TempC.ToString() + 'C' } else { '-' }
         [string] $wear   = if ($null -ne $d.WearPct) { $d.WearPct.ToString() + '%' } else { '-' }
-        $lines.Add(('  - {0}  {1} GB  [{2}]  health={3}  temp={4}  wear={5}' -f $d.Name, $d.SizeGb, $d.MediaType, $health, $temp, $wear))
+        $lines.Add(('  - {0}  {1} GB  [{2}]  health={3}  temp={4}  wear={5}' -f $d.Name, $d.SizeGb, $media, $health, $temp, $wear))
     }
     $lines.Add('')
     foreach ($v in $Snapshot.Volumes) {
