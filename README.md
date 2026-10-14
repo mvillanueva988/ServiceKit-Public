@@ -59,4 +59,4 @@ Optimizador por perfiles: el técnico elige el use-case del cliente desde el men
 
 ## Licencia
 
-MIT — ver [LICENSE](LICENSE)
+Todos los derechos reservados: ver [LICENSE](LICENSE)
