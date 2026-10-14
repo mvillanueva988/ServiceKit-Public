@@ -1071,6 +1071,130 @@ Test-SmokeFunction 'Router' 'handler [12] [D]+S: avisa y deshabilita HVCI exacta
         }
     }
 }
+
+# Fixtures del preview de receta nombrada (Get-NamedProfilePreviewLines): el
+# _sample.json (schema v2.0, sin _tier) con gaming_tweaks.hvci a eleccion, y una
+# maquina igual a su _hardware_snapshot.
+function New-HvciPreviewFixture {
+    param([string] $Hvci)   # 'off' | 'on' | '' = ausente
+    $p = Get-Content (Join-Path (Get-NamedProfileDir) '_sample.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]::IsNullOrEmpty($Hvci)) { $p.gaming_tweaks.PSObject.Properties.Remove('hvci') }
+    else { $p.gaming_tweaks.hvci = $Hvci }
+    return $p
+}
+function New-HvciPreviewMachine {
+    # Igual al _hardware_snapshot del _sample: sin avisos de "hardware cambio".
+    [PSCustomObject]@{ Tier = 'High'; CpuName = 'Sample CPU'; RamMB = 16384; Manufacturer = 'Sample'; HasIGpuOnly = $false }
+}
+Test-SmokeFunction 'NamedProfileEditor' 'preview de receta v2.0 (sin _tier) no crashea bajo StrictMode' {
+    # v2.0 saco _tier del JSON (New-NamedProfileInteractive no lo escribe, el _sample
+    # no lo tiene) y el preview lo seguia leyendo directo: PropertyNotFoundStrict y el
+    # [2] moria antes del Confirm-Action. Corre bajo el StrictMode Latest del smoke.
+    Set-StrictMode -Version Latest
+    $p = New-HvciPreviewFixture -Hvci 'off'
+    if ($null -ne $p.PSObject.Properties['_tier']) { throw 'el fixture tiene _tier: no ejercita el caso v2.0' }
+    [string[]] $lines = Get-NamedProfilePreviewLines -Profile $p -MachineProfile (New-HvciPreviewMachine)
+    if (@($lines | Where-Object { $_ -like 'Tier receta: High*Tier detectado: High*' }).Count -ne 1) {
+        throw ('la linea de tier no toma el del _hardware_snapshot: ' + ($lines -join ' | '))
+    }
+}
+# #87: el camino de recetas nombradas apaga HVCI (gaming_tweaks.hvci = 'off', que
+# pre-llena New-GamingPreset o viene del JSON) sin pasar por el [A][12]. El aviso
+# anti-cheat de #27(a) tiene que estar en el preview que el operador confirma, y
+# salir de la MISMA fuente que el del [12] (Get-HvciAntiCheatNotice) para que no
+# se desincronicen. Solo avisa: sin confirmacion extra ni deteccion de juegos.
+Test-SmokeFunction 'NamedProfileEditor' '#87 preview hvci=off: [AVISO] anti-cheat nombra Vanguard y FACEIT, conserva la linea [i] de VBS' {
+    [string[]] $lines = Get-NamedProfilePreviewLines -Profile (New-HvciPreviewFixture -Hvci 'off') -MachineProfile (New-HvciPreviewMachine)
+    [string[]] $av = @($lines | Where-Object { $_ -like '`[AVISO`]*' -and $_ -match 'Vanguard' -and $_ -match 'FACEIT' })
+    if ($av.Count -lt 1) { throw ('falta la linea [AVISO] anti-cheat (Vanguard + FACEIT) en el preview: ' + ($lines -join ' | ')) }
+    if (@($lines | Where-Object { $_ -like '`[i`] HVCI off*VBS se preserva*' }).Count -ne 1) { throw 'se perdio la linea [i] HVCI off / VBS se preserva' }
+    foreach ($l in $lines) {
+        foreach ($ch in $l.ToCharArray()) {
+            if ([int] $ch -gt 127) { throw ('preview con caracter no-ASCII U+{0:X4}: {1}' -f [int] $ch, $l) }
+        }
+    }
+}
+Test-SmokeFunction 'NamedProfileEditor' '#87 preview hvci=on o ausente: SIN aviso anti-cheat' {
+    foreach ($v in @('on', '')) {
+        [string[]] $lines = Get-NamedProfilePreviewLines -Profile (New-HvciPreviewFixture -Hvci $v) -MachineProfile (New-HvciPreviewMachine)
+        if (@($lines | Where-Object { $_ -match 'anti-cheat|Vanguard|FACEIT' }).Count -ne 0) {
+            throw ("hvci='{0}': el preview avisa anti-cheat sin apagar HVCI: {1}" -f $v, ($lines -join ' | '))
+        }
+    }
+}
+Test-SmokeFunction 'NamedProfileEditor' '#87 una sola fuente: [A][12] y el preview muestran Get-HvciAntiCheatNotice' {
+    [string[]] $notice = @(Get-HvciAntiCheatNotice)
+    if ($notice.Count -lt 3) { throw ('Get-HvciAntiCheatNotice devolvio {0} lineas, esperaba 3' -f $notice.Count) }
+    if (($notice -join ' ') -notmatch 'Vanguard' -or ($notice -join ' ') -notmatch 'FACEIT') { throw 'el texto compartido no nombra Vanguard/FACEIT' }
+    $r12 = Invoke-HvciAntiCheatHarness -Answers @('D', 'N', 'S', 'S')
+    [string] $prev = (Get-NamedProfilePreviewLines -Profile (New-HvciPreviewFixture -Hvci 'off') -MachineProfile (New-HvciPreviewMachine)) -join "`n"
+    foreach ($l in $notice) {
+        if (-not $r12.Text.Contains($l)) { throw ('[A][12] no muestra la linea compartida: ' + $l) }
+        if (-not $prev.Contains($l))     { throw ('el preview no muestra la linea compartida: ' + $l) }
+    }
+    # Diente estructural: el texto vive en UN archivo. Si alguien lo re-pega inline en
+    # el [12] o en el preview, las dos copias se pueden desincronizar.
+    [string] $root = Split-Path -Parent $PSScriptRoot
+    [string[]] $con = @(foreach ($d in @('core', 'modules', 'utils')) {
+        Get-ChildItem -LiteralPath (Join-Path $root $d) -Filter '*.ps1' -File |
+            Where-Object { (Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8) -match 'BattlEye' } |
+            ForEach-Object { $_.Name }
+    })
+    if ($con.Count -ne 1) { throw ('el texto anti-cheat (BattlEye) esta en {0} archivos, esperaba 1: {1}' -f $con.Count, ($con -join ', ')) }
+}
+
+# Handler [2] (Invoke-NamedProfileMenu): el preview con el aviso se muestra ANTES de
+# aplicar, tanto al crear la receta ([1]) como al cargar una guardada ([2]) o
+# reaplicar la ultima ([3]): un hvci=off puede venir del JSON, no solo del preset.
+# Corre el HANDLER real; se sombrean el menu, el editor/IO, la mutacion
+# (Invoke-NamedProfile solo registra) y los renderers.
+function Invoke-NamedHvciHarness {
+    param([string] $Choice, [bool] $Confirm)
+    $script:NhEv  = [System.Collections.Generic.List[string]]::new()
+    $script:NhCfm = $Confirm
+    $script:NhProf = New-HvciPreviewFixture -Hvci 'off'
+    function Read-PctkMenuChoice { param($Rows, $RenderHeader) return $Choice }
+    function Read-Host { param([object] $Prompt) return '1' }
+    function Confirm-Action {
+        param([string] $Title, [string[]] $Lines = @(), [bool] $DefaultYes = $true)
+        $script:NhEv.Add(('confirm:{0}|{1}' -f $Title, ($Lines -join "`n")))
+        if (@($Lines).Count -eq 0) { return $true }   # preset gaming / aplicar ahora / RP gate
+        return $script:NhCfm
+    }
+    function New-NamedProfileInteractive { param($MachineProfile, [switch] $UseGamingPreset) return $script:NhProf }
+    function Save-NamedProfile { param($Profile, $Slug) $script:NhEv.Add('save'); return 'C:\pctk-fake\receta.json' }
+    function Get-NamedProfileList {
+        @([PSCustomObject]@{ Name = 'Receta X'; Path = 'C:\pctk-fake\receta.json'; IsSample = $false; LastApplied = '2026-01-01T00:00:00' })
+    }
+    function Import-NamedProfile { param($Path) return $script:NhProf }
+    function Invoke-NamedProfile { $script:NhEv.Add('apply'); [PSCustomObject]@{ NamedStatus = 'Success'; RebootNeeded = $false; ClientRun = $null } }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:NhEv.Add('audit:' + $Status) }
+    function Write-Host { }
+    function Write-PctkLine { param([AllowEmptyString()][string] $Text, $Kind) }
+    function Write-PctkWarn { param([AllowEmptyString()][string] $Text) }
+    function Write-PctkHint { param([AllowEmptyString()][string] $Text) }
+    function Write-PctkWork { param([AllowEmptyString()][string] $Text) }
+    function Write-PctkOk   { param([AllowEmptyString()][string] $Text) }
+    function Write-PctkErr  { param([AllowEmptyString()][string] $Text) }
+    Invoke-NamedProfileMenu -MachineProfile (New-HvciPreviewMachine) | Out-Null
+    return @($script:NhEv)
+}
+# Test-SmokeFunction corre el bloque en el acto: $nhCase se lee con el valor de la vuelta.
+foreach ($nhCase in @('1', '2', '3')) {
+    Test-SmokeFunction 'NamedProfileEditor' ('#87 handler [2] opcion {0}: el aviso anti-cheat se confirma ANTES de aplicar hvci=off' -f $nhCase) {
+        $ev = @(Invoke-NamedHvciHarness -Choice $nhCase -Confirm $true)
+        [int] $iAviso = -1; [int] $iApply = -1
+        for ([int] $i = 0; $i -lt $ev.Count; $i++) {
+            if ($iAviso -lt 0 -and $ev[$i] -like 'confirm:*' -and $ev[$i] -match '\[AVISO\][^\n]*Vanguard') { $iAviso = $i }
+            if ($iApply -lt 0 -and $ev[$i] -eq 'apply') { $iApply = $i }
+        }
+        if ($iApply -lt 0) { throw ('no aplico la receta confirmada: ' + ($ev -join ' || ')) }
+        if ($iAviso -lt 0) { throw ('se aplico hvci=off sin el aviso anti-cheat en ningun Confirm-Action: ' + ($ev -join ' || ')) }
+        if ($iAviso -gt $iApply) { throw 'el aviso anti-cheat aparecio DESPUES de aplicar' }
+        $evN = @(Invoke-NamedHvciHarness -Choice $nhCase -Confirm $false)
+        if ($evN -contains 'apply') { throw 'cancelando el preview igual aplico la receta' }
+    }
+}
 Test-SmokeFunction 'Router' 'handler [13] HAGS routing + abort-seguro' {
     $ErrorActionPreference = 'Stop'
     $disp = (Get-Command Invoke-IndividualActionDispatch -CommandType Function).Definition
