@@ -2,6 +2,19 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.10.2] - 2026-10-13
+
+Release: **las recetas nombradas vuelven a abrir**. El menú `[2]` de recetas nombradas (crear, cargar y reaplicar) se cerraba siempre antes de pedir confirmación, desde v2.1.4; ahora muestra el preview y, si la receta apaga HVCI, el mismo aviso de anti-cheat que `[A][12]`. Suma el arreglo del backup de drivers en una PC sin drivers de terceros.
+
+### Added
+
+- **Aviso de anti-cheat en el preview de recetas nombradas (`core/NamedProfileEditor.ps1`, `core/AntiCheatNotice.ps1`)**: cuando la receta trae `hvci=off` (el preset gaming lo pre-llena), el preview que se confirma avisa que Vanguard, FACEIT, EAC y BattlEye pueden exigir Memory Integrity / VBS y cómo revertirlo con `[A][12] [E]`. Es el mismo texto de `[A][12]` y sale de un solo lugar. Sólo avisa: no detecta juegos ni agrega confirmaciones.
+
+### Fixed
+
+- **El menú de recetas nombradas `[2]` ya no se cierra antes de confirmar (`core/NamedProfileEditor.ps1`)**: el preview leía el tier de la receta de un campo que el formato 2.0 de recetas ya no escribe, y en crear, cargar y reaplicar daba error antes de la confirmación. Roto desde v2.1.4 (2026-05-28). Ahora el tier sale de la foto de hardware guardada en la receta.
+- **Backup de drivers sin drivers de terceros (`modules/Diagnostics.ps1`, `core/ActionHandlers.ps1`)**: en `[A][7]`, una PC sin drivers de terceros para exportar (o con DISM degradado) cortaba la acción con un error; ahora avisa `[!] No se encontraron drivers de terceros para exportar.`
+
 ## [2.10.1] - 2026-10-13
 
 Release: **las herramientas se vuelven a extraer en cualquier Windows**. En una PC con el módulo de compresión de PowerShell roto, ni el instalador ni el selector de tools podían abrir un ZIP; ahora extraen con .NET directo. Suma el aviso de anti-cheat antes de apagar HVCI y tres arreglos que el cliente veía o que estaban a una ruta con espacios de romperse.
