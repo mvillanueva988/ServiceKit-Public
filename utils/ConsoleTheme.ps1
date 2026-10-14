@@ -9,6 +9,10 @@
 
 $script:PctkVT  = $false
 $script:PctkEsc = [char]27
+# #99: banner compacto (sin logo de bloques ni titulo/autor). Lo prende el lector
+# de menu SOLO si con el banner completo el menu no entra y caeria a Paged; lo
+# apaga al salir (finally), asi cada pantalla arranca con el banner completo.
+$script:PctkBannerCompact = $false
 
 function Enable-PctkVT {
     <#
@@ -84,8 +88,10 @@ function Write-PctkMachineBanner {
 
     if (-not $script:PctkVT) {
         Write-Host '================================================' -ForegroundColor DarkCyan
-        Write-Host '                   PCTk v2' -ForegroundColor Cyan
-        Write-Host '        Mateo Villanueva ~ mvillanueva988' -ForegroundColor DarkGray
+        if (-not $script:PctkBannerCompact) {
+            Write-Host '                   PCTk v2' -ForegroundColor Cyan
+            Write-Host '        Mateo Villanueva ~ mvillanueva988' -ForegroundColor DarkGray
+        }
         Write-Host '================================================' -ForegroundColor DarkCyan
         foreach ($r in $Rows) { Write-Host ('  {0,-4} : {1}' -f $r.Label, $r.Value) }
         Write-Host ('  TIER : {0}' -f $Tier) -ForegroundColor Yellow
@@ -95,10 +101,12 @@ function Write-PctkMachineBanner {
         return
     }
 
-    foreach ($ln in $script:PctkBanner) { Write-Host ('  ' + (Get-PctkGrad $ln 255 185 45 255 105 0)) }
-    Write-Host ('  ' + (Pbold) + (Pf 255 200 90) + 'PC Toolkit' + (Pe) + (Pf 95 108 124) + '  v2  -  acelerador del operador' + (Pe))
-    Write-Host ('  ' + (Pf 80 215 185) + 'Mateo Villanueva ' + (Pf 95 108 124) + '~ mvillanueva988' + (Pe))
-    Write-Host ''
+    if (-not $script:PctkBannerCompact) {
+        foreach ($ln in $script:PctkBanner) { Write-Host ('  ' + (Get-PctkGrad $ln 255 185 45 255 105 0)) }
+        Write-Host ('  ' + (Pbold) + (Pf 255 200 90) + 'PC Toolkit' + (Pe) + (Pf 95 108 124) + '  v2  -  acelerador del operador' + (Pe))
+        Write-Host ('  ' + (Pf 80 215 185) + 'Mateo Villanueva ' + (Pf 95 108 124) + '~ mvillanueva988' + (Pe))
+        Write-Host ''
+    }
 
     [string] $title = 'PCTk v2'
     [string] $badge = " $Tier "

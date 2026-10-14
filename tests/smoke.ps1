@@ -2979,6 +2979,137 @@ Test-SmokeFunction 'ConsoleMenu' '#46 el dibujo NUNCA llega a la ultima fila (si
         }
     }
 }
+
+# ─── #99: banner compacto antes de paginar ────────────────────────────────────
+# En conhost a 44 filas el [A] no entraba con el banner completo (21 lineas de
+# header) y caia a Paged: la lista se cortaba en [17]. El lector ahora prueba
+# con el banner compacto (-8 lineas) antes de paginar. Los tests corren el
+# LECTOR REAL (Read-PctkMenuChoice) con el banner real: la consola se simula
+# shadoweando Write-Host/Clear-Host (avanzan/resetean un CursorTop simulado) y
+# los seams de medicion (Get-PctkConsoleCursorTop / Get-PctkConsoleWindowHeight).
+$script:Smoke99BannerRows = @(
+    [PSCustomObject]@{ Label = 'OS';  Value = 'Windows 11 Pro Build 26100 64-bit' }
+    [PSCustomObject]@{ Label = 'CPU'; Value = 'AMD Ryzen 7 5800H  8 nucleos / 16 hilos  [Ryzen]' }
+    [PSCustomObject]@{ Label = 'RAM'; Value = '16 GB  |  9 GB libres' }
+    [PSCustomObject]@{ Label = 'GPU'; Value = 'NVIDIA GeForce RTX 3060 Laptop GPU' }
+    [PSCustomObject]@{ Label = 'OEM'; Value = 'ASUS  [sin catalogo OEM]' }
+    [PSCustomObject]@{ Label = 'S/N'; Value = 'ABC123' }
+    [PSCustomObject]@{ Label = 'PRE'; Value = 'sin PRE' }
+)
+
+function Invoke-Smoke99MenuRun {
+    # Corre Read-PctkMenuChoice con las filas reales de [A] en una consola
+    # simulada de $WinH filas. Devuelve los frames (uno por Clear-Host), el
+    # estado del flag en cada render del header y el resultado.
+    param([int] $WinH, [switch] $ThrowOnCompactHeader)
+    $sim = @{ Top = 0; H = $WinH; Frames = [System.Collections.Generic.List[object]]::new(); Headers = [System.Collections.Generic.List[bool]]::new() }
+    $sim.Frames.Add([System.Collections.Generic.List[string]]::new())
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) $sim.Frames[$sim.Frames.Count - 1].Add([string]$Object); if (-not $NoNewline) { $sim.Top++ } }
+    function Clear-Host { $sim.Top = 0; $sim.Frames.Add([System.Collections.Generic.List[string]]::new()) }
+    function Get-PctkConsoleCursorTop { return [int] $sim.Top }
+    function Get-PctkConsoleWindowHeight { return [int] $sim.H }
+    function Test-PctkInteractiveConsole { return $true }
+    # Sale enseguida: el primer sondeo de tecla revienta -> el lector cae a su
+    # fallback plano (Read-Host). Funciona igual con o sin consola real.
+    function Test-PctkConsoleResized { throw 'smoke99: salir del loop' }
+    function Read-Host { return 'B' }
+    [scriptblock] $rh = {
+        Clear-Host
+        $sim.Headers.Add([bool] $script:PctkBannerCompact)
+        if ($ThrowOnCompactHeader -and $script:PctkBannerCompact) { throw 'smoke99: header revento con el flag prendido' }
+        Write-PctkMachineBanner -Rows $script:Smoke99BannerRows -Tier 'MID'
+        Write-Host '  estado'
+    }
+    [bool] $vtBefore = $script:PctkVT
+    $script:PctkVT = $true
+    try {
+        [string] $r = Read-PctkMenuChoice -Rows (Get-IndividualActionRows) -RenderHeader $rh
+    } finally { $script:PctkVT = $vtBefore }
+    # frame del menu interactivo = el ultimo que tiene la linea de ayuda
+    [int] $m = -1
+    for ([int] $i = 0; $i -lt $sim.Frames.Count; $i++) {
+        if (@($sim.Frames[$i] | Where-Object { $_ -match 'Usa flechas|Flechas \+ Enter' }).Count -gt 0) { $m = $i }
+    }
+    # Frames[0] es lo previo al primer Clear-Host -> el indice del frame del menu
+    # es tambien la cantidad de renders del header hasta dibujarlo.
+    return [PSCustomObject]@{ Result = $r; Frames = $sim.Frames; Headers = $sim.Headers; MenuFrame = $m; Renders = $m }
+}
+
+function Assert-Smoke99AllItems {
+    param($Run, [string] $Ctx)
+    [string] $txt = ($Run.Frames[$Run.MenuFrame] -join "`n")
+    foreach ($it in @(Get-IndividualActionRows | Where-Object { $_.Kind -eq 'Item' })) {
+        [string] $lbl = ([string]$it.Label).TrimStart()
+        if (-not $txt.Contains($lbl)) { throw ("{0}: el menu no dibujo '{1}' (cayo a Paged?)" -f $Ctx, $lbl) }
+    }
+    if ($txt -match 'mostrando') { throw ("{0}: el menu quedo paginado" -f $Ctx) }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#99 Write-PctkMachineBanner compacto: -8 lineas, sin logo ni autor, la caja con TIER queda' {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) $lines.Add([string]$Object) }
+    [bool] $vtBefore = $script:PctkVT
+    [bool] $flagBefore = $script:PctkBannerCompact
+    try {
+        foreach ($vt in @($true, $false)) {
+            $script:PctkVT = $vt
+            $lines.Clear(); $script:PctkBannerCompact = $false
+            Write-PctkMachineBanner -Rows $script:Smoke99BannerRows -Tier 'MID'
+            [string[]] $full = @($lines)
+            $lines.Clear(); $script:PctkBannerCompact = $true
+            Write-PctkMachineBanner -Rows $script:Smoke99BannerRows -Tier 'MID'
+            [string[]] $comp = @($lines)
+            [int] $expectDiff = if ($vt) { 8 } else { 2 }
+            if (($full.Count - $comp.Count) -ne $expectDiff) {
+                throw ("VT={0}: completo {1} lineas, compacto {2}; esperado {3} menos" -f $vt, $full.Count, $comp.Count, $expectDiff)
+            }
+            [string] $ct = $comp -join "`n"
+            if ($ct -match 'Mateo Villanueva') { throw "VT=${vt}: el compacto todavia dibuja la linea del autor" }
+            if ($ct.Contains([string][char]0x2588)) { throw "VT=${vt}: el compacto todavia dibuja el logo de bloques" }
+            if ($vt -and -not $ct.Contains('PCTk v2')) { throw 'VT on: el compacto perdio el titulo PCTk v2 de la caja' }
+            if ($ct -notmatch 'MID') { throw "VT=${vt}: el compacto perdio el TIER" }
+            if ($ct -notmatch 'RTX 3060') { throw "VT=${vt}: el compacto perdio las filas de la PC" }
+            if (-not $vt -and $ct -notmatch '=====') { throw 'VT off: el compacto perdio las lineas =' }
+        }
+    } finally { $script:PctkVT = $vtBefore; $script:PctkBannerCompact = $flagBefore }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#99 handler: [A] a 44 filas entra entero con el banner compacto (no Paged)' {
+    $run = Invoke-Smoke99MenuRun -WinH 44
+    if ($run.MenuFrame -lt 0) { throw 'el lector no llego a dibujar el menu interactivo' }
+    if ($run.Renders -ne 2) { throw ("esperado 2 renders del header (completo -> compacto); hubo {0}" -f $run.Renders) }
+    if ($run.Headers[0] -or -not $run.Headers[1]) { throw ("flags por render: {0}; esperado False,True" -f ($run.Headers -join ',')) }
+    if ((($run.Frames[$run.MenuFrame]) -join "`n") -match 'Mateo Villanueva') { throw 'el frame del menu tiene el banner completo' }
+    Assert-Smoke99AllItems -Run $run -Ctx 'alto 44'
+    if ($script:PctkBannerCompact) { throw 'el flag quedo prendido al volver del lector' }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#99 handler: con alto 60 banner completo y sin redibujo extra' {
+    $run = Invoke-Smoke99MenuRun -WinH 60
+    if ($run.Renders -ne 1) { throw ("esperado 1 render del header; hubo {0}" -f $run.Renders) }
+    if ($run.Headers[0]) { throw 'el header se dibujo compacto con lugar de sobra' }
+    if ((($run.Frames[$run.MenuFrame]) -join "`n") -notmatch 'Mateo Villanueva') { throw 'falta el banner completo' }
+    Assert-Smoke99AllItems -Run $run -Ctx 'alto 60'
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#99 handler: con alto 30 se queda compacto y pagina' {
+    $run = Invoke-Smoke99MenuRun -WinH 30
+    if ($run.Renders -ne 2) { throw ("esperado 2 renders del header; hubo {0}" -f $run.Renders) }
+    if (-not $run.Headers[1]) { throw 'el ultimo header no fue compacto' }
+    if ((($run.Frames[$run.MenuFrame]) -join "`n") -notmatch 'mostrando') { throw 'a 30 filas tendria que paginar' }
+    if ($script:PctkBannerCompact) { throw 'el flag quedo prendido al volver del lector' }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#99 el flag compacto se apaga al salir del lector, tambien por excepcion' {
+    $script:PctkBannerCompact = $false
+    [bool] $threw = $false
+    try { $null = Invoke-Smoke99MenuRun -WinH 44 -ThrowOnCompactHeader }
+    catch { if ($_.Exception.Message -match 'smoke99: header revento') { $threw = $true } else { throw } }
+    if (-not $threw) { throw 'el header compacto nunca se dibujo (el lector no prendio el flag)' }
+    if ($script:PctkBannerCompact) { throw 'el flag quedo prendido tras la excepcion: el proximo menu/handler arrancaria compacto' }
+    $null = Invoke-Smoke99MenuRun -WinH 44
+    if ($script:PctkBannerCompact) { throw 'el flag quedo prendido tras una salida normal' }
+}
 Test-SmokeFunction 'Router' '#46 Get-PctkBannerCim: consulta CIM UNA vez por sesion (1122 ms medidos por consulta)' {
     # Medido 2026-09-09 en la maquina de Mateo: Win32_Processor tarda ~1040 ms y
     # Win32_OperatingSystem ~28 ms. Eso corria en CADA redibujo completo del menu

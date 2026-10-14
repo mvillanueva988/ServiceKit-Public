@@ -120,6 +120,23 @@ function Test-PctkConsoleResized {
     catch { return $false }
 }
 
+# #99: seams finos de medicion. Los lectores de menu leen la consola por aca (y
+# no [Console] directo) para que smoke pueda correr el lector REAL simulando el
+# alto de ventana y el cursor. Mismo comportamiento que antes: si no se puede
+# medir, tiran, y el caller degrada ($measureOk).
+function Get-PctkConsoleCursorTop {
+    [OutputType([int])]
+    param()
+    return [int] [Console]::CursorTop
+}
+
+function Get-PctkConsoleWindowHeight {
+    [OutputType([int])]
+    param()
+    try { return [int] [Console]::WindowHeight }
+    catch { return [int] $Host.UI.RawUI.WindowSize.Height }
+}
+
 function Get-PctkMenuLayout {
     <#
     .SYNOPSIS
@@ -323,15 +340,11 @@ function Read-PctkMenuChoice {
     }
 
     # Gate: todas deben pasar para usar modo crudo; si falla alguna -> fallback
+    # (#99: el gate es Test-PctkInteractiveConsole, la misma condicion que antes
+    # estaba inline, para que smoke pueda correr el modo interactivo)
     [bool] $interactive = $false
     if (-not $ForceFallbackForTest) {
-        try {
-            $interactive = (
-                [Environment]::UserInteractive -eq $true -and
-                [Console]::IsInputRedirected -eq $false -and
-                [Console]::IsOutputRedirected -eq $false
-            )
-        } catch { $interactive = $false }
+        $interactive = [bool] (Test-PctkInteractiveConsole)
     }
 
     if (-not $interactive -or $items.Count -eq 0) {
@@ -368,195 +381,215 @@ function Read-PctkMenuChoice {
     [int]    $viewTop    = 0   # solo relevante en modo Paged: primer indice visible de $compactRows
     [int]    $viewEnd    = $compactRows.Count - 1
 
-    while ($true) {
-        if ($full) {
-            & $RenderHeader
+    try {
+        while ($true) {
+            if ($full) {
+                # #99: cada redibujo completo re-decide desde el banner completo.
+                $script:PctkBannerCompact = $false
+                & $RenderHeader
 
-            # #46: medir el alto REAL antes de decidir como dibujar. Si algo
-            # no se puede medir, degradar directo al render plano (mismo
-            # espiritu que TooSmall: ante la duda, el seguro es el que no usa
-            # coordenadas absolutas).
-            [bool] $measureOk   = $true
-            [int]  $headerLines = 0
-            try { $headerLines = [Console]::CursorTop } catch { $measureOk = $false }
-            [int] $winH = 0
-            if ($measureOk) {
-                try { $winH = [Console]::WindowHeight }
-                catch {
-                    try { $winH = [int] $Host.UI.RawUI.WindowSize.Height }
-                    catch { $measureOk = $false }
+                # #46: medir el alto REAL antes de decidir como dibujar. Si algo
+                # no se puede medir, degradar directo al render plano (mismo
+                # espiritu que TooSmall: ante la duda, el seguro es el que no usa
+                # coordenadas absolutas).
+                [bool] $measureOk   = $true
+                [int]  $headerLines = 0
+                try { $headerLines = Get-PctkConsoleCursorTop } catch { $measureOk = $false }
+                [int] $winH = 0
+                if ($measureOk) {
+                    try { $winH = Get-PctkConsoleWindowHeight } catch { $measureOk = $false }
                 }
+
+                if (-not $measureOk -or $winH -le 0) {
+                    $layoutMode = 'TooSmall'
+                } else {
+                    $layoutInfo = Get-PctkMenuLayout -TotalRows $Rows.Count -CompactRows $compactRows.Count -HeaderLines $headerLines -WindowHeight $winH
+                    $layoutMode = [string] $layoutInfo.Mode
+                    # #99: si no entra ni compacto, antes de paginar probar con el
+                    # banner compacto (sin logo ni titulo/autor). Se RE-MIDE el
+                    # header: manda la medicion, no el -8 calculado. Si sigue sin
+                    # entrar, queda compacto igual (mas filas visibles).
+                    if (($layoutMode -eq 'Paged' -or $layoutMode -eq 'TooSmall') -and -not $script:PctkBannerCompact) {
+                        $script:PctkBannerCompact = $true
+                        & $RenderHeader
+                        try { $headerLines = Get-PctkConsoleCursorTop } catch { $measureOk = $false }
+                        if ($measureOk) {
+                            $layoutInfo = Get-PctkMenuLayout -TotalRows $Rows.Count -CompactRows $compactRows.Count -HeaderLines $headerLines -WindowHeight $winH
+                            $layoutMode = [string] $layoutInfo.Mode
+                        } else {
+                            $layoutMode = 'TooSmall'
+                        }
+                    }
+                }
+
+                if ($layoutMode -eq 'TooSmall') {
+                    Write-PctkWarn '  [!] La consola es muy chica para el menu -- agranda la ventana para ver las opciones.'
+                    return (Invoke-FlatFallback)
+                }
+
+                [object[]] $rowsToDraw = $Rows
+                if ($layoutMode -eq 'Compact') { $rowsToDraw = $compactRows }
+                if ($layoutMode -eq 'Paged') {
+                    $viewTop = Get-PctkMenuViewport -TargetPos $itemRowPos[$hiIdx] -CurrentViewTop $viewTop -Budget $layoutInfo.Budget -TotalCompactRows $compactRows.Count
+                    $viewEnd = [Math]::Min($compactRows.Count, $viewTop + $layoutInfo.Budget) - 1
+                    $rowsToDraw = $compactRows[$viewTop..$viewEnd]
+                } else {
+                    $viewTop = 0
+                    $viewEnd = $compactRows.Count - 1
+                }
+
+                foreach ($row in $rowsToDraw) {
+                    if ($row.Kind -eq 'Item') {
+                        [int] $ii = $itemIndexOf[$row]
+                        $itemY[$ii] = Get-PctkConsoleCursorTop
+                        Write-RowLine -Row $row -Hi ($ii -eq $hiIdx)
+                    } else {
+                        Write-RowLine -Row $row -Hi $false
+                    }
+                }
+                Write-Host ''
+                [string] $hintLine = '  Usa flechas arriba/abajo + Enter, o la tecla del atajo:'
+                if ($layoutMode -eq 'Paged') {
+                    $hintLine = ('  Flechas + Enter, o el atajo del margen.  (mostrando {0}-{1} de {2})' -f ($viewTop + 1), ($viewEnd + 1), $compactRows.Count)
+                }
+                if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $hintLine + (Pe)) }
+                else             { Write-Host $hintLine -ForegroundColor DarkGray }
+                $bottomY = Get-PctkConsoleCursorTop
+                try { $lastW = [Console]::WindowWidth; $lastH = [Console]::WindowHeight; $lastBW = [Console]::BufferWidth } catch { }
+                $full = $false
             }
 
-            if (-not $measureOk -or $winH -le 0) {
-                $layoutMode = 'TooSmall'
-            } else {
-                $layoutInfo = Get-PctkMenuLayout -TotalRows $Rows.Count -CompactRows $compactRows.Count -HeaderLines $headerLines -WindowHeight $winH
-                $layoutMode = [string] $layoutInfo.Mode
-            }
-
-            if ($layoutMode -eq 'TooSmall') {
-                Write-PctkWarn '  [!] La consola es muy chica para el menu -- agranda la ventana para ver las opciones.'
+            # --- Espera de tecla CON deteccion de resize (#43) -----------------------
+            # Antes esto era un [Console]::ReadKey($true) bloqueante y el chequeo de
+            # resize corria DESPUES, o sea recien cuando llegaba una tecla. Resultado:
+            # el operador maximizaba y la pantalla quedaba con el highlight estirado a
+            # todo el ancho nuevo y con restos del dibujo viejo en los bordes, hasta
+            # que apretaba algo. Sintoma textual de Mateo en el gate de v2.5.0: "se
+            # buguea un poquito, si entro a un menu y salgo se arregla" -- eso era la
+            # guarda disparandose tarde, no un problema de dibujo.
+            #
+            # Ahora se sondea, asi el redibujo llega solo. 80 ms es imperceptible al
+            # tipear (nadie nota 80 ms entre tecla y highlight) y no mueve la CPU: la
+            # regla del repo es que nada de UX puede agregar carga en la PC del cliente.
+            $key = $null
+            [bool] $resized = $false
+            try {
+                while (-not [Console]::KeyAvailable) {
+                    if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
+                        $resized = $true
+                        break
+                    }
+                    Start-Sleep -Milliseconds 80
+                }
+                if (-not $resized) { $key = [Console]::ReadKey($true) }
+            } catch {
+                # KeyAvailable/ReadKey fallaron (host sin consola real) -> fallback a
+                # Read-Host, igual que antes.
+                & $RenderHeader
                 return (Invoke-FlatFallback)
             }
 
-            [object[]] $rowsToDraw = $Rows
-            if ($layoutMode -eq 'Compact') { $rowsToDraw = $compactRows }
-            if ($layoutMode -eq 'Paged') {
-                $viewTop = Get-PctkMenuViewport -TargetPos $itemRowPos[$hiIdx] -CurrentViewTop $viewTop -Budget $layoutInfo.Budget -TotalCompactRows $compactRows.Count
-                $viewEnd = [Math]::Min($compactRows.Count, $viewTop + $layoutInfo.Budget) - 1
-                $rowsToDraw = $compactRows[$viewTop..$viewEnd]
-            } else {
-                $viewTop = 0
-                $viewEnd = $compactRows.Count - 1
+            # Resize mientras se esperaba: las Y cacheadas en $itemY quedaron obsoletas,
+            # asi que redibujo completo en vez de pintar el highlight en coordenadas
+            # viejas. No se consumio ninguna tecla.
+            if ($resized) { $full = $true; continue }
+            if ($null -eq $key) { continue }
+
+            # Y el resize que entra JUNTO con la tecla (o entre el poll y el ReadKey):
+            # mismo tratamiento. Este es el camino que ya existia y se conserva.
+            if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
+                $full = $true
+                continue
             }
 
-            foreach ($row in $rowsToDraw) {
-                if ($row.Kind -eq 'Item') {
-                    [int] $ii = $itemIndexOf[$row]
-                    $itemY[$ii] = [Console]::CursorTop
-                    Write-RowLine -Row $row -Hi ($ii -eq $hiIdx)
+            if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
+                $buffer = ''
+                [int] $old = $hiIdx
+                if ($key.Key -eq [ConsoleKey]::UpArrow) {
+                    $hiIdx = if ($hiIdx -le 0) { $items.Count - 1 } else { $hiIdx - 1 }
                 } else {
-                    Write-RowLine -Row $row -Hi $false
+                    $hiIdx = if ($hiIdx -ge ($items.Count - 1)) { 0 } else { $hiIdx + 1 }
                 }
-            }
-            Write-Host ''
-            [string] $hintLine = '  Usa flechas arriba/abajo + Enter, o la tecla del atajo:'
-            if ($layoutMode -eq 'Paged') {
-                $hintLine = ('  Flechas + Enter, o el atajo del margen.  (mostrando {0}-{1} de {2})' -f ($viewTop + 1), ($viewEnd + 1), $compactRows.Count)
-            }
-            if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $hintLine + (Pe)) }
-            else             { Write-Host $hintLine -ForegroundColor DarkGray }
-            $bottomY = [Console]::CursorTop
-            try { $lastW = [Console]::WindowWidth; $lastH = [Console]::WindowHeight; $lastBW = [Console]::BufferWidth } catch { }
-            $full = $false
-        }
-
-        # --- Espera de tecla CON deteccion de resize (#43) -----------------------
-        # Antes esto era un [Console]::ReadKey($true) bloqueante y el chequeo de
-        # resize corria DESPUES, o sea recien cuando llegaba una tecla. Resultado:
-        # el operador maximizaba y la pantalla quedaba con el highlight estirado a
-        # todo el ancho nuevo y con restos del dibujo viejo en los bordes, hasta
-        # que apretaba algo. Sintoma textual de Mateo en el gate de v2.5.0: "se
-        # buguea un poquito, si entro a un menu y salgo se arregla" -- eso era la
-        # guarda disparandose tarde, no un problema de dibujo.
-        #
-        # Ahora se sondea, asi el redibujo llega solo. 80 ms es imperceptible al
-        # tipear (nadie nota 80 ms entre tecla y highlight) y no mueve la CPU: la
-        # regla del repo es que nada de UX puede agregar carga en la PC del cliente.
-        $key = $null
-        [bool] $resized = $false
-        try {
-            while (-not [Console]::KeyAvailable) {
-                if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
-                    $resized = $true
-                    break
-                }
-                Start-Sleep -Milliseconds 80
-            }
-            if (-not $resized) { $key = [Console]::ReadKey($true) }
-        } catch {
-            # KeyAvailable/ReadKey fallaron (host sin consola real) -> fallback a
-            # Read-Host, igual que antes.
-            & $RenderHeader
-            return (Invoke-FlatFallback)
-        }
-
-        # Resize mientras se esperaba: las Y cacheadas en $itemY quedaron obsoletas,
-        # asi que redibujo completo en vez de pintar el highlight en coordenadas
-        # viejas. No se consumio ninguna tecla.
-        if ($resized) { $full = $true; continue }
-        if ($null -eq $key) { continue }
-
-        # Y el resize que entra JUNTO con la tecla (o entre el poll y el ReadKey):
-        # mismo tratamiento. Este es el camino que ya existia y se conserva.
-        if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
-            $full = $true
-            continue
-        }
-
-        if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
-            $buffer = ''
-            [int] $old = $hiIdx
-            if ($key.Key -eq [ConsoleKey]::UpArrow) {
-                $hiIdx = if ($hiIdx -le 0) { $items.Count - 1 } else { $hiIdx - 1 }
-            } else {
-                $hiIdx = if ($hiIdx -ge ($items.Count - 1)) { 0 } else { $hiIdx + 1 }
-            }
-            if ($old -ne $hiIdx) {
-                # #46: en modo Paged, si el nuevo resaltado cae afuera de la
-                # ventana visible actual hay que deslizarla -> las Y de TODAS
-                # las filas visibles cambian, asi que toca redibujo completo
-                # (no alcanza con las 2 filas de siempre).
-                [bool] $needsScroll = ($layoutMode -eq 'Paged') -and
-                    ($itemRowPos[$hiIdx] -lt $viewTop -or $itemRowPos[$hiIdx] -gt $viewEnd)
-                if ($needsScroll) {
-                    $full = $true
-                } else {
-                    try {
-                        # solo las 2 filas que cambian -> cero flash
-                        [Console]::SetCursorPosition(0, $itemY[$old])
-                        Write-RowLine -Row $items[$old]   -Hi $false
-                        [Console]::SetCursorPosition(0, $itemY[$hiIdx])
-                        Write-RowLine -Row $items[$hiIdx] -Hi $true
-                        [Console]::SetCursorPosition(0, $bottomY)
-                    } catch {
-                        $full = $true   # consola rara -> redibujo completo el proximo frame
-                    }
-                }
-            }
-            continue
-        }
-        # Enter o flecha derecha = elegir la opcion resaltada
-        if ($key.Key -eq [ConsoleKey]::Enter -or $key.Key -eq [ConsoleKey]::RightArrow) {
-            return [string]$items[$hiIdx].Key
-        }
-        # Atajo por tecla. Soporta keys de varios caracteres (ej. 10-17): un
-        # digito ambiguo ('1') NO elige solo (es prefijo de 10-17); acumula y
-        # mueve el highlight, y se completa con el 2do digito ('12') o se
-        # confirma con Enter. Los no ambiguos (2-9, B) eligen al toque.
-        if ($key.KeyChar -ne [char]0) {
-            [string] $ch = $key.KeyChar.ToString().ToUpperInvariant()
-            [string[]] $cands = @()
-            if ($buffer -ne '') { $cands += ($buffer + $ch) }
-            $cands += $ch
-
-            [bool] $accepted = $false
-            foreach ($cand in $cands) {
-                [object] $exact     = $items | Where-Object { [string]$_.Key -eq $cand } | Select-Object -First 1
-                [bool]   $hasLonger = @($items | Where-Object { [string]$_.Key -ne $cand -and ([string]$_.Key).StartsWith($cand) }).Count -gt 0
-                if ($null -ne $exact -and -not $hasLonger) {
-                    return [string]$exact.Key                  # match unico y completo -> elegir
-                }
-                if ($hasLonger -or $null -ne $exact) {
-                    $buffer = $cand                            # prefijo (o ambiguo) -> acumular y esperar
-                    [int] $mi = -1
-                    for ($j = 0; $j -lt $items.Count; $j++) { if ([string]$items[$j].Key -eq $cand) { $mi = $j; break } }
-                    if ($mi -lt 0) { for ($j = 0; $j -lt $items.Count; $j++) { if (([string]$items[$j].Key).StartsWith($cand)) { $mi = $j; break } } }
-                    if ($mi -ge 0 -and $mi -ne $hiIdx) {
-                        [int] $old = $hiIdx; $hiIdx = $mi
-                        # #46: mismo trato que las flechas -- si el atajo salto
-                        # a un item fuera de la ventana Paged visible, redibujo
-                        # completo en vez de pintar en Y que ya no corresponden.
-                        [bool] $needsScroll = ($layoutMode -eq 'Paged') -and
-                            ($itemRowPos[$hiIdx] -lt $viewTop -or $itemRowPos[$hiIdx] -gt $viewEnd)
-                        if ($needsScroll) {
-                            $full = $true
-                        } else {
-                            try {
-                                [Console]::SetCursorPosition(0, $itemY[$old]);   Write-RowLine -Row $items[$old]   -Hi $false
-                                [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-RowLine -Row $items[$hiIdx] -Hi $true
-                                [Console]::SetCursorPosition(0, $bottomY)
-                            } catch { $full = $true }
+                if ($old -ne $hiIdx) {
+                    # #46: en modo Paged, si el nuevo resaltado cae afuera de la
+                    # ventana visible actual hay que deslizarla -> las Y de TODAS
+                    # las filas visibles cambian, asi que toca redibujo completo
+                    # (no alcanza con las 2 filas de siempre).
+                    [bool] $needsScroll = ($layoutMode -eq 'Paged') -and
+                        ($itemRowPos[$hiIdx] -lt $viewTop -or $itemRowPos[$hiIdx] -gt $viewEnd)
+                    if ($needsScroll) {
+                        $full = $true
+                    } else {
+                        try {
+                            # solo las 2 filas que cambian -> cero flash
+                            [Console]::SetCursorPosition(0, $itemY[$old])
+                            Write-RowLine -Row $items[$old]   -Hi $false
+                            [Console]::SetCursorPosition(0, $itemY[$hiIdx])
+                            Write-RowLine -Row $items[$hiIdx] -Hi $true
+                            [Console]::SetCursorPosition(0, $bottomY)
+                        } catch {
+                            $full = $true   # consola rara -> redibujo completo el proximo frame
                         }
                     }
-                    $accepted = $true
-                    break
                 }
+                continue
             }
-            if (-not $accepted) { $buffer = '' }
+            # Enter o flecha derecha = elegir la opcion resaltada
+            if ($key.Key -eq [ConsoleKey]::Enter -or $key.Key -eq [ConsoleKey]::RightArrow) {
+                return [string]$items[$hiIdx].Key
+            }
+            # Atajo por tecla. Soporta keys de varios caracteres (ej. 10-17): un
+            # digito ambiguo ('1') NO elige solo (es prefijo de 10-17); acumula y
+            # mueve el highlight, y se completa con el 2do digito ('12') o se
+            # confirma con Enter. Los no ambiguos (2-9, B) eligen al toque.
+            if ($key.KeyChar -ne [char]0) {
+                [string] $ch = $key.KeyChar.ToString().ToUpperInvariant()
+                [string[]] $cands = @()
+                if ($buffer -ne '') { $cands += ($buffer + $ch) }
+                $cands += $ch
+
+                [bool] $accepted = $false
+                foreach ($cand in $cands) {
+                    [object] $exact     = $items | Where-Object { [string]$_.Key -eq $cand } | Select-Object -First 1
+                    [bool]   $hasLonger = @($items | Where-Object { [string]$_.Key -ne $cand -and ([string]$_.Key).StartsWith($cand) }).Count -gt 0
+                    if ($null -ne $exact -and -not $hasLonger) {
+                        return [string]$exact.Key                  # match unico y completo -> elegir
+                    }
+                    if ($hasLonger -or $null -ne $exact) {
+                        $buffer = $cand                            # prefijo (o ambiguo) -> acumular y esperar
+                        [int] $mi = -1
+                        for ($j = 0; $j -lt $items.Count; $j++) { if ([string]$items[$j].Key -eq $cand) { $mi = $j; break } }
+                        if ($mi -lt 0) { for ($j = 0; $j -lt $items.Count; $j++) { if (([string]$items[$j].Key).StartsWith($cand)) { $mi = $j; break } } }
+                        if ($mi -ge 0 -and $mi -ne $hiIdx) {
+                            [int] $old = $hiIdx; $hiIdx = $mi
+                            # #46: mismo trato que las flechas -- si el atajo salto
+                            # a un item fuera de la ventana Paged visible, redibujo
+                            # completo en vez de pintar en Y que ya no corresponden.
+                            [bool] $needsScroll = ($layoutMode -eq 'Paged') -and
+                                ($itemRowPos[$hiIdx] -lt $viewTop -or $itemRowPos[$hiIdx] -gt $viewEnd)
+                            if ($needsScroll) {
+                                $full = $true
+                            } else {
+                                try {
+                                    [Console]::SetCursorPosition(0, $itemY[$old]);   Write-RowLine -Row $items[$old]   -Hi $false
+                                    [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-RowLine -Row $items[$hiIdx] -Hi $true
+                                    [Console]::SetCursorPosition(0, $bottomY)
+                                } catch { $full = $true }
+                            }
+                        }
+                        $accepted = $true
+                        break
+                    }
+                }
+                if (-not $accepted) { $buffer = '' }
+            }
+            # Otras teclas (Esc, F-keys, flecha izquierda): ignorar
         }
-        # Otras teclas (Esc, F-keys, flecha izquierda): ignorar
+    }
+    finally {
+        # #99: el compacto vive mientras ESTE menu esta activo. La pantalla del
+        # handler y el proximo menu arrancan con el banner completo.
+        $script:PctkBannerCompact = $false
     }
 }
 
@@ -638,171 +671,166 @@ function Read-PctkMultiChoice {
     [int]    $viewTop    = 0
     [int]    $viewEnd    = $count - 1
 
-    while ($true) {
-        if ($full) {
-            & $RenderHeader
+    try {
+        while ($true) {
+            if ($full) {
+                # #99: mismo trato que Read-PctkMenuChoice (banner compacto antes de paginar).
+                $script:PctkBannerCompact = $false
+                & $RenderHeader
 
-            [bool] $measureOk   = $true
-            [int]  $headerLines = 0
-            try { $headerLines = [Console]::CursorTop } catch { $measureOk = $false }
-            [int] $winH = 0
-            if ($measureOk) {
-                try { $winH = [Console]::WindowHeight }
-                catch {
-                    try { $winH = [int] $Host.UI.RawUI.WindowSize.Height }
-                    catch { $measureOk = $false }
+                [bool] $measureOk   = $true
+                [int]  $headerLines = 0
+                try { $headerLines = Get-PctkConsoleCursorTop } catch { $measureOk = $false }
+                [int] $winH = 0
+                if ($measureOk) {
+                    try { $winH = Get-PctkConsoleWindowHeight } catch { $measureOk = $false }
                 }
-            }
 
-            if (-not $measureOk -or $winH -le 0) {
-                $layoutMode = 'TooSmall'
-            } else {
-                $layoutInfo = Get-PctkMenuLayout -TotalRows $count -CompactRows $count -HeaderLines $headerLines -WindowHeight $winH
-                $layoutMode = [string] $layoutInfo.Mode
-            }
-
-            if ($layoutMode -eq 'TooSmall') {
-                # #46 opcion (c): avisar con UNA linea y volver -- no hay un
-                # "render plano" propio para el multi-select (el caller ya
-                # trata Action=fallback como "salir con gracia", ver
-                # Invoke-ToolsMenuInteractive), asi que se reusa esa salida
-                # PERO con el aviso puesto, en vez de irse en silencio.
-                #
-                # La pausa NO es opcional: al volver, el menu de arriba redibuja
-                # con Clear-Host y borra el aviso. Ver Show-PctkMenuTooSmallNotice.
-                Show-PctkMenuTooSmallNotice '  [!] La consola es muy chica para esta lista -- agranda la ventana para ver las opciones.'
-                return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx }
-            }
-
-            if ($layoutMode -eq 'Paged') {
-                $viewTop = Get-PctkMenuViewport -TargetPos $hiIdx -CurrentViewTop $viewTop -Budget $layoutInfo.Budget -TotalCompactRows $count
-                $viewEnd = [Math]::Min($count, $viewTop + $layoutInfo.Budget) - 1
-            } else {
-                $viewTop = 0
-                $viewEnd = $count - 1
-            }
-
-            for ([int] $i = $viewTop; $i -le $viewEnd; $i++) {
-                $itemY[$i] = [Console]::CursorTop
-                Write-MultiRow -IsChecked $Checked[$i] -Item $Items[$i] -Hi ($i -eq $hiIdx)
-            }
-            Write-Host ''
-            $legendY = [Console]::CursorTop
-            [string] $legend = $LegendLine
-            if ($layoutMode -eq 'Paged') {
-                $legend = ('{0}  (mostrando {1}-{2} de {3})' -f $LegendLine, ($viewTop + 1), ($viewEnd + 1), $count)
-            }
-            if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $legend + (Pe)) }
-            else             { Write-Host $legend -ForegroundColor DarkGray }
-            try { $lastW = [Console]::WindowWidth; $lastH = [Console]::WindowHeight; $lastBW = [Console]::BufferWidth } catch { }
-            $full = $false
-        }
-
-        # Misma espera sondeada que Read-PctkMenuChoice (#43): con el ReadKey
-        # bloqueante, la guarda de resize de abajo no se evaluaba hasta que llegara
-        # una tecla, asi que maximizar dejaba el menu mal dibujado hasta que el
-        # operador apretaba algo. Este menu tenia el bug identico -- arreglar solo
-        # el principal habria dejado la mitad, y el [T] es el que mas se mira con
-        # la ventana agrandada (23 herramientas en lista).
-        $key = $null
-        [bool] $resized = $false
-        try {
-            while (-not [Console]::KeyAvailable) {
-                if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
-                    $resized = $true
-                    break
-                }
-                Start-Sleep -Milliseconds 80
-            }
-            if (-not $resized) { $key = [Console]::ReadKey($true) }
-        }
-        catch { return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx } }
-
-        if ($resized) { $full = $true; continue }
-        if ($null -eq $key) { continue }
-
-        # Resize que entra junto con la tecla -> Y cacheadas obsoletas -> redibujo.
-        if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
-            $full = $true
-            continue
-        }
-
-        if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
-            $buffer = ''
-            [int] $old = $hiIdx
-            if ($key.Key -eq [ConsoleKey]::UpArrow) { $hiIdx = if ($hiIdx -le 0) { $count - 1 } else { $hiIdx - 1 } }
-            else { $hiIdx = if ($hiIdx -ge ($count - 1)) { 0 } else { $hiIdx + 1 } }
-            if ($old -ne $hiIdx) {
-                # #46: mismo trato que en Read-PctkMenuChoice -- si el nuevo
-                # resaltado cae afuera de la ventana Paged visible, redibujo
-                # completo (la ventana se desliza, todas las Y cambian).
-                [bool] $needsScroll = ($layoutMode -eq 'Paged') -and ($hiIdx -lt $viewTop -or $hiIdx -gt $viewEnd)
-                if ($needsScroll) {
-                    $full = $true
+                if (-not $measureOk -or $winH -le 0) {
+                    $layoutMode = 'TooSmall'
                 } else {
-                    try {
-                        [Console]::SetCursorPosition(0, $itemY[$old]);   Write-MultiRow -IsChecked $Checked[$old]   -Item $Items[$old]   -Hi $false
-                        [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
-                        [Console]::SetCursorPosition(0, $legendY)
-                    } catch { $full = $true }
+                    $layoutInfo = Get-PctkMenuLayout -TotalRows $count -CompactRows $count -HeaderLines $headerLines -WindowHeight $winH
+                    $layoutMode = [string] $layoutInfo.Mode
+                    if (($layoutMode -eq 'Paged' -or $layoutMode -eq 'TooSmall') -and -not $script:PctkBannerCompact) {
+                        $script:PctkBannerCompact = $true
+                        & $RenderHeader
+                        try { $headerLines = Get-PctkConsoleCursorTop } catch { $measureOk = $false }
+                        if ($measureOk) {
+                            $layoutInfo = Get-PctkMenuLayout -TotalRows $count -CompactRows $count -HeaderLines $headerLines -WindowHeight $winH
+                            $layoutMode = [string] $layoutInfo.Mode
+                        } else {
+                            $layoutMode = 'TooSmall'
+                        }
+                    }
                 }
+
+                if ($layoutMode -eq 'TooSmall') {
+                    # #46 opcion (c): avisar con UNA linea y volver -- no hay un
+                    # "render plano" propio para el multi-select (el caller ya
+                    # trata Action=fallback como "salir con gracia", ver
+                    # Invoke-ToolsMenuInteractive), asi que se reusa esa salida
+                    # PERO con el aviso puesto, en vez de irse en silencio.
+                    #
+                    # La pausa NO es opcional: al volver, el menu de arriba redibuja
+                    # con Clear-Host y borra el aviso. Ver Show-PctkMenuTooSmallNotice.
+                    Show-PctkMenuTooSmallNotice '  [!] La consola es muy chica para esta lista -- agranda la ventana para ver las opciones.'
+                    return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx }
+                }
+
+                if ($layoutMode -eq 'Paged') {
+                    $viewTop = Get-PctkMenuViewport -TargetPos $hiIdx -CurrentViewTop $viewTop -Budget $layoutInfo.Budget -TotalCompactRows $count
+                    $viewEnd = [Math]::Min($count, $viewTop + $layoutInfo.Budget) - 1
+                } else {
+                    $viewTop = 0
+                    $viewEnd = $count - 1
+                }
+
+                for ([int] $i = $viewTop; $i -le $viewEnd; $i++) {
+                    $itemY[$i] = [Console]::CursorTop
+                    Write-MultiRow -IsChecked $Checked[$i] -Item $Items[$i] -Hi ($i -eq $hiIdx)
+                }
+                Write-Host ''
+                $legendY = [Console]::CursorTop
+                [string] $legend = $LegendLine
+                if ($layoutMode -eq 'Paged') {
+                    $legend = ('{0}  (mostrando {1}-{2} de {3})' -f $LegendLine, ($viewTop + 1), ($viewEnd + 1), $count)
+                }
+                if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $legend + (Pe)) }
+                else             { Write-Host $legend -ForegroundColor DarkGray }
+                try { $lastW = [Console]::WindowWidth; $lastH = [Console]::WindowHeight; $lastBW = [Console]::BufferWidth } catch { }
+                $full = $false
             }
-            continue
-        }
-        if ($key.Key -eq [ConsoleKey]::RightArrow) {
-            return [PSCustomObject]@{ Action = 'open'; Checked = $Checked; HiIdx = $hiIdx }
-        }
-        if ($key.Key -eq [ConsoleKey]::Spacebar) {
-            $buffer = ''
-            $Checked[$hiIdx] = -not $Checked[$hiIdx]
+
+            # Misma espera sondeada que Read-PctkMenuChoice (#43): con el ReadKey
+            # bloqueante, la guarda de resize de abajo no se evaluaba hasta que llegara
+            # una tecla, asi que maximizar dejaba el menu mal dibujado hasta que el
+            # operador apretaba algo. Este menu tenia el bug identico -- arreglar solo
+            # el principal habria dejado la mitad, y el [T] es el que mas se mira con
+            # la ventana agrandada (23 herramientas en lista).
+            $key = $null
+            [bool] $resized = $false
             try {
-                [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
-                [Console]::SetCursorPosition(0, $legendY)
-            } catch { $full = $true }
-            continue
-        }
-        if ($key.Key -eq [ConsoleKey]::Enter) {
-            return [PSCustomObject]@{ Action = 'submit'; Checked = $Checked; HiIdx = $hiIdx }
-        }
-        if ($key.Key -eq [ConsoleKey]::Escape) {
-            return [PSCustomObject]@{ Action = 'cancel'; Checked = $Checked; HiIdx = $hiIdx }
-        }
-        # Numero: marca/desmarca por posicion (1..N). Multi-digito (10-19): un
-        # prefijo ambiguo ('1') mueve el highlight y espera; el numero completo
-        # togglea. El no ambiguo (2-9, o el 2do digito '12') togglea al toque.
-        if ([char]::IsDigit($key.KeyChar)) {
-            [string] $ch = [string] $key.KeyChar
-            [string[]] $cands = @()
-            if ($buffer -ne '') { $cands += ($buffer + $ch) }
-            $cands += $ch
-            [bool] $handled = $false
-            foreach ($cand in $cands) {
-                [int]  $candNum   = 0
-                [bool] $exact     = [int]::TryParse($cand, [ref] $candNum) -and $candNum -ge 1 -and $candNum -le $count
-                [bool] $hasLonger = ($candNum -ge 1 -and ($candNum * 10) -le $count)
-                if ($exact -and -not $hasLonger) {
-                    [int] $idx = $candNum - 1
-                    [int] $old = $hiIdx; $hiIdx = $idx
-                    $Checked[$idx] = -not $Checked[$idx]
-                    $buffer = ''
-                    # #46: el estado (Checked) ya cambio arriba pase lo que
-                    # pase con el dibujo -- si el salto se va de la ventana
-                    # Paged visible, redibujo completo en vez de pintar Y viejas.
-                    if (($layoutMode -eq 'Paged') -and ($hiIdx -lt $viewTop -or $hiIdx -gt $viewEnd)) {
+                while (-not [Console]::KeyAvailable) {
+                    if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
+                        $resized = $true
+                        break
+                    }
+                    Start-Sleep -Milliseconds 80
+                }
+                if (-not $resized) { $key = [Console]::ReadKey($true) }
+            }
+            catch { return [PSCustomObject]@{ Action = 'fallback'; Checked = $Checked; HiIdx = $hiIdx } }
+
+            if ($resized) { $full = $true; continue }
+            if ($null -eq $key) { continue }
+
+            # Resize que entra junto con la tecla -> Y cacheadas obsoletas -> redibujo.
+            if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
+                $full = $true
+                continue
+            }
+
+            if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
+                $buffer = ''
+                [int] $old = $hiIdx
+                if ($key.Key -eq [ConsoleKey]::UpArrow) { $hiIdx = if ($hiIdx -le 0) { $count - 1 } else { $hiIdx - 1 } }
+                else { $hiIdx = if ($hiIdx -ge ($count - 1)) { 0 } else { $hiIdx + 1 } }
+                if ($old -ne $hiIdx) {
+                    # #46: mismo trato que en Read-PctkMenuChoice -- si el nuevo
+                    # resaltado cae afuera de la ventana Paged visible, redibujo
+                    # completo (la ventana se desliza, todas las Y cambian).
+                    [bool] $needsScroll = ($layoutMode -eq 'Paged') -and ($hiIdx -lt $viewTop -or $hiIdx -gt $viewEnd)
+                    if ($needsScroll) {
                         $full = $true
                     } else {
                         try {
-                            if ($old -ne $hiIdx) { [Console]::SetCursorPosition(0, $itemY[$old]); Write-MultiRow -IsChecked $Checked[$old] -Item $Items[$old] -Hi $false }
+                            [Console]::SetCursorPosition(0, $itemY[$old]);   Write-MultiRow -IsChecked $Checked[$old]   -Item $Items[$old]   -Hi $false
                             [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
                             [Console]::SetCursorPosition(0, $legendY)
                         } catch { $full = $true }
                     }
-                    $handled = $true; break
                 }
-                if ($hasLonger) {
-                    [int] $idx = $candNum - 1
-                    if ($idx -ge 0 -and $idx -lt $count) {
+                continue
+            }
+            if ($key.Key -eq [ConsoleKey]::RightArrow) {
+                return [PSCustomObject]@{ Action = 'open'; Checked = $Checked; HiIdx = $hiIdx }
+            }
+            if ($key.Key -eq [ConsoleKey]::Spacebar) {
+                $buffer = ''
+                $Checked[$hiIdx] = -not $Checked[$hiIdx]
+                try {
+                    [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                    [Console]::SetCursorPosition(0, $legendY)
+                } catch { $full = $true }
+                continue
+            }
+            if ($key.Key -eq [ConsoleKey]::Enter) {
+                return [PSCustomObject]@{ Action = 'submit'; Checked = $Checked; HiIdx = $hiIdx }
+            }
+            if ($key.Key -eq [ConsoleKey]::Escape) {
+                return [PSCustomObject]@{ Action = 'cancel'; Checked = $Checked; HiIdx = $hiIdx }
+            }
+            # Numero: marca/desmarca por posicion (1..N). Multi-digito (10-19): un
+            # prefijo ambiguo ('1') mueve el highlight y espera; el numero completo
+            # togglea. El no ambiguo (2-9, o el 2do digito '12') togglea al toque.
+            if ([char]::IsDigit($key.KeyChar)) {
+                [string] $ch = [string] $key.KeyChar
+                [string[]] $cands = @()
+                if ($buffer -ne '') { $cands += ($buffer + $ch) }
+                $cands += $ch
+                [bool] $handled = $false
+                foreach ($cand in $cands) {
+                    [int]  $candNum   = 0
+                    [bool] $exact     = [int]::TryParse($cand, [ref] $candNum) -and $candNum -ge 1 -and $candNum -le $count
+                    [bool] $hasLonger = ($candNum -ge 1 -and ($candNum * 10) -le $count)
+                    if ($exact -and -not $hasLonger) {
+                        [int] $idx = $candNum - 1
                         [int] $old = $hiIdx; $hiIdx = $idx
+                        $Checked[$idx] = -not $Checked[$idx]
+                        $buffer = ''
+                        # #46: el estado (Checked) ya cambio arriba pase lo que
+                        # pase con el dibujo -- si el salto se va de la ventana
+                        # Paged visible, redibujo completo en vez de pintar Y viejas.
                         if (($layoutMode -eq 'Paged') -and ($hiIdx -lt $viewTop -or $hiIdx -gt $viewEnd)) {
                             $full = $true
                         } else {
@@ -812,23 +840,42 @@ function Read-PctkMultiChoice {
                                 [Console]::SetCursorPosition(0, $legendY)
                             } catch { $full = $true }
                         }
+                        $handled = $true; break
                     }
-                    $buffer = $cand
-                    $handled = $true; break
+                    if ($hasLonger) {
+                        [int] $idx = $candNum - 1
+                        if ($idx -ge 0 -and $idx -lt $count) {
+                            [int] $old = $hiIdx; $hiIdx = $idx
+                            if (($layoutMode -eq 'Paged') -and ($hiIdx -lt $viewTop -or $hiIdx -gt $viewEnd)) {
+                                $full = $true
+                            } else {
+                                try {
+                                    if ($old -ne $hiIdx) { [Console]::SetCursorPosition(0, $itemY[$old]); Write-MultiRow -IsChecked $Checked[$old] -Item $Items[$old] -Hi $false }
+                                    [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-MultiRow -IsChecked $Checked[$hiIdx] -Item $Items[$hiIdx] -Hi $true
+                                    [Console]::SetCursorPosition(0, $legendY)
+                                } catch { $full = $true }
+                            }
+                        }
+                        $buffer = $cand
+                        $handled = $true; break
+                    }
+                }
+                if (-not $handled) { $buffer = '' }
+                continue
+            }
+            if ($key.KeyChar -ne [char]0) {
+                [string] $kc = $key.KeyChar.ToString().ToUpperInvariant()
+                if ($kc -eq 'B') { return [PSCustomObject]@{ Action = 'cancel'; Checked = $Checked; HiIdx = $hiIdx } }
+                foreach ($ak in $ActionKeys) {
+                    if ($kc -eq ([string]$ak).ToUpperInvariant()) {
+                        return [PSCustomObject]@{ Action = $kc; Checked = $Checked; HiIdx = $hiIdx }
+                    }
                 }
             }
-            if (-not $handled) { $buffer = '' }
-            continue
+            # otras teclas: ignorar
         }
-        if ($key.KeyChar -ne [char]0) {
-            [string] $kc = $key.KeyChar.ToString().ToUpperInvariant()
-            if ($kc -eq 'B') { return [PSCustomObject]@{ Action = 'cancel'; Checked = $Checked; HiIdx = $hiIdx } }
-            foreach ($ak in $ActionKeys) {
-                if ($kc -eq ([string]$ak).ToUpperInvariant()) {
-                    return [PSCustomObject]@{ Action = $kc; Checked = $Checked; HiIdx = $hiIdx }
-                }
-            }
-        }
-        # otras teclas: ignorar
+    }
+    finally {
+        $script:PctkBannerCompact = $false   # #99: ver Read-PctkMenuChoice
     }
 }
