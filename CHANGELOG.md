@@ -2,6 +2,22 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.11.0] - 2026-10-14
+
+Release: **PCTk mide los FPS y ve lo que le roba rendimiento a la placa de video**. Suma el menú `[F]` para medir FPS en CS2 con un A/B que distingue una mejora real del ruido, y el perfil de la máquina avisa solo de seis problemas de GPU y pantalla. El informe al cliente deja de mostrar la salud del disco como un `0` en rojo.
+
+### Added
+
+- **Medir FPS en CS2, `[F]` en DIAGNOSTICO (`modules/MedicionFps.ps1`)**: captura con PresentMon sobre `cs2.exe` y resume FPS promedio, 1 % low (1000 / p99 de frametime) y p99. El comparador A/B toma lotes intercalados base, variante, base y dice "mejora", "dentro del ruido" o "empeora" con un umbral de ±10 %; si los dos lotes base difieren más que eso, dice "medición no confiable, repetir". Sólo corre a pedido del operador, nunca dentro del `[1]`. Gate en HW: `tests/fps-gate.ps1`.
+- **Avisos de GPU y pantalla en el perfil (`core/GpuDisplayChecks.ps1`)**: sólo lectura, como líneas `[HW]` del banner: monitor por debajo de su refresh máximo, monitor enchufado a la placa madre teniendo placa de video, ReBAR apagado o firmware Legacy, enlace PCIe degradado, RAM en un solo canal y driver genérico o placa de video sin driver. Cada detector que no puede leer su fuente queda como "no determinado" con el motivo. Agrega unos 200 ms al arranque.
+
+### Fixed
+
+- **Salud del disco en el informe (`modules/Telemetry.ps1`, `modules/ClientReport.ps1`)**: el snapshot guardaba el código crudo de Windows y el informe mostraba un badge rojo "0" para un disco sano. Ahora se guarda Healthy/Warning/Unhealthy/Unknown y el `[8]` muestra Sano, Con advertencias, Con fallas o Sin dato; los snapshots viejos con número se leen bien. El informe `[I]` y el research prompt también.
+- **El perfil ya no impide arrancar PCTk con WMI roto (`core/MachineProfile.ps1`)**: cada consulta va en su propio `try`.
+- **Caracteres que la consola no muestra (`utils/ConsoleTheme.ps1` y otros)**: rayas y el divisor grueso salían como `?` o un cuadrado en conhost con la fuente por defecto y por AnyDesk. Ahora todo lo que va a consola entra en la página de códigos OEM 850, y un lint lo vigila en todo el código.
+- **`[A][20] M` ya no dice "Setting visible" cuando el des-ocultado falla (`modules/EnergyTuning.ps1`)**: ahora dice que sigue oculto.
+
 ## [2.10.2] - 2026-10-13
 
 Release: **las recetas nombradas vuelven a abrir**. El menú `[2]` de recetas nombradas (crear, cargar y reaplicar) se cerraba siempre antes de pedir confirmación, desde v2.1.4; ahora muestra el preview y, si la receta apaga HVCI, el mismo aviso de anti-cheat que `[A][12]`. Suma el arreglo del backup de drivers en una PC sin drivers de terceros.
