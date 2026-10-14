@@ -2725,11 +2725,12 @@ Test-SmokeFunction 'ConsoleMenu' 'Read-PctkMenuChoice presente' {
         throw 'Read-PctkMenuChoice no encontrado'
     }
 }
-Test-SmokeFunction 'ConsoleMenu' 'Get-MainMenuRows: 15 items en orden + 4 headers' {
+Test-SmokeFunction 'ConsoleMenu' 'Get-MainMenuRows: 16 items en orden + 4 headers' {
     [object[]] $rows  = Get-MainMenuRows
     [object[]] $items = @($rows | Where-Object { $_.Kind -eq 'Item' })
     # [I] = informe tecnico del equipo (RawAudit), cableado 2026-07-25.
-    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','R','A','T','I','L','X','U')
+    # [F] = medicion de FPS en CS2 (#90 (4)), en DIAGNOSTICO.
+    [string[]] $expectedKeys = @('1','2','3','4','5','6','7','8','R','F','A','T','I','L','X','U')
     if ($items.Count -ne $expectedKeys.Count) {
         throw ('Se esperaban {0} items; encontrados {1}' -f $expectedKeys.Count, $items.Count)
     }
@@ -6119,6 +6120,346 @@ Test-SmokeFunction 'StaticCheck' '#86 Start-Process -ArgumentList sin variables 
     if ($files -lt 20) { throw ('barrio solo {0} archivos: glob roto?' -f $files) }
     if ($all.Count -gt 0) {
         throw ('Start-Process con argumento suelto (una ruta con espacios se parte en PS 5.1): {0}. Usar (''"{{0}}"'' -f $ruta).' -f ($all -join ', '))
+    }
+}
+
+
+# ─── #90 (4) MedicionFps: kit de medicion de FPS en CS2 (PresentMon + A/B) ────
+# Fixtures SINTETICOS generados aca, con frametimes conocidos y resultados
+# calculados a mano. Definiciones bajo prueba (las de modules\MedicionFps.ps1):
+#   FPS promedio = 1000 / promedio(frametime ms)           (= frames / tiempo)
+#   p99 frametime = rango-cercano: ordenado[min(n-1, floor(n*0.99))]
+#   1 % low       = 1000 / p99 frametime
+# Ojo: NINGUN test de este bloque lanza PresentMon ni mira el cs2.exe real. Si
+# Mateo tiene CS2 abierto mientras corre el smoke, nada tiene que capturar:
+# Get-Process y Start-Process van SIEMPRE shadowed (test seguro por diseño, no
+# por casualidad del ambiente).
+function New-SmokeFpsCsv {
+    param(
+        [Parameter(Mandatory)] [string]   $Path,
+        [Parameter(Mandatory)] [ValidateSet('v2', 'v1', 'displayonly', 'unknown')] [string] $Schema,
+        [Parameter(Mandatory)] [double[]] $FrameTimes,
+        [string] $SwapChain = '0x000001A0',
+        [switch] $LeadingNA,
+        [double[]] $OtherSwapChainFrames = @()
+    )
+    [System.Collections.Generic.List[string]] $lines = [System.Collections.Generic.List[string]]::new()
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
+    switch ($Schema) {
+        'v2' {
+            $lines.Add('Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,CPUStartTime,FrameTime,CPUBusy,CPUWait,GPULatency,GPUTime,GPUBusy,GPUWait,DisplayLatency,DisplayedTime')
+            [double] $t = 0
+            if ($LeadingNA) { $lines.Add(('cs2.exe,4242,{0},DXGI,0,0,1,Hardware: Independent Flip,0.0,NA,NA,NA,NA,NA,NA,NA,NA,NA' -f $SwapChain)) }
+            foreach ($ft in $FrameTimes) {
+                $t += $ft
+                $lines.Add(('cs2.exe,4242,{0},DXGI,0,0,1,Hardware: Independent Flip,{1},{2},1.5,0.1,0.2,3.0,2.9,0.1,6.0,{2}' -f $SwapChain, $t.ToString($inv), $ft.ToString($inv)))
+            }
+            foreach ($ft in $OtherSwapChainFrames) {
+                $lines.Add(('cs2.exe,4242,0x0000FFFF,DXGI,0,0,1,Composed: Flip,{0},{1},1.5,0.1,0.2,3.0,2.9,0.1,6.0,{1}' -f $t.ToString($inv), $ft.ToString($inv)))
+            }
+        }
+        'v1' {
+            $lines.Add('Application,ProcessID,SwapChainAddress,Runtime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,TimeInSeconds,MsInPresentAPI,MsBetweenPresents,MsBetweenDisplayChange,MsUntilRenderComplete,MsUntilDisplayed')
+            [double] $t = 0
+            foreach ($ft in $FrameTimes) {
+                $t += $ft / 1000
+                $lines.Add(('cs2.exe,4242,{0},DXGI,0,0,1,Hardware: Independent Flip,{1},0.2,{2},{2},3.1,5.0' -f $SwapChain, $t.ToString($inv), $ft.ToString($inv)))
+            }
+        }
+        'displayonly' {
+            $lines.Add('Application,ProcessID,SwapChainAddress,PresentMode,MsBetweenDisplayChange')
+            foreach ($ft in $FrameTimes) { $lines.Add(('cs2.exe,4242,{0},Hardware: Independent Flip,{1}' -f $SwapChain, $ft.ToString($inv))) }
+        }
+        'unknown' {
+            $lines.Add('Application,ProcessID,Foo,Bar')
+            foreach ($ft in $FrameTimes) { $lines.Add(('cs2.exe,4242,1,{0}' -f $ft.ToString($inv))) }
+        }
+    }
+    [System.IO.File]::WriteAllLines($Path, $lines.ToArray())
+}
+
+function New-SmokeFpsPass {
+    param([double] $Avg, [double] $Low = 0)
+    if ($Low -eq 0) { $Low = $Avg * 0.6 }
+    return [PSCustomObject]@{ AvgFps = $Avg; Low1Fps = $Low; Frames = 1000; Valid = $true }
+}
+
+function Assert-SmokeNear {
+    param([double] $Got, [double] $Want, [string] $What, [double] $Tol = 0.01)
+    if ([math]::Abs($Got - $Want) -gt $Tol) { throw ('{0}: esperado {1}, got {2}' -f $What, $Want, $Got) }
+}
+
+# 99 frames de 10 ms + 1 de 50 ms: promedio 10,4 ms -> 96,1538 fps; p99 = ordenado[99] = 50 ms -> 1 % low 20 fps.
+[double[]] $script:SmokeFpsFtA = @(@(10.0) * 99) + @(50.0)
+# 196 frames de 5 ms + 4 de 20 ms: promedio 5,3 ms -> 188,679 fps; p99 = ordenado[198] = 20 ms -> 1 % low 50 fps.
+[double[]] $script:SmokeFpsFtB = @(@(5.0) * 196) + @(@(20.0) * 4)
+
+Test-SmokeFunction 'MedicionFps' 'columna de frametime: FrameTime (2.x) > MsBetweenPresents (1.x / 2.6 default) > MsBetweenDisplayChange' {
+    if ((Get-FpsFrametimeColumn -Header @('Application', 'FrameTime', 'MsBetweenPresents')) -ne 'FrameTime') { throw '2.x: no eligio FrameTime' }
+    if ((Get-FpsFrametimeColumn -Header @('Application', 'MsBetweenPresents', 'MsBetweenDisplayChange')) -ne 'MsBetweenPresents') { throw '1.x: no eligio MsBetweenPresents' }
+    if ((Get-FpsFrametimeColumn -Header @('Application', 'MsBetweenDisplayChange')) -ne 'MsBetweenDisplayChange') { throw 'solo display: no cayo a MsBetweenDisplayChange' }
+    if ((Get-FpsFrametimeColumn -Header @('Application', 'Foo')) -ne '') { throw 'sin columna conocida tiene que devolver vacio' }
+}
+
+Test-SmokeFunction 'MedicionFps' 'resumen CSV 2.x (FrameTime): promedio y 1 % low calculados a mano, NA y otra swapchain fuera, en es-AR' {
+    [string] $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-fps-{0}.csv' -f [guid]::NewGuid().ToString('N'))
+    $prevCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        # es-AR usa coma decimal: si el parser usa la cultura actual, 10.4 se lee mal.
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('es-AR')
+        New-SmokeFpsCsv -Path $tmp -Schema 'v2' -FrameTimes $script:SmokeFpsFtA -LeadingNA -OtherSwapChainFrames @(1000.0, 1000.0, 1000.0)
+        $s = Get-PresentMonCsvSummary -Path $tmp
+        if ($s.Column -ne 'FrameTime') { throw ('columna: {0}' -f $s.Column) }
+        if ($s.Frames -ne 100) { throw ('frames: esperado 100 (sin la fila NA ni la otra swapchain), got {0}' -f $s.Frames) }
+        Assert-SmokeNear $s.AvgFps 96.1538 'AvgFps'
+        Assert-SmokeNear $s.Low1Fps 20 'Low1Fps'
+        Assert-SmokeNear $s.P99FrametimeMs 50 'P99FrametimeMs'
+        if (-not $s.Valid) { throw ('100 frames tiene que ser valido: {0}' -f $s.Reason) }
+    }
+    finally {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = $prevCulture
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'MedicionFps' 'resumen CSV 1.x (MsBetweenPresents): promedio y 1 % low calculados a mano' {
+    [string] $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-fps-{0}.csv' -f [guid]::NewGuid().ToString('N'))
+    try {
+        New-SmokeFpsCsv -Path $tmp -Schema 'v1' -FrameTimes $script:SmokeFpsFtB
+        $s = Get-PresentMonCsvSummary -Path $tmp
+        if ($s.Column -ne 'MsBetweenPresents') { throw ('columna: {0}' -f $s.Column) }
+        if ($s.Frames -ne 200) { throw ('frames: {0}' -f $s.Frames) }
+        Assert-SmokeNear $s.AvgFps 188.6792 'AvgFps'
+        Assert-SmokeNear $s.Low1Fps 50 'Low1Fps'
+        Assert-SmokeNear $s.P99FrametimeMs 20 'P99FrametimeMs'
+    }
+    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'MedicionFps' 'resumen: columnas desconocidas = error claro; menos de 100 frames = no valido' {
+    [string] $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-fps-{0}.csv' -f [guid]::NewGuid().ToString('N'))
+    try {
+        New-SmokeFpsCsv -Path $tmp -Schema 'unknown' -FrameTimes @(10.0, 10.0)
+        [bool] $threw = $false
+        try { $null = Get-PresentMonCsvSummary -Path $tmp } catch { $threw = $true; if ($_.Exception.Message -notmatch 'columna') { throw ('mensaje poco claro: {0}' -f $_.Exception.Message) } }
+        if (-not $threw) { throw 'un CSV sin columna de frametime tiene que tirar' }
+        New-SmokeFpsCsv -Path $tmp -Schema 'displayonly' -FrameTimes (@(10.0) * 50)
+        $s = Get-PresentMonCsvSummary -Path $tmp
+        if ($s.Valid) { throw '50 frames no alcanzan para un 1 % low: tiene que dar Valid=$false' }
+        if ([string]::IsNullOrWhiteSpace([string]$s.Reason)) { throw 'Valid=$false sin motivo' }
+        Assert-SmokeNear $s.AvgFps 100 'AvgFps con 50 frames de 10 ms'
+    }
+    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'MedicionFps' 'A/B: mejora clara (umbral default)' {
+    $r = Compare-FpsAB -Base1 @((New-SmokeFpsPass 98), (New-SmokeFpsPass 100), (New-SmokeFpsPass 103)) `
+                       -Variant @((New-SmokeFpsPass 124), (New-SmokeFpsPass 125), (New-SmokeFpsPass 126)) `
+                       -Base2 @((New-SmokeFpsPass 101), (New-SmokeFpsPass 102), (New-SmokeFpsPass 104))
+    if ($r.Verdict -ne 'mejora') { throw ('veredicto: {0} (delta {1})' -f $r.Verdict, $r.DeltaPct) }
+    Assert-SmokeNear $r.BaseRef 101 'BaseRef'
+    Assert-SmokeNear $r.DeltaPct 23.7624 'DeltaPct'
+    Assert-SmokeNear $r.DriftPct 1.9802 'DriftPct'
+    if (-not $r.Reliable) { throw 'deriva 2 % con umbral 10 tiene que ser confiable' }
+}
+
+Test-SmokeFunction 'MedicionFps' 'A/B: dentro del ruido (umbral default 10 %)' {
+    $r = Compare-FpsAB -Base1 @(New-SmokeFpsPass 100) -Variant @(New-SmokeFpsPass 104) -Base2 @(New-SmokeFpsPass 101)
+    if ($r.ThresholdPct -ne 10) { throw ('umbral default: esperado 10, got {0}' -f $r.ThresholdPct) }
+    if ($r.Verdict -ne 'dentro del ruido') { throw ('veredicto: {0} (delta {1})' -f $r.Verdict, $r.DeltaPct) }
+    Assert-SmokeNear $r.DeltaPct 3.4826 'DeltaPct'
+}
+
+Test-SmokeFunction 'MedicionFps' 'A/B: empeora' {
+    $r = Compare-FpsAB -Base1 @(New-SmokeFpsPass 100) -Variant @(New-SmokeFpsPass 80) -Base2 @(New-SmokeFpsPass 99)
+    if ($r.Verdict -ne 'empeora') { throw ('veredicto: {0} (delta {1})' -f $r.Verdict, $r.DeltaPct) }
+    Assert-SmokeNear $r.DeltaPct -19.5980 'DeltaPct'
+}
+
+Test-SmokeFunction 'MedicionFps' 'A/B: deriva base-base alta = medicion no confiable (aunque la variante "mejore")' {
+    $r = Compare-FpsAB -Base1 @(New-SmokeFpsPass 100) -Variant @(New-SmokeFpsPass 130) -Base2 @(New-SmokeFpsPass 120)
+    if ($r.Verdict -ne 'medicion no confiable, repetir') { throw ('veredicto: {0} (deriva {1})' -f $r.Verdict, $r.DriftPct) }
+    if ($r.Reliable) { throw 'Reliable tiene que ser $false' }
+    Assert-SmokeNear $r.DriftPct 18.1818 'DriftPct'
+}
+
+Test-SmokeFunction 'MedicionFps' 'A/B: umbral parametrizable y metrica 1 % low' {
+    # Los mismos datos del caso "ruido" con umbral 2 % ya son mejora.
+    $r = Compare-FpsAB -Base1 @(New-SmokeFpsPass 100) -Variant @(New-SmokeFpsPass 104) -Base2 @(New-SmokeFpsPass 101) -ThresholdPct 2
+    if ($r.Verdict -ne 'mejora') { throw ('umbral 2: veredicto {0}' -f $r.Verdict) }
+    # Y la deriva de 18 % con umbral 25 deja de invalidar.
+    $r2 = Compare-FpsAB -Base1 @(New-SmokeFpsPass 100) -Variant @(New-SmokeFpsPass 130) -Base2 @(New-SmokeFpsPass 120) -ThresholdPct 25
+    if ($r2.Verdict -ne 'dentro del ruido') { throw ('umbral 25: veredicto {0}' -f $r2.Verdict) }
+    # Metrica 1 % low: el promedio no cambia, el 1 % low empeora.
+    $r3 = Compare-FpsAB -Base1 @(New-SmokeFpsPass 100 60) -Variant @(New-SmokeFpsPass 100 40) -Base2 @(New-SmokeFpsPass 100 61) -Metric 'Low1Fps'
+    if ($r3.Verdict -ne 'empeora') { throw ('1 % low: veredicto {0}' -f $r3.Verdict) }
+    if ($r3.Metric -ne 'Low1Fps') { throw ('metrica: {0}' -f $r3.Metric) }
+}
+
+Test-SmokeFunction 'MedicionFps' 'A/B: lote de 1 pasada pasado como escalar (trampa del 1 elemento, StrictMode)' {
+    Set-StrictMode -Version Latest
+    $r = Compare-FpsAB -Base1 (New-SmokeFpsPass 100) -Variant (New-SmokeFpsPass 125) -Base2 (New-SmokeFpsPass 100)
+    if ($r.Verdict -ne 'mejora') { throw ('veredicto: {0}' -f $r.Verdict) }
+}
+
+Test-SmokeFunction 'MedicionFps' 'guia en pantalla: Workshop FPS Benchmark, settings fijos, pasadas, no tocar; sin prometer numeros' {
+    [string] $g = (Get-FpsBenchGuide) -join "`n"
+    foreach ($need in @('Workshop', 'FPS Benchmark', 'settings', 'pasadas', 'no toques')) {
+        if ($g -notmatch [regex]::Escape($need)) { throw ('a la guia le falta: {0}' -f $need) }
+    }
+    if ($g -match '\d+\s*%\s*(mas|más)') { throw 'la guia promete un porcentaje de mejora' }
+}
+
+function Invoke-SmokeFpsShadowed {
+    # Corre $Body con PresentMon / cs2 / pausas shadowed. Start-Process escribe el
+    # CSV fixture A en el --output_file que recibe, como lo haria PresentMon.
+    param([scriptblock] $Body, [bool] $Cs2Running = $true)
+    $script:SmokeFpsOut       = [System.Collections.Generic.List[string]]::new()
+    $script:SmokeFpsStarts    = [System.Collections.Generic.List[string]]::new()
+    $script:SmokeFpsCs2       = $Cs2Running
+    function Get-Process {
+        [CmdletBinding()] param([string[]] $Name, [int[]] $Id)
+        if ($script:SmokeFpsCs2 -and @($Name) -contains 'cs2') { return [PSCustomObject]@{ Name = 'cs2'; Id = 4242 } }
+        if (-not $PSBoundParameters.ContainsKey('Name')) { return @() }
+        return $null
+    }
+    function Start-Process {
+        [CmdletBinding()] param([string] $FilePath, [object] $ArgumentList, [switch] $PassThru, [switch] $Wait, [string] $WindowStyle, [string] $WorkingDirectory, [switch] $NoNewWindow)
+        [string] $a = [string]$ArgumentList
+        $script:SmokeFpsStarts.Add($a)
+        if ($a -match '--output_file "([^"]+)"') { New-SmokeFpsCsv -Path $Matches[1] -Schema 'v2' -FrameTimes $script:SmokeFpsFtA }
+        $p = [PSCustomObject]@{ Id = 9999; HasExited = $true; ExitCode = 0 }
+        $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) return $true }
+        return $p
+    }
+    function Start-Sleep { param([int] $Seconds, [int] $Milliseconds) }
+    function Test-FpsElevated { return $true }
+    function Set-FpsKeepAwake { param([bool] $On) }
+    # tools\bin no existe en el repo: el exe se finge, y la descarga NUNCA corre en un test.
+    function Get-PresentMonExePath { return 'C:\pctk-smoke-fake\PresentMon.exe' }
+    function Invoke-PresentMonDownload { throw 'el smoke intento bajar PresentMon' }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) }
+    function Write-PctkLine { param([AllowEmptyString()][string] $Text, [string] $Kind) $script:SmokeFpsOut.Add($Text) }
+    function Write-Host { param([object] $Object, $ForegroundColor, [switch] $NoNewline) $script:SmokeFpsOut.Add([string]$Object) }
+    function Clear-Host { }
+    & $Body
+}
+
+Test-SmokeFunction 'MedicionFps' 'handler [F] completo bajo StrictMode: captura un lote (PresentMon shadowed), imprime el resumen y deja CSV + lote.json' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-fps-h-{0}' -f [guid]::NewGuid().ToString('N'))
+    try {
+        Invoke-SmokeFpsShadowed -Body {
+            $script:SmokeFpsQ = [System.Collections.Generic.Queue[string]]::new()
+            foreach ($k in @('1', 'B')) { $script:SmokeFpsQ.Enqueue($k) }
+            function Read-PctkMenuChoice { param($Rows, $RenderHeader, $Prompt) return $script:SmokeFpsQ.Dequeue() }
+            function Read-Host { param([string] $Prompt) return '' }
+            Invoke-FpsMeasurement -MachineProfile ([PSCustomObject]@{ Dummy = $true }) -OutputRootOverride $root
+            if ($script:SmokeFpsQ.Count -ne 0) { throw 'el submenu no consumio la B' }
+        }
+        [string] $all = $script:SmokeFpsOut -join "`n"
+        if ($all -notmatch '96[,.]\d') { throw ('el resumen impreso no muestra el promedio (96,x fps):' + "`n" + $all) }
+        if ($all -notmatch '1 % low') { throw 'el resumen impreso no muestra el 1 % low' }
+        [object[]] $lotes = @(Get-ChildItem -LiteralPath (Join-Path $root 'medicion-fps') -Directory)
+        if ($lotes.Count -ne 1) { throw ('lotes creados: {0}' -f $lotes.Count) }
+        [object[]] $csvs = @(Get-ChildItem -LiteralPath $lotes[0].FullName -Filter 'pasada-*.csv')
+        if ($csvs.Count -ne 3) { throw ('pasadas default: esperadas 3, CSV encontrados {0}' -f $csvs.Count) }
+        $j = Get-Content -LiteralPath (Join-Path $lotes[0].FullName 'lote.json') -Raw | ConvertFrom-Json
+        if (@($j.Passes).Count -ne 3) { throw 'lote.json sin las 3 pasadas' }
+        Assert-SmokeNear ([double]$j.AvgFps) 96.1538 'lote.json AvgFps'
+        # Antes de capturar se corta una sesion colgada (patron del ayudante medido).
+        if (@($script:SmokeFpsStarts | Where-Object { $_ -match '--terminate_existing_session' }).Count -lt 1) { throw 'no corta la sesion ETW previa' }
+        if (@($script:SmokeFpsStarts | Where-Object { $_ -match '--process_name cs2\.exe' -and $_ -match '--timed \d+' -and $_ -match '--terminate_after_timed' -and $_ -match '--delay \d+' }).Count -ne 3) {
+            throw ('argumentos de PresentMon inesperados: {0}' -f ($script:SmokeFpsStarts -join ' || '))
+        }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'MedicionFps' 'handler [F] sin cs2.exe: mensaje claro, sin crash, sin lanzar PresentMon ni crear archivos' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-fps-n-{0}' -f [guid]::NewGuid().ToString('N'))
+    try {
+        Invoke-SmokeFpsShadowed -Cs2Running $false -Body {
+            $script:SmokeFpsQ = [System.Collections.Generic.Queue[string]]::new()
+            foreach ($k in @('1', 'B')) { $script:SmokeFpsQ.Enqueue($k) }
+            function Read-PctkMenuChoice { param($Rows, $RenderHeader, $Prompt) return $script:SmokeFpsQ.Dequeue() }
+            function Read-Host { param([string] $Prompt) return '' }
+            Invoke-FpsMeasurement -MachineProfile ([PSCustomObject]@{ Dummy = $true }) -OutputRootOverride $root
+        }
+        [string] $all = $script:SmokeFpsOut -join "`n"
+        if ($all -notmatch 'CS2 no esta abierto') { throw ('falta el mensaje claro:' + "`n" + $all) }
+        if ($script:SmokeFpsStarts.Count -ne 0) { throw 'lanzo PresentMon sin cs2 corriendo' }
+        if (Test-Path -LiteralPath (Join-Path $root 'medicion-fps\*\pasada-1.csv')) { throw 'creo una pasada sin cs2' }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'MedicionFps' 'handler [F] comparar: 3 lotes guardados -> veredicto impreso y comparacion a archivo' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-fps-c-{0}' -f [guid]::NewGuid().ToString('N'))
+    try {
+        Invoke-SmokeFpsShadowed -Body {
+            $script:SmokeFpsQ = [System.Collections.Generic.Queue[string]]::new()
+            foreach ($k in @('1', '1', '1', '2', 'B')) { $script:SmokeFpsQ.Enqueue($k) }
+            function Read-PctkMenuChoice { param($Rows, $RenderHeader, $Prompt) return $script:SmokeFpsQ.Dequeue() }
+            function Read-Host { param([string] $Prompt) return '' }
+            Invoke-FpsMeasurement -MachineProfile ([PSCustomObject]@{ Dummy = $true }) -OutputRootOverride $root
+        }
+        [string] $all = $script:SmokeFpsOut -join "`n"
+        # Los 3 lotes son el mismo fixture: deriva 0, delta 0.
+        if ($all -notmatch 'dentro del ruido') { throw ('falta el veredicto:' + "`n" + $all) }
+        if (@(Get-ChildItem -LiteralPath (Join-Path $root 'medicion-fps') -Filter 'comparacion-*.txt').Count -ne 1) { throw 'no escribio la comparacion a archivo' }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'MedicionFps' 'gate HW (Invoke-FpsGate): sin CS2 falla limpio con "abri CS2" y escribe FAIL a archivo' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-fps-g-{0}' -f [guid]::NewGuid().ToString('N'))
+    try {
+        $g = $null
+        Invoke-SmokeFpsShadowed -Cs2Running $false -Body { $script:SmokeFpsGate = Invoke-FpsGate -OutputRootOverride $root }
+        $g = $script:SmokeFpsGate
+        if ($g.Pass) { throw 'sin CS2 dio PASS' }
+        [string] $txt = Get-Content -LiteralPath $g.ReportPath -Raw
+        if ($txt -notmatch 'FAIL' -or $txt -notmatch 'abri CS2') { throw ('reporte del gate: ' + $txt) }
+        if ($script:SmokeFpsStarts.Count -ne 0) { throw 'el gate lanzo PresentMon sin CS2' }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'MedicionFps' 'gate HW (Invoke-FpsGate): con CS2 y PresentMon shadowed hace 3 capturas y escribe PASS + resumen' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-fps-g2-{0}' -f [guid]::NewGuid().ToString('N'))
+    try {
+        # El fixture A dura 1,04 s: el gate pide 1 s de captura para que la duracion cuadre.
+        Invoke-SmokeFpsShadowed -Body { $script:SmokeFpsGate = Invoke-FpsGate -OutputRootOverride $root -Seconds 1 -DelaySeconds 0 }
+        $g = $script:SmokeFpsGate
+        [string] $txt = Get-Content -LiteralPath $g.ReportPath -Raw
+        if (-not $g.Pass) { throw ('con todo shadowed dio FAIL: ' + $txt) }
+        if ($txt -notmatch 'PASS') { throw 'el reporte no dice PASS' }
+        if (@($script:SmokeFpsStarts | Where-Object { $_ -match '--output_file' }).Count -ne 3) { throw 'no hizo 3 capturas' }
+    }
+    finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'MedicionFps' 'menu principal: [F] en DIAGNOSTICO y el dispatch llega a Invoke-FpsMeasurement; nunca dentro del [1]' {
+    [object[]] $rows = Get-MainMenuRows
+    if (-not @($rows | Where-Object { $_.Kind -eq 'Item' -and $_.Key -eq 'F' })) { throw 'el menu principal no tiene [F]' }
+    $script:SmokeFpsCalled = $false
+    function Invoke-FpsMeasurement { param($MachineProfile, $OutputRootOverride) $script:SmokeFpsCalled = $true }
+    Invoke-MainMenuDispatch -Choice 'f' -MachineProfile ([PSCustomObject]@{ Dummy = $true })
+    if (-not $script:SmokeFpsCalled) { throw '[F] no despacha a Invoke-FpsMeasurement' }
+    # La medicion nunca corre sola dentro del pipeline automatico.
+    foreach ($f in @(Get-ChildItem -Path (Join-Path $repoRoot 'core') -Filter '*.ps1' -File)) {
+        if ($f.Name -eq 'Router.ps1') { continue }
+        if ((Get-Content -LiteralPath $f.FullName -Raw) -match 'Invoke-FpsMeasurement|Invoke-FpsCapture') { throw ('la medicion aparece en {0}' -f $f.Name) }
     }
 }
 

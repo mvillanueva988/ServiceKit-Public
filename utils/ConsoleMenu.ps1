@@ -17,6 +17,7 @@ function Get-MainMenuRows {
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '7';   Label = '  [7]  Salud de discos (SMART / wear)';   Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '8';   Label = '  [8]  Reporte para el cliente           (HTML para mostrar/imprimir)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'R';   Label = '  [R]  Generar prompt de research        (para LLM con web search)'; Color = $null }
+    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'F';   Label = '  [F]  Medir FPS en CS2                  (PresentMon, A/B base-variante-base)'; Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = '';                    Color = $null }
     $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  ACCIONES MANUALES';  Color = 'DarkCyan' }
     $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'A';   Label = '  [A]  Submenu: acciones individuales    (debloat, limpieza, rendimiento, privacidad, etc.)'; Color = $null }
