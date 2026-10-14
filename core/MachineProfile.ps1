@@ -417,11 +417,19 @@ function Get-MachineProfile {
     [CmdletBinding()]
     param()
 
-    $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
-    $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue
-    $enclosure = Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction SilentlyContinue
-    $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
-    $osReg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
+    # #90: cada fuente en su try. Con -ErrorAction SilentlyContinue una clase
+    # ausente no tira, pero un WMI roto (o un proveedor que tira terminante) si,
+    # y el perfil lo corre main.ps1 al arrancar: si revienta, no arranca PCTk.
+    # $gpuQueryError / $ramQueryError distinguen "la fuente fallo" de "no hay".
+    $cs = $null; $bios = $null; $enclosure = $null; $osReg = $null
+    [object[]] $gpus = @()
+    [string] $gpuQueryError = ''
+    try { $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue } catch { }
+    try { $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue } catch { }
+    try { $enclosure = Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction SilentlyContinue } catch { }
+    try { $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue) }
+    catch { $gpuQueryError = ('Win32_VideoController: {0}' -f $_.Exception.Message) }
+    try { $osReg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue } catch { }
 
     [int] $ramMB = 0
     if ($cs -and $cs.TotalPhysicalMemory) {
@@ -455,16 +463,21 @@ function Get-MachineProfile {
         $isLaptop = @($enclosure.ChassisTypes | Where-Object { $mobileChassis -contains [int]$_ }).Count -gt 0
     }
 
-    [string] $manufacturer = Get-NormalizedManufacturer -RawManufacturer ([string]$cs.Manufacturer)
+    # $cs puede ser $null (WMI roto): bajo StrictMode $null.Manufacturer tira.
+    [string] $rawManufacturer = if ($null -ne $cs -and $null -ne $cs.PSObject.Properties['Manufacturer']) { [string]$cs.Manufacturer } else { '' }
+    [string] $manufacturer = Get-NormalizedManufacturer -RawManufacturer $rawManufacturer
     [string] $manufacturerSlug = $manufacturer.ToLowerInvariant()
     [string] $toolkitRoot = Split-Path -Parent $PSScriptRoot
     [string] $oemCatalogPath = Join-Path -Path $toolkitRoot -ChildPath ('data\oem-bloat\{0}.json' -f $manufacturerSlug)
 
     # CPU class y dGPU VRAM para clasificación de tier
-    [string] $cpuName  = if ($null -ne $cs -and $cs.PSObject.Properties['Manufacturer']) {
-        $cpuRaw = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $cpuRaw -and $null -ne $cpuRaw.Name) { [string] $cpuRaw.Name } else { '' }
-    } else { '' }
+    [string] $cpuName  = ''
+    if ($null -ne $cs -and $cs.PSObject.Properties['Manufacturer']) {
+        try {
+            $cpuRaw = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $cpuRaw -and $null -ne $cpuRaw.Name) { $cpuName = [string] $cpuRaw.Name }
+        } catch { }
+    }
     [string] $cpuClass = Get-CpuClass -CpuName $cpuName
 
     [int] $dGpuVramMb = 0
@@ -485,8 +498,11 @@ function Get-MachineProfile {
     # Una sola vez acá (el banner se redibuja por loop de menú: no puede pagar
     # CIM por redibujo). Defensivo: cualquier fallo -> sin avisos, nunca tira.
     [object[]] $advisories = @()
+    # Una sola query de RAM para los dos usos (avisos de RAM y canales de #90 A5).
+    [object[]] $ramModules = @()
+    [string] $ramQueryError = ''
     try {
-        [object[]] $ramModules = @(
+        $ramModules = @(
             Get-CimInstance -ClassName Win32_PhysicalMemory -OperationTimeoutSec 2 -ErrorAction SilentlyContinue |
                 Where-Object { $_.Capacity -gt 0 } |
                 ForEach-Object {
@@ -498,11 +514,13 @@ function Get-MachineProfile {
                         CapacityGb    = [double] [math]::Round($_.Capacity / 1GB, 2)
                         SpeedMhz      = [int] $_.Speed
                         ConfiguredMhz = $confMhz
+                        BankLabel     = if ($null -ne $_.PSObject.Properties['BankLabel']     -and $null -ne $_.BankLabel)     { [string]$_.BankLabel }     else { '' }
+                        DeviceLocator = if ($null -ne $_.PSObject.Properties['DeviceLocator'] -and $null -ne $_.DeviceLocator) { [string]$_.DeviceLocator } else { '' }
                     }
                 }
         )
-        $advisories += @(Get-RamAdvisories -Modules $ramModules)
-    } catch { }
+    } catch { $ramQueryError = ('Win32_PhysicalMemory: {0}' -f $_.Exception.Message) }
+    try { $advisories += @(Get-RamAdvisories -Modules $ramModules) } catch { }
     try {
         if ($hasIGpuOnly) {
             foreach ($g in $gpus) {
@@ -524,6 +542,26 @@ function Get-MachineProfile {
         $hagsMode = Get-HagsMode
         [string] $hagsAdv = Get-HagsAdvisory -Mode $hagsMode -HasIGpuOnly $hasIGpuOnly
         if (-not [string]::IsNullOrEmpty($hagsAdv)) { $advisories += $hagsAdv }
+    } catch { }
+
+    # #90 (1): detectores de GPU y pantalla (core\GpuDisplayChecks.ps1). Reusan
+    # las queries de arriba; los hallazgos 'aviso' van a Advisories (banner [HW])
+    # y el resultado completo, con los 'no determinado' y su motivo, a GpuChecks.
+    [object[]] $gpuChecks = @()
+    try {
+        [int[]] $chassisTypes = @()
+        if ($null -ne $enclosure -and $null -ne $enclosure.PSObject.Properties['ChassisTypes'] -and $null -ne $enclosure.ChassisTypes) {
+            $chassisTypes = @($enclosure.ChassisTypes | ForEach-Object { [int]$_ })
+        }
+        [int] $pcSystemType = 0
+        if ($null -ne $cs -and $null -ne $cs.PSObject.Properties['PCSystemType'] -and $null -ne $cs.PCSystemType) { $pcSystemType = [int]$cs.PCSystemType }
+        [string] $chassisKind = Get-PctkChassisKind -ChassisTypes $chassisTypes -PCSystemType $pcSystemType -IsLaptop $isLaptop
+        $gpuChecks = @(Get-GpuDisplayChecks -VideoControllers $gpus -VideoError $gpuQueryError `
+                                            -RamModules $ramModules -RamError $ramQueryError `
+                                            -ChassisKind $chassisKind -IsVirtual ([bool]$vmInfo.IsVirtual))
+        foreach ($gc in $gpuChecks) {
+            if ([string]$gc.Estado -eq 'aviso' -and -not [string]::IsNullOrWhiteSpace([string]$gc.Aviso)) { $advisories += [string]$gc.Aviso }
+        }
     } catch { }
 
     return [PSCustomObject]@{
@@ -571,6 +609,8 @@ function Get-MachineProfile {
         VmVendor         = [string] $vmInfo.Vendor
         # ── #23b: avisos de HW al operador (single-channel / XMP off / UMA) ───
         Advisories       = [string[]] @($advisories | ForEach-Object { [string]$_ })
+        # ── #90 (1): resultado por detector (Id, Nombre, Estado, Detalle, Aviso) ─
+        GpuChecks        = [object[]] $gpuChecks
     }
 }
 
