@@ -594,6 +594,9 @@ function Invoke-MainMenuDispatch {
         '8' { Invoke-ClientReport -MachineProfile $MachineProfile; return }
         'I' { Invoke-RawAuditReport -MachineProfile $MachineProfile; return }
         'R' { Invoke-ResearchPrompt -MachineProfile $MachineProfile; return }
+        # #90 (4): medicion de FPS en CS2 (modules\MedicionFps.ps1). Solo a pedido
+        # del operador: nunca corre dentro del [1].
+        'F' { Invoke-FpsMeasurement -MachineProfile $MachineProfile; return }
         'A' {
             Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
             return
