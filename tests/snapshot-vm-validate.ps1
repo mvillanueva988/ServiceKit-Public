@@ -34,8 +34,9 @@ Log ''
 try {
     . (Join-Path $RepoRoot 'core\JobManager.ps1')
     . (Join-Path $RepoRoot 'core\MachineProfile.ps1')
+    . (Join-Path $RepoRoot 'core\GpuDisplayChecks.ps1')   # #90: Get-MachineProfile llama a los detectores
     . (Join-Path $RepoRoot 'modules\Telemetry.ps1')
-    Log '  dot-source OK (JobManager, MachineProfile, Telemetry)'
+    Log '  dot-source OK (JobManager, MachineProfile, GpuDisplayChecks, Telemetry)'
 } catch {
     Fail ("dot-source: {0}" -f $_.Exception.Message)
 }

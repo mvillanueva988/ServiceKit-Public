@@ -3869,6 +3869,10 @@ Test-SmokeFunction 'GpuChecks' 'handler: Get-MachineProfile + Show-MachineBanner
         if ($c.Count -ne 1) { throw ('GpuChecks: falta (o se repite) {0}' -f $id) }
         if ([string]$c[0].Estado -ne 'aviso') { throw ('{0}: en el desktop todo-mal debia ser aviso; got {1} ({2})' -f $id, $c[0].Estado, $c[0].Detalle) }
     }
+    # A6: el generico es el de la NVIDIA (proveedor Microsoft); la iGPU AMD tiene
+    # su driver. Sin este assert una regla invertida que marca a la AMD pasaba.
+    [object] $a6 = @($checks | Where-Object { $_.Id -eq 'A6' })[0]
+    if ([string]$a6.Detalle -notmatch 'RTX 3060' -or [string]$a6.Detalle -match 'Radeon') { throw ('A6 marco la GPU equivocada: {0}' -f $a6.Detalle) }
     [object[]] $adv = @($mp.Advisories)
     foreach ($pat in @('144', 'placa madre', 'mbr2gpt', 'ReBAR', 'x4', 'canal', 'generico')) {
         if (@($adv | Where-Object { $_ -match $pat }).Count -lt 1) { throw ('Advisories no trae el hallazgo "{0}": {1}' -f $pat, ($adv -join ' | ')) }
