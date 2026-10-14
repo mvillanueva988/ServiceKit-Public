@@ -1336,8 +1336,19 @@ Test-SmokeFunction 'EnergyTuning' 'powercfg EAP-guarded en las funciones nativas
 # Handler [A][20]: powercfg falso CON ESTADO (AC por setting), Read-Host/Confirm
 # guionados, respaldo a un temp. Se llama al HANDLER, no a Enable-/Restore-.
 function Invoke-EnergyHandlerHarness {
-    param([string] $Answer, [bool] $IsLaptop, [bool] $Confirm = $true, [hashtable] $Start = @{ Boost = 2; Thr = 70 })
+    # -AttribHideExit <> 0 (U2/#96): '-attributes ... -ATTRIB_HIDE' falla como el powercfg real,
+    # stderr (Write-Error -> NativeCommandError bajo EAP=Stop) + exit code. El default 0 deja
+    # intactos los tests de arriba. Write-PctkOk/Warn/Hint se capturan en $script:EhOk/EhWarn/EhHint.
+    param([string] $Answer, [bool] $IsLaptop, [bool] $Confirm = $true, [hashtable] $Start = @{ Boost = 2; Thr = 70 }, [int] $AttribHideExit = 0)
     $script:EhState = @{ Boost = $Start.Boost; Thr = $Start.Thr; Calls = [System.Collections.Generic.List[string]]::new() }
+    $script:EhAttribHideExit = $AttribHideExit
+    $script:EhOk   = [System.Collections.Generic.List[string]]::new()
+    $script:EhWarn = [System.Collections.Generic.List[string]]::new()
+    $script:EhHint = [System.Collections.Generic.List[string]]::new()
+    $script:EhAudits = [System.Collections.Generic.List[string]]::new()
+    function Write-PctkOk   { param([AllowEmptyString()][string] $Text) $script:EhOk.Add($Text) }
+    function Write-PctkWarn { param([AllowEmptyString()][string] $Text) $script:EhWarn.Add($Text) }
+    function Write-PctkHint { param([AllowEmptyString()][string] $Text) $script:EhHint.Add($Text) }
     $script:EhBak = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-energy-' + [guid]::NewGuid().ToString('N') + '.json')
     if ($Start.ContainsKey('Backup')) { $Start.Backup | ConvertTo-Json | Out-File -LiteralPath $script:EhBak -Encoding UTF8 }
     $script:EhAnswer = $Answer; $script:EhConfirm = $Confirm
@@ -1345,7 +1356,7 @@ function Invoke-EnergyHandlerHarness {
     function Read-Host { $script:EhAnswer }
     function Confirm-Action { $script:EhConfirm }
     # Show-OrphanModuleResult es el REAL (ahi vivio el bug de .Count, ronda 4); se captura lo que le pasa a la auditoria.
-    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:EhStatus = $Status; if ($null -ne $Details) { $script:EhResult = $Details } }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:EhAudits.Add(('{0}={1}' -f $Action, $Status)); $script:EhStatus = $Status; if ($null -ne $Details) { $script:EhResult = $Details } }
     function Get-MMAgent { throw 'sin admin' }
     function powercfg {
         $script:EhState.Calls.Add(($args -join ' '))
@@ -1357,6 +1368,11 @@ function Invoke-EnergyHandlerHarness {
         }
         if ($a[0] -eq '/SETACVALUEINDEX') {
             if ($a[3] -eq 'be337238-0d82-4146-a960-4f3749d470c7') { $script:EhState.Boost = [int]$a[4] } else { $script:EhState.Thr = [int]$a[4] }
+        }
+        if ($a[0] -eq '-attributes' -and $a -contains '-ATTRIB_HIDE' -and $script:EhAttribHideExit -ne 0) {
+            Write-Error 'No se puede encontrar la configuracion de energia especificada.'
+            $global:LASTEXITCODE = $script:EhAttribHideExit
+            return
         }
         $global:LASTEXITCODE = 0
     }
@@ -1409,6 +1425,23 @@ Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: M pasa por el reporte real s
     if ($script:EhStatus -ne 'Success') { throw ('audit final Status={0}' -f $script:EhStatus) }
     if (@($script:EhResult.Applied).Count -ne 1 -or @($script:EhResult.Errors).Count -ne 0) { throw 'Applied/Errors no son arrays' }
     if ($script:EhResult.Applied -isnot [array] -or $script:EhResult.Errors -isnot [array]) { throw 'Applied/Errors desenrollados' }
+    if (@($script:EhHint | Where-Object { $_ -match 'Setting visible' }).Count -ne 1) { throw ('cierre sin "Setting visible": {0}' -f ($script:EhHint -join ' | ')) }
+}
+Test-SmokeFunction 'EnergyTuning' 'handler [A][20]: M con -ATTRIB_HIDE fallando -> FAIL al operador, audit Failed, sin crash (U2/#96)' {
+    $st = Invoke-EnergyHandlerHarness -Answer 'M' -IsLaptop $true -AttribHideExit 1
+    if (@($st.Calls | Where-Object { $_ -match '^-attributes SUB_PROCESSOR PERFBOOSTMODE -ATTRIB_HIDE$' }).Count -ne 1) { throw 'no llamo -ATTRIB_HIDE' }
+    if (@($st.Calls | Where-Object { $_ -match 'SETACVALUEINDEX' }).Count -ne 0) { throw 'cambio valores' }
+    if ($script:EhStatus -ne 'Failed') { throw ('audit final Status={0} (esperado Failed)' -f $script:EhStatus) }
+    if (($script:EhAudits -join ',') -ne 'EnergyTuning.ShowHidden=Started,EnergyTuning.ShowHidden=Failed') { throw ('audits: {0}' -f ($script:EhAudits -join ',')) }
+    if ($null -eq $script:EhResult -or $script:EhResult.Success) { throw 'Result.Success no es false' }
+    if ($script:EhResult.Applied -isnot [array] -or $script:EhResult.Errors -isnot [array]) { throw 'Applied/Errors desenrollados' }
+    if (@($script:EhResult.Applied).Count -ne 0 -or @($script:EhResult.Errors).Count -ne 1) { throw ('Applied={0} Errors={1}' -f @($script:EhResult.Applied).Count, @($script:EhResult.Errors).Count) }
+    if ($script:EhResult.Errors[0] -ne 'ATTRIB_HIDE exit 1') { throw ('Errors[0]={0}' -f $script:EhResult.Errors[0]) }
+    if ($script:EhOk.Count -ne 0) { throw ('mostro [OK] en la rama de error: {0}' -f ($script:EhOk -join ' | ')) }
+    if (@($script:EhWarn | Where-Object { $_ -eq '  [FAIL] ATTRIB_HIDE exit 1' }).Count -ne 1) { throw ('aviso al operador: {0}' -f ($script:EhWarn -join ' | ')) }
+    # El cierre no puede decir que quedo visible cuando fallo (el Reason era fijo).
+    if (@($script:EhHint | Where-Object { $_ -match 'Setting visible' }).Count -ne 0) { throw ('dice "visible" con el fallo: {0}' -f ($script:EhHint -join ' | ')) }
+    if (@($script:EhHint | Where-Object { $_ -match 'sigue oculto' }).Count -ne 1) { throw ('no avisa que sigue oculto: {0}' -f ($script:EhHint -join ' | ')) }
 }
 Test-SmokeFunction 'EnergyTuning' 'la opcion laptop gaming NO esta en el engine ni en Performance (nunca en el [1])' {
     $root = Split-Path -Parent $PSScriptRoot

@@ -50,13 +50,14 @@ function Show-PerfBoostModeSetting {
     [bool] $ok = ($exit -eq 0)
     [string[]] $applied = @()
     [string[]] $errs    = @()
-    if ($ok) { $applied = @('PERFBOOSTMODE visible en Power Options') } else { $errs = @("ATTRIB_HIDE exit $exit") }
+    [string] $reason = 'Setting visible; ningun valor cambio.'
+    if ($ok) { $applied = @('PERFBOOSTMODE visible en Power Options') } else { $errs = @("ATTRIB_HIDE exit $exit"); $reason = 'El setting sigue oculto; ningun valor cambio.' }
     return [PSCustomObject]@{
         Success = $ok
         Applied = $applied
         Errors  = $errs
         RestartRequired = $false
-        Reason  = 'Setting visible; ningun valor cambio.'
+        Reason  = $reason
     }
 }
 
