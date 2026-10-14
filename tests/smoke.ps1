@@ -3615,6 +3615,315 @@ Test-SmokeFunction 'HwAdvisories' 'Get-MachineProfile expone Advisories como [st
     foreach ($x in $a) { if ($x -isnot [string]) { throw 'Advisories debe contener solo strings' } }
 }
 
+# ─── #90 (1): detectores de GPU y pantalla (solo lectura) ─────────────────────
+# Fuente: _local-dev/research/90-gpu-cs2/informe.md § A1-A6. Cada detector es una
+# funcion pura (fixtures) y devuelve un resultado con Estado:
+# 'aviso' | 'ok' | 'dato' | 'no aplica' | 'no determinado'. Los casos de 1
+# elemento (1 monitor, 1 GPU, 1 modulo) estan a proposito: es donde muerde la
+# trampa de StrictMode.
+function New-GpuSmokeAssert {
+    param([object] $R, [string] $Estado, [string] $Que)
+    if ($null -eq $R) { throw ('{0}: el detector devolvio $null' -f $Que) }
+    if ([string]$R.Estado -ne $Estado) {
+        throw ('{0}: Estado esperado "{1}", got "{2}" ({3})' -f $Que, $Estado, $R.Estado, $R.Detalle)
+    }
+    [bool] $tieneAviso = -not [string]::IsNullOrWhiteSpace([string]$R.Aviso)
+    if ($Estado -eq 'aviso' -and -not $tieneAviso) { throw ('{0}: Estado aviso sin texto de aviso' -f $Que) }
+    if ($Estado -ne 'aviso' -and $tieneAviso)      { throw ('{0}: Estado {1} no debe traer aviso ("{2}")' -f $Que, $Estado, $R.Aviso) }
+}
+
+Test-SmokeFunction 'GpuChecks' 'Get-PctkChassisKind: torre=desktop, notebook=notebook, AIO/miniPC=otro' {
+    Set-StrictMode -Version Latest
+    if ((Get-PctkChassisKind -ChassisTypes @(3)  -PCSystemType 1 -IsLaptop $false) -ne 'desktop')  { throw 'chassis 3 debe ser desktop' }
+    if ((Get-PctkChassisKind -ChassisTypes @(7)  -PCSystemType 0 -IsLaptop $false) -ne 'desktop')  { throw 'chassis 7 (torre) debe ser desktop' }
+    if ((Get-PctkChassisKind -ChassisTypes @(10) -PCSystemType 2 -IsLaptop $true)  -ne 'notebook') { throw 'chassis 10 debe ser notebook' }
+    if ((Get-PctkChassisKind -ChassisTypes @(13) -PCSystemType 1 -IsLaptop $false) -ne 'otro')     { throw 'AIO (13) debe ser otro: puede ser hibrido de diseno' }
+    if ((Get-PctkChassisKind -ChassisTypes @(2)  -PCSystemType 1 -IsLaptop $false) -ne 'desktop')  { throw 'chassis Unknown + PCSystemType Desktop = desktop (clon)' }
+    if ((Get-PctkChassisKind -ChassisTypes @()   -PCSystemType 0 -IsLaptop $false) -ne 'otro')     { throw 'sin dato no se asume desktop' }
+}
+
+Test-SmokeFunction 'GpuChecks' 'A1 refresh: 1 monitor 144 Hz corriendo a 60 -> aviso; a 144 -> ok' {
+    Set-StrictMode -Version Latest
+    [object[]] $mon = @([PSCustomObject]@{ Instance = 'DISPLAY\AOC2490\1'; MaxHz = [double]144.0 })
+    $r = Test-GpuCheckRefresh -Monitors $mon -AdapterRefreshHz @(60)
+    New-GpuSmokeAssert $r 'aviso' 'A1 60/144'
+    if ([string]$r.Aviso -notmatch '60' -or [string]$r.Aviso -notmatch '144') { throw ('A1: el aviso debe decir actual y maximo: {0}' -f $r.Aviso) }
+    New-GpuSmokeAssert (Test-GpuCheckRefresh -Monitors $mon -AdapterRefreshHz @(144)) 'ok' 'A1 144/144'
+    # Medido en la notebook de Mateo: maximo listado 120,2 Hz, actual 120 -> sano.
+    [object[]] $nb = @([PSCustomObject]@{ Instance = 'DISPLAY\LEN9059\1'; MaxHz = [double]120.212992 })
+    New-GpuSmokeAssert (Test-GpuCheckRefresh -Monitors $nb -AdapterRefreshHz @(120, 0)) 'ok' 'A1 notebook 120/120.2'
+    New-GpuSmokeAssert (Test-GpuCheckRefresh -Monitors @() -AdapterRefreshHz @(60)) 'no determinado' 'A1 sin modos (VM)'
+    New-GpuSmokeAssert (Test-GpuCheckRefresh -Monitors $mon -AdapterRefreshHz @()) 'no determinado' 'A1 sin refresh actual'
+    [object[]] $dos = @($mon[0], [PSCustomObject]@{ Instance = 'DISPLAY\DEL\2'; MaxHz = [double]60.0 })
+    New-GpuSmokeAssert (Test-GpuCheckRefresh -Monitors $dos -AdapterRefreshHz @(60)) 'dato' 'A1 dos monitores (no atribuible)'
+}
+
+Test-SmokeFunction 'GpuChecks' 'A2 salida de video: desktop con dGPU y pantalla en la iGPU -> aviso; notebook -> dato' {
+    Set-StrictMode -Version Latest
+    [object[]] $mal = @(
+        [PSCustomObject]@{ Name = 'Intel(R) UHD Graphics 770'; IsIntegrated = $true;  RefreshHz = 60 }
+        [PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060';   IsIntegrated = $false; RefreshHz = 0 }
+    )
+    $r = Test-GpuCheckDisplayOutput -ChassisKind 'desktop' -Adapters $mal
+    New-GpuSmokeAssert $r 'aviso' 'A2 desktop iGPU'
+    if ([string]$r.Aviso -notmatch 'RTX 3060') { throw ('A2: el aviso debe nombrar la dGPU: {0}' -f $r.Aviso) }
+    [object[]] $bien = @(
+        [PSCustomObject]@{ Name = 'Intel(R) UHD Graphics 770'; IsIntegrated = $true;  RefreshHz = 0 }
+        [PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060';   IsIntegrated = $false; RefreshHz = 144 }
+    )
+    New-GpuSmokeAssert (Test-GpuCheckDisplayOutput -ChassisKind 'desktop' -Adapters $bien) 'ok' 'A2 desktop dGPU'
+    # Notebook de Mateo (Optimus): mismo patron que el caso malo, y es NORMAL.
+    New-GpuSmokeAssert (Test-GpuCheckDisplayOutput -ChassisKind 'notebook' -Adapters $mal) 'dato' 'A2 notebook hibrida'
+    [object[]] $soloDgpu = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060'; IsIntegrated = $false; RefreshHz = 144 })
+    New-GpuSmokeAssert (Test-GpuCheckDisplayOutput -ChassisKind 'desktop' -Adapters $soloDgpu) 'ok' 'A2 1 sola GPU dedicada'
+    [object[]] $soloIgpu = @([PSCustomObject]@{ Name = 'Intel(R) UHD Graphics 770'; IsIntegrated = $true; RefreshHz = 60 })
+    New-GpuSmokeAssert (Test-GpuCheckDisplayOutput -ChassisKind 'desktop' -Adapters $soloIgpu) 'no aplica' 'A2 sin dGPU'
+    [object[]] $sinRefresh = @(
+        [PSCustomObject]@{ Name = 'Intel(R) UHD Graphics 770'; IsIntegrated = $true;  RefreshHz = 0 }
+        [PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060';   IsIntegrated = $false; RefreshHz = 0 }
+    )
+    New-GpuSmokeAssert (Test-GpuCheckDisplayOutput -ChassisKind 'desktop' -Adapters $sinRefresh) 'no determinado' 'A2 nadie reporta refresh'
+}
+
+Test-SmokeFunction 'GpuChecks' 'A3 firmware: Legacy con dGPU -> aviso (mbr2gpt); UEFI -> ok; sin dato -> no determinado' {
+    Set-StrictMode -Version Latest
+    $r = Test-GpuCheckFirmware -FirmwareType 'Legacy' -HasDGpu $true
+    New-GpuSmokeAssert $r 'aviso' 'A3 legacy'
+    if ([string]$r.Aviso -notmatch 'mbr2gpt') { throw ('A3: el aviso de legacy tiene que advertir mbr2gpt (si no, no bootea): {0}' -f $r.Aviso) }
+    New-GpuSmokeAssert (Test-GpuCheckFirmware -FirmwareType 'UEFI'   -HasDGpu $true)  'ok' 'A3 UEFI'
+    New-GpuSmokeAssert (Test-GpuCheckFirmware -FirmwareType 'Legacy' -HasDGpu $false) 'dato' 'A3 legacy sin dGPU'
+    New-GpuSmokeAssert (Test-GpuCheckFirmware -FirmwareType ''       -HasDGpu $true)  'no determinado' 'A3 sin dato'
+}
+
+Test-SmokeFunction 'GpuChecks' 'A3 ReBAR: NVIDIA BAR1 256 MiB de 8 GB -> aviso; BAR1 = VRAM -> ok; AMD -> no determinado' {
+    Set-StrictMode -Version Latest
+    [object[]] $off = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060 Ti'; FbMib = 8192; Bar1Mib = 256 })
+    $r = Test-GpuCheckRebar -HasDGpu $true -HasNvidia $true -SmiAvailable $true -NvidiaRows $off
+    New-GpuSmokeAssert $r 'aviso' 'A3 ReBAR off'
+    if ([string]$r.Aviso -notmatch 'ReBAR') { throw ('A3: el aviso debe decir ReBAR: {0}' -f $r.Aviso) }
+    # Medido en la notebook de Mateo: BAR1 4096 = VRAM 4096.
+    [object[]] $on = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3050 Ti Laptop GPU'; FbMib = 4096; Bar1Mib = 4096 })
+    New-GpuSmokeAssert (Test-GpuCheckRebar -HasDGpu $true -HasNvidia $true -SmiAvailable $true -NvidiaRows $on) 'ok' 'A3 ReBAR on'
+    New-GpuSmokeAssert (Test-GpuCheckRebar -HasDGpu $true -HasNvidia $false -SmiAvailable $false -NvidiaRows @()) 'no determinado' 'A3 AMD/Intel'
+    New-GpuSmokeAssert (Test-GpuCheckRebar -HasDGpu $true -HasNvidia $true -SmiAvailable $false -NvidiaRows @()) 'no determinado' 'A3 sin nvidia-smi'
+    New-GpuSmokeAssert (Test-GpuCheckRebar -HasDGpu $false -HasNvidia $false -SmiAvailable $false -NvidiaRows @()) 'no aplica' 'A3 sin dGPU'
+}
+
+Test-SmokeFunction 'GpuChecks' 'A4 PCIe: desktop x4 de x16 -> aviso; notebook x8 de x16 -> dato; Gen bajo en P0 -> aviso' {
+    Set-StrictMode -Version Latest
+    [object[]] $x4 = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060'; CurWidth = 4; MaxWidth = 16; CurGen = 3; MaxGen = 4 })
+    $r = Test-GpuCheckPcieLink -ChassisKind 'desktop' -Links $x4 -SmiRows @()
+    New-GpuSmokeAssert $r 'aviso' 'A4 desktop x4'
+    if ([string]$r.Aviso -notmatch 'x4') { throw ('A4: el aviso debe decir el ancho: {0}' -f $r.Aviso) }
+    [object[]] $x16 = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060'; CurWidth = 16; MaxWidth = 16; CurGen = 1; MaxGen = 4 })
+    New-GpuSmokeAssert (Test-GpuCheckPcieLink -ChassisKind 'desktop' -Links $x16 -SmiRows @()) 'ok' 'A4 desktop x16 (Gen1 en reposo no avisa)'
+    # Medido en la notebook de Mateo: x8 contra un maximo de x16 -> de diseno, nunca aviso.
+    [object[]] $nb = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3050 Ti Laptop GPU'; CurWidth = 8; MaxWidth = 16; CurGen = 3; MaxGen = 4 })
+    New-GpuSmokeAssert (Test-GpuCheckPcieLink -ChassisKind 'notebook' -Links $nb -SmiRows @()) 'dato' 'A4 notebook x8'
+    # RX 6500 XT es x4 de fabrica: x4 de x4 no es degradado.
+    [object[]] $x4nativa = @([PSCustomObject]@{ Name = 'AMD Radeon RX 6500 XT'; CurWidth = 4; MaxWidth = 4; CurGen = 4; MaxGen = 4 })
+    New-GpuSmokeAssert (Test-GpuCheckPcieLink -ChassisKind 'desktop' -Links $x4nativa -SmiRows @()) 'ok' 'A4 x4 nativa'
+    # Generacion: solo cuenta leida en P0 (en reposo baja sola por ASPM).
+    [object[]] $smiP0 = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060'; PState = 'P0'; GenCur = 1; GenMax = 4 })
+    New-GpuSmokeAssert (Test-GpuCheckPcieLink -ChassisKind 'desktop' -Links $x16 -SmiRows $smiP0) 'aviso' 'A4 Gen1 en P0'
+    [object[]] $smiP8 = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060'; PState = 'P8'; GenCur = 1; GenMax = 4 })
+    New-GpuSmokeAssert (Test-GpuCheckPcieLink -ChassisKind 'desktop' -Links $x16 -SmiRows $smiP8) 'ok' 'A4 Gen1 en P8 (reposo)'
+    New-GpuSmokeAssert (Test-GpuCheckPcieLink -ChassisKind 'desktop' -Links @() -SmiRows @()) 'no determinado' 'A4 sin dato'
+}
+
+Test-SmokeFunction 'GpuChecks' 'A5 canales: 2 modulos en CHANNEL A -> aviso; A+B -> ok; etiquetas raras -> no determinado' {
+    Set-StrictMode -Version Latest
+    [object[]] $mismo = @(
+        [PSCustomObject]@{ BankLabel = 'BANK 0'; DeviceLocator = 'ChannelA-DIMM0' }
+        [PSCustomObject]@{ BankLabel = 'BANK 1'; DeviceLocator = 'ChannelA-DIMM1' }
+    )
+    $r = Test-GpuCheckRamChannels -Modules $mismo
+    New-GpuSmokeAssert $r 'aviso' 'A5 mismo canal'
+    if ([string]$r.Aviso -notmatch 'canal') { throw ('A5: el aviso debe hablar del canal: {0}' -f $r.Aviso) }
+    # Medido en la notebook de Mateo.
+    [object[]] $dual = @(
+        [PSCustomObject]@{ BankLabel = 'P0 CHANNEL A'; DeviceLocator = 'DIMM 0' }
+        [PSCustomObject]@{ BankLabel = 'P0 CHANNEL B'; DeviceLocator = 'DIMM 0' }
+    )
+    New-GpuSmokeAssert (Test-GpuCheckRamChannels -Modules $dual) 'ok' 'A5 dual A+B'
+    [object[]] $raras = @(
+        [PSCustomObject]@{ BankLabel = 'BANK 0'; DeviceLocator = 'DIMM_A1' }
+        [PSCustomObject]@{ BankLabel = 'BANK 1'; DeviceLocator = 'DIMM_A2' }
+    )
+    New-GpuSmokeAssert (Test-GpuCheckRamChannels -Modules $raras) 'no determinado' 'A5 etiquetas sin canal explicito (callar)'
+    [object[]] $uno = @([PSCustomObject]@{ BankLabel = 'P0 CHANNEL A'; DeviceLocator = 'DIMM 0' })
+    New-GpuSmokeAssert (Test-GpuCheckRamChannels -Modules $uno) 'dato' 'A5 1 modulo (ya lo avisa Get-RamAdvisories)'
+    New-GpuSmokeAssert (Test-GpuCheckRamChannels -Modules @()) 'no determinado' 'A5 sin modulos'
+}
+
+Test-SmokeFunction 'GpuChecks' 'A6 driver: Basic Display / proveedor Microsoft / GPU sin driver -> aviso; driver del fabricante -> ok' {
+    Set-StrictMode -Version Latest
+    [object[]] $basic = @([PSCustomObject]@{ Name = 'Microsoft Basic Display Adapter'; PnpId = 'PCI\VEN_10DE&DEV_2504\4&1'; Provider = 'Microsoft'; ErrorCode = 0 })
+    New-GpuSmokeAssert (Test-GpuCheckDriver -Adapters $basic -Undriven @() -IsVirtual $false) 'aviso' 'A6 basic display'
+    [object[]] $msProv = @([PSCustomObject]@{ Name = 'NVIDIA GeForce GTX 1050'; PnpId = 'PCI\VEN_10DE&DEV_1C81\4&1'; Provider = 'Microsoft'; ErrorCode = 0 })
+    New-GpuSmokeAssert (Test-GpuCheckDriver -Adapters $msProv -Undriven @() -IsVirtual $false) 'aviso' 'A6 proveedor Microsoft'
+    [object[]] $ok = @([PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3050 Ti Laptop GPU'; PnpId = 'PCI\VEN_10DE&DEV_25A0\4&1'; Provider = 'NVIDIA'; ErrorCode = 0 })
+    New-GpuSmokeAssert (Test-GpuCheckDriver -Adapters $ok -Undriven @() -IsVirtual $false) 'ok' 'A6 driver NVIDIA'
+    [object[]] $sinDriver = @([PSCustomObject]@{ Name = '3D Video Controller'; PnpId = 'PCI\VEN_10DE&DEV_25A0\4&2'; ErrorCode = 28 })
+    $r = Test-GpuCheckDriver -Adapters $ok -Undriven $sinDriver -IsVirtual $false
+    New-GpuSmokeAssert $r 'aviso' 'A6 dGPU sin driver (codigo 28)'
+    if ([string]$r.Aviso -notmatch '28') { throw ('A6: el aviso debe dar el codigo: {0}' -f $r.Aviso) }
+    # En una VM / Sandbox el adaptador basico es lo esperado: no es un hallazgo.
+    New-GpuSmokeAssert (Test-GpuCheckDriver -Adapters $basic -Undriven @() -IsVirtual $true) 'dato' 'A6 VM'
+    New-GpuSmokeAssert (Test-GpuCheckDriver -Adapters @() -Undriven @() -IsVirtual $false) 'no determinado' 'A6 sin adaptadores'
+}
+
+Test-SmokeFunction 'GpuChecks' 'parsers de nvidia-smi: query CSV y -q MEMORY (BAR1)' {
+    Set-StrictMode -Version Latest
+    # Salida real de la notebook de Mateo (driver 617.42), 1 GPU.
+    [object[]] $q = @(ConvertFrom-NvidiaSmiQuery -Lines @('00000000:01:00.0, NVIDIA GeForce RTX 3050 Ti Laptop GPU, 4096, P0, 3, 3, 8, 16'))
+    if ($q.Count -ne 1) { throw ('query: 1 linea debe dar 1 fila; got {0}' -f $q.Count) }
+    if ($q[0].BusId -ne '00000000:01:00.0' -or $q[0].PState -ne 'P0' -or $q[0].GenCur -ne 3 -or $q[0].GenMax -ne 3 -or $q[0].FbMib -ne 4096) {
+        throw ('query mal parseada: {0}' -f ($q[0] | ConvertTo-Json -Compress))
+    }
+    if (@(ConvertFrom-NvidiaSmiQuery -Lines @('Field "x" is not a valid field to query.')).Count -ne 0) { throw 'una linea de error no es una fila' }
+    [string[]] $mem = @(
+        '==============NVSMI LOG==============', '', 'Attached GPUs                             : 1',
+        'GPU 00000000:01:00.0',
+        '    FB Memory Usage', '        Total                             : 4096 MiB', '        Reserved                          : 158 MiB',
+        '    BAR1 Memory Usage', '        Total                             : 256 MiB', '        Used                              : 1 MiB',
+        '    Conf Compute Protected Memory Usage', '        Total                             : N/A'
+    )
+    [object[]] $m = @(ConvertFrom-NvidiaSmiMemory -Lines $mem)
+    if ($m.Count -ne 1) { throw ('memoria: 1 GPU debe dar 1 fila; got {0}' -f $m.Count) }
+    if ($m[0].BusId -ne '00000000:01:00.0' -or $m[0].FbMib -ne 4096 -or $m[0].Bar1Mib -ne 256) {
+        throw ('memoria mal parseada: {0}' -f ($m[0] | ConvertTo-Json -Compress))
+    }
+}
+
+# El HANDLER, no la funcion pura: Get-MachineProfile entero con TODAS las fuentes
+# sombreadas (CIM, metodo CIM, nvidia-smi, firmware, registro), bajo StrictMode,
+# y despues el banner que lo muestra. Desktop "todo mal": tiene que salir un
+# aviso por detector, y el banner los tiene que imprimir como [HW].
+function New-GpuSmokeDesktopFixtures {
+    $script:gpuFx = @{
+        'Win32_ComputerSystem'   = [PSCustomObject]@{ Manufacturer = 'To Be Filled By O.E.M.'; Model = 'B550M'; TotalPhysicalMemory = [double](16GB); PCSystemType = 1; SystemSKUNumber = ''; SystemFamily = '' }
+        'Win32_BIOS'             = [PSCustomObject]@{ Manufacturer = 'American Megatrends'; Version = 'ALASKA'; SerialNumber = 'X' }
+        'Win32_SystemEnclosure'  = [PSCustomObject]@{ ChassisTypes = @(3) }
+        'Win32_Processor'        = [PSCustomObject]@{ Name = 'AMD Ryzen 5 5600G with Radeon Graphics' }
+        'Win32_VideoController'  = @(
+            [PSCustomObject]@{ Name = 'AMD Radeon(TM) Graphics'; PNPDeviceID = 'PCI\VEN_1002&DEV_1638\4&A'; CurrentRefreshRate = 60; AdapterRAM = [long](512MB); ConfigManagerErrorCode = 0 }
+            [PSCustomObject]@{ Name = 'NVIDIA GeForce RTX 3060'; PNPDeviceID = 'PCI\VEN_10DE&DEV_2504\4&B'; CurrentRefreshRate = $null; AdapterRAM = [long](4GB - 1); ConfigManagerErrorCode = 0 }
+        )
+        'Win32_PhysicalMemory'   = @(
+            [PSCustomObject]@{ Capacity = [long](8GB); Speed = 3200; ConfiguredClockSpeed = 3200; BankLabel = 'BANK 0'; DeviceLocator = 'ChannelA-DIMM0' }
+            [PSCustomObject]@{ Capacity = [long](8GB); Speed = 3200; ConfiguredClockSpeed = 3200; BankLabel = 'BANK 1'; DeviceLocator = 'ChannelA-DIMM1' }
+        )
+        'WmiMonitorListedSupportedSourceModes' = @([PSCustomObject]@{
+            InstanceName = 'DISPLAY\AOC2490\5&1_0'
+            MonitorSourceModes = @(
+                [PSCustomObject]@{ VerticalRefreshRateNumerator = 60000;  VerticalRefreshRateDenominator = 1000 }
+                [PSCustomObject]@{ VerticalRefreshRateNumerator = 144000; VerticalRefreshRateDenominator = 1000 }
+                [PSCustomObject]@{ VerticalRefreshRateNumerator = 0;      VerticalRefreshRateDenominator = 0 }
+            )
+        })
+        'Win32_PnPEntity'        = @()
+    }
+    $script:gpuPnpFx = @{
+        'PCI\VEN_1002&DEV_1638\4&A' = @{ 'DEVPKEY_PciDevice_CurrentLinkWidth' = 16; 'DEVPKEY_PciDevice_MaxLinkWidth' = 16; 'DEVPKEY_PciDevice_CurrentLinkSpeed' = 3; 'DEVPKEY_PciDevice_MaxLinkSpeed' = 3; 'DEVPKEY_Device_DriverProvider' = 'Advanced Micro Devices, Inc.' }
+        'PCI\VEN_10DE&DEV_2504\4&B' = @{ 'DEVPKEY_PciDevice_CurrentLinkWidth' = 4;  'DEVPKEY_PciDevice_MaxLinkWidth' = 16; 'DEVPKEY_PciDevice_CurrentLinkSpeed' = 3; 'DEVPKEY_PciDevice_MaxLinkSpeed' = 4; 'DEVPKEY_Device_DriverProvider' = 'Microsoft' }
+    }
+}
+
+Test-SmokeFunction 'GpuChecks' 'handler: Get-MachineProfile + Show-MachineBanner muestran los 6 hallazgos (todo sombreado, StrictMode)' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    New-GpuSmokeDesktopFixtures
+    function Get-CimInstance {
+        param([string] $ClassName, [string] $Namespace, [string] $Filter, $OperationTimeoutSec, $ErrorAction)
+        if (-not $script:gpuFx.ContainsKey($ClassName)) { throw ('fixture faltante: {0}' -f $ClassName) }
+        return $script:gpuFx[$ClassName]
+    }
+    function New-CimInstance { param([string] $ClassName, [hashtable] $Property, [string[]] $Key, [switch] $ClientOnly, $ErrorAction)
+        return [PSCustomObject] $Property }
+    function Invoke-CimMethod {
+        param($InputObject, [string] $MethodName, [hashtable] $Arguments, $OperationTimeoutSec, $ErrorAction)
+        $props = $script:gpuPnpFx[[string]$InputObject.DeviceID]
+        [object[]] $out = @()
+        foreach ($k in @($Arguments['devicePropertyKeys'])) {
+            if ($props.ContainsKey($k)) { $out += [PSCustomObject]@{ KeyName = $k; Data = $props[$k]; Type = 7 } }
+            else                        { $out += [PSCustomObject]@{ KeyName = $k; Data = $null; Type = 0 } }
+        }
+        return [PSCustomObject]@{ ReturnValue = 0; deviceProperties = $out }
+    }
+    function Invoke-PctkNvidiaSmi {
+        param([string[]] $Arguments)
+        if ($Arguments -contains '-q') {
+            return [PSCustomObject]@{ Ok = $true; Error = ''; Lines = [string[]]@('GPU 00000000:01:00.0', '    FB Memory Usage', '        Total : 12288 MiB', '    BAR1 Memory Usage', '        Total : 256 MiB') }
+        }
+        return [PSCustomObject]@{ Ok = $true; Error = ''; Lines = [string[]]@('00000000:01:00.0, NVIDIA GeForce RTX 3060, 12288, P8, 1, 4, 4, 16') }
+    }
+    function Get-PctkFirmwareType { return 'Legacy' }
+    function Get-ItemProperty { param($Path, $Name, $ErrorAction) return $null }
+
+    $mp = Get-MachineProfile
+    if ($null -eq $mp.PSObject.Properties['GpuChecks']) { throw 'el perfil no expone GpuChecks' }
+    [object[]] $checks = @($mp.GpuChecks)
+    foreach ($id in @('A1', 'A2', 'A3-fw', 'A3-rebar', 'A4', 'A5', 'A6')) {
+        [object[]] $c = @($checks | Where-Object { $_.Id -eq $id })
+        if ($c.Count -ne 1) { throw ('GpuChecks: falta (o se repite) {0}' -f $id) }
+        if ([string]$c[0].Estado -ne 'aviso') { throw ('{0}: en el desktop todo-mal debia ser aviso; got {1} ({2})' -f $id, $c[0].Estado, $c[0].Detalle) }
+    }
+    [object[]] $adv = @($mp.Advisories)
+    foreach ($pat in @('144', 'placa madre', 'mbr2gpt', 'ReBAR', 'x4', 'canal', 'generico')) {
+        if (@($adv | Where-Object { $_ -match $pat }).Count -lt 1) { throw ('Advisories no trae el hallazgo "{0}": {1}' -f $pat, ($adv -join ' | ')) }
+    }
+
+    # Y el banner (el handler que lo muestra) los imprime.
+    $script:gpuWarns = [System.Collections.Generic.List[string]]::new()
+    function Write-PctkMachineBanner { param([object[]] $Rows, [string] $Tier, [string] $VmLine = '') }
+    function Write-PctkWarn { param([string] $Message) $script:gpuWarns.Add($Message) }
+    function Get-PctkBannerCim { return [PSCustomObject]@{ Os = $null; Cpu = $null } }
+    function Get-ServiceState { return $null }
+    Show-MachineBanner -MachineProfile $mp
+    foreach ($pat in @('144', 'placa madre', 'mbr2gpt', 'ReBAR', 'canal')) {
+        if (@($script:gpuWarns | Where-Object { $_ -match '\[HW\]' -and $_ -match $pat }).Count -lt 1) {
+            throw ('el banner no muestra el hallazgo "{0}": {1}' -f $pat, ($script:gpuWarns -join ' | '))
+        }
+    }
+}
+
+Test-SmokeFunction 'GpuChecks' 'handler: con TODAS las fuentes tirando excepcion el perfil sale igual, con "no determinado"' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    function Get-CimInstance      { param([string] $ClassName, [string] $Namespace, [string] $Filter, $OperationTimeoutSec, $ErrorAction) throw ('CIM roto: {0}' -f $ClassName) }
+    function New-CimInstance      { param([string] $ClassName, [hashtable] $Property, [string[]] $Key, [switch] $ClientOnly, $ErrorAction) throw 'CIM roto' }
+    function Invoke-CimMethod     { param($InputObject, [string] $MethodName, [hashtable] $Arguments, $OperationTimeoutSec, $ErrorAction) throw 'CIM roto' }
+    function Invoke-PctkNvidiaSmi { param([string[]] $Arguments) throw 'nvidia-smi roto' }
+    function Get-PctkFirmwareType { throw 'firmware roto' }
+    function Get-ItemProperty     { param($Path, $Name, $ErrorAction) throw 'registro roto' }
+
+    $mp = Get-MachineProfile
+    if ($null -eq $mp) { throw 'el perfil no salio' }
+    [object[]] $checks = @($mp.GpuChecks)
+    if ($checks.Count -lt 7) { throw ('esperaba 7 resultados de GpuChecks; got {0}' -f $checks.Count) }
+    foreach ($c in $checks) {
+        if ([string]$c.Estado -ne 'no determinado') { throw ('{0}: con las fuentes rotas debe ser "no determinado"; got {1}' -f $c.Id, $c.Estado) }
+        if ([string]::IsNullOrWhiteSpace([string]$c.Detalle)) { throw ('{0}: "no determinado" sin motivo' -f $c.Id) }
+    }
+}
+
+# Limite de job + solo lectura: el archivo de detectores no llama a modules\ ni a
+# nada que escriba (registro, servicios, drivers). Por AST.
+Test-SmokeFunction 'GpuChecks' 'GpuDisplayChecks.ps1: sin llamadas a modules\ ni cmdlets que escriban' {
+    [string] $f = Join-Path (Split-Path -Parent $PSScriptRoot) 'core\GpuDisplayChecks.ps1'
+    if (-not (Test-Path -LiteralPath $f)) { throw 'falta core\GpuDisplayChecks.ps1' }
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$null)
+    [object[]] $cmds = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) |
+        ForEach-Object { [string] $_.GetCommandName() } | Where-Object { -not [string]::IsNullOrEmpty($_) })
+    [object[]] $malas = @($cmds | Where-Object {
+        $_ -match '^(Set|New|Remove|Clear|Rename|Move|Copy|Start|Stop|Restart|Enable|Disable|Install|Uninstall|Add|Write)-' -and $_ -notin @('Set-StrictMode', 'New-CimInstance', 'New-GpuCheckResult', 'New-Object')
+    })
+    if ($malas.Count -gt 0) { throw ('GpuDisplayChecks.ps1 llama a cmdlets que escriben o lanzan: {0}' -f ($malas -join ', ')) }
+    [object[]] $deModulos = @($cmds | Where-Object { $_ -in @('Get-HagsStatus', 'Test-IsVirtualMachine', 'Get-NvidiaGpuInfo') })
+    if ($deModulos.Count -gt 0) { throw ('GpuDisplayChecks.ps1 llama a modules\ (limite de job): {0}' -f ($deModulos -join ', ')) }
+}
+
 # ─── ClientReport: New-ClientReport + Invoke-ClientReport ────────────────────
 Test-SmokeFunction 'ClientReport' 'New-ClientReport e Invoke-ClientReport definidas' {
     foreach ($fn in @('New-ClientReport', 'Invoke-ClientReport')) {
