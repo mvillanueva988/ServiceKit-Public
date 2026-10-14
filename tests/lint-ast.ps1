@@ -38,6 +38,12 @@
 #            el autor queria un array y PowerShell se lo desenrolla igual. Es la
 #            forma exacta de 7e33ae6 y f762458. Salvo que lo envuelva un @() o una
 #            coma unaria.
+#   GLYPH  (U1, #95) todo literal de string (StringConstant / ExpandableString,
+#            here-strings incluidos) de producto tiene que codificar EXACTO en la
+#            code page OEM 850 (sin best-fit: U+2014 -> `-` cuenta como falla). Los
+#            literales que NO van a consola (HTML del informe, archivo del prompt,
+#            .wslconfig) van al allowlist por archivo+funcion con la razon. Por que
+#            CP850 y no "lo que muestre Consolas": ver $script:LintGlyphCodePage.
 #
 # PUNTOS CIEGOS (declarados)
 #   - R1 no sigue datos entre funciones: el `.Count` del caller sobre un return
@@ -45,6 +51,9 @@
 #     ($obj.Lista.Count) ni el $null de Measure-Object (1673e73).
 #   - R1 marca `$x = Get-Repo` aunque Get-Repo devuelva `,$array`: va al allowlist
 #     con la razon.
+#   - GLYPH mira literales: un caracter armado en runtime ([char]0x2501, datos de
+#     data\*.json, texto que devuelve el sistema) no lo ve. Hoy el producto no
+#     arma ninguno fuera de [char]27 (ESC de VT).
 #
 # API
 #   Get-LintProductFiles  -RepoRoot <path>          -> [string[]] rutas .ps1
@@ -52,9 +61,12 @@
 #   Find-LintAppxSites    -Ast <Ast> -File <label>  -> sitios APPX (con .Ok)
 #   Find-LintUnrollHits   -Ast <Ast> -File <label>  -> hits (R1 + R2)
 #   Get-LintAstFromText   -Text <string>            -> Ast (para fixtures)
+#   Find-LintGlyphHits    -Ast <Ast> -File <label>  -> hits (con .Key file|funcion)
 #   Get-LintAstReport     -RepoRoot <path>          -> .Files .ArchiveHits
 #                                                      .AppxSites .AppxHits
 #                                                      .UnrollHits .UnrollAllowed
+#                                                      .GlyphHits .GlyphAllowed
+#                                                      .GlyphStale .GlyphStrings
 #   Dot-source sin efectos. Corrido directo (powershell -File) imprime el reporte
 #   y sale con exit 0/1.
 # =============================================================================
@@ -70,6 +82,34 @@ $script:LintUnrollAllowlist = @{
 # Freno: si R1/R2 marcan mas sitios de producto que esto, el lint queda en modo
 # REPORTE (no falla) y la decision de arreglarlos es del orquestador.
 $script:LintUnrollEnforce = $true
+
+# GLYPH: conjunto permitido = lo que codifica en la code page OEM 850 (U1, #95).
+# Por que esa y no "lo que dibuja la fuente":
+#   - conhost en es-AR arranca con OEM 850. Con fuente raster (la "Terminal" que
+#     queda en consolas viejas o configuradas a mano) el glifo SALE de la code
+#     page: lo que no esta en 850 se ve como '?' o un cuadrado.
+#   - Consolas / Lucida Console cubren 850 entero, pero no todo Unicode: Lucida
+#     no trae los box-drawing gruesos (U+2501), y del lado de AnyDesk el
+#     operador no controla la fuente del cliente.
+#   - con la salida redirigida (gate de release, `> archivo`, pipe) PowerShell
+#     codifica con [Console]::OutputEncoding = 850: lo de afuera se vuelve '?'.
+# 850 es la interseccion segura de los tres casos y ya trae lo que la UI usa:
+# tildes/enie, box-drawing finos y dobles (U+2500 U+2502 U+250C U+2550 U+2551
+# U+2554), sombreados y bloque (U+2591-U+2593, U+2588). Los controles (`t `n `r,
+# ESC de VT) codifican en 850 y pasan. Exacto (ExceptionFallback): el best-fit de
+# .NET mapea U+2014 a `-` y un round-trip "tolerante" lo dejaria pasar.
+# (Este archivo queda 100% ASCII a proposito: por eso los glifos van como U+.)
+$script:LintGlyphCodePage = 850
+
+# Allowlist GLYPH: '<ruta relativa>|<funcion o <top-level>>' -> razon. Solo para
+# literales que NO van a la consola. Por funcion, no por linea (se pudren). Una
+# entrada que ya no matchea nada es falla (GlyphStale): el allowlist no se pudre.
+$script:LintGlyphAllowlist = @{
+    'modules\ClientReport.ps1|New-ClientReport'     = 'HTML del informe al cliente (UTF-8, lo abre el navegador); no va a consola'
+    'modules\ResearchPrompt.ps1|<top-level>'        = 'texto del prompt para el LLM: va a archivo UTF-8 + clipboard, no a consola'
+    'modules\ResearchPrompt.ps1|New-ResearchPrompt' = 'texto del prompt para el LLM: va a archivo UTF-8 + clipboard, no a consola'
+    'modules\Wsl.ps1|New-WslConfig'                 = 'contenido de .wslconfig: va a archivo UTF-8, no a consola'
+}
 
 function Get-LintAstFromFile {
     param([string] $Path)
@@ -414,6 +454,64 @@ function Find-LintUnrollHits {
     return $hits.ToArray()
 }
 
+function Get-LintGlyphEncoding {
+    return [System.Text.Encoding]::GetEncoding($script:LintGlyphCodePage,
+        [System.Text.EncoderFallback]::ExceptionFallback,
+        [System.Text.DecoderFallback]::ExceptionFallback)
+}
+
+function Get-LintGlyphBadChars {
+    # Caracteres de $Text que NO codifican en la code page del lint. Por char,
+    # para poder nombrar cada uno en el hit. Un surrogate suelto (emoji, fuera
+    # del BMP) tambien falla al codificar: queda marcado.
+    param([string] $Text, [System.Text.Encoding] $Encoding)
+    [System.Collections.Generic.List[string]] $bad = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrEmpty($Text)) { return @() }
+    foreach ($ch in $Text.ToCharArray()) {
+        if ([int]$ch -lt 128) { continue }
+        try { [void] $Encoding.GetBytes([string]$ch) }
+        catch {
+            [string] $code = 'U+{0:X4}' -f [int]$ch
+            if (-not $bad.Contains($code)) { $bad.Add($code) }
+        }
+    }
+    return $bad.ToArray()
+}
+
+function Find-LintGlyphHits {
+    # GLYPH: literales de string (constantes y expandibles, here-strings
+    # incluidos) con caracteres fuera de la code page. Por AST: los comentarios
+    # no son nodos de string y no cuentan.
+    param([System.Management.Automation.Language.Ast] $Ast, [string] $File)
+    [System.Collections.Generic.List[PSCustomObject]] $hits = [System.Collections.Generic.List[PSCustomObject]]::new()
+    [System.Text.Encoding] $enc = Get-LintGlyphEncoding
+    $nodes = $Ast.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true)
+    foreach ($n in @($nodes)) {
+        [string[]] $bad = @(Get-LintGlyphBadChars -Text ([string]$n.Value) -Encoding $enc)
+        if ($bad.Count -eq 0) { continue }
+        [string] $fn = Get-LintFunctionLabel -Node $n
+        [string] $first = ([string]$n.Value).Split("`n")[0].Trim()
+        $hits.Add([PSCustomObject]@{
+            File     = $File
+            Line     = $n.Extent.StartLineNumber
+            Function = $fn
+            Chars    = ($bad -join ',')
+            Key      = ('{0}|{1}' -f $File, $fn)
+            Text     = $first
+        })
+    }
+    return $hits.ToArray()
+}
+
+function Get-LintStringCount {
+    param([System.Management.Automation.Language.Ast] $Ast)
+    return @($Ast.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true)).Count
+}
+
 function Get-LintAstReport {
     param([string] $RepoRoot)
     [string] $root = (Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd('\')
@@ -421,6 +519,9 @@ function Get-LintAstReport {
     [System.Collections.Generic.List[PSCustomObject]] $unroll  = [System.Collections.Generic.List[PSCustomObject]]::new()
     [System.Collections.Generic.List[PSCustomObject]] $allowed = [System.Collections.Generic.List[PSCustomObject]]::new()
     [System.Collections.Generic.List[PSCustomObject]] $appx    = [System.Collections.Generic.List[PSCustomObject]]::new()
+    [System.Collections.Generic.List[PSCustomObject]] $glyph   = [System.Collections.Generic.List[PSCustomObject]]::new()
+    [System.Collections.Generic.List[PSCustomObject]] $glyphOk = [System.Collections.Generic.List[PSCustomObject]]::new()
+    [int] $strings = 0
     [string[]] $files = @(Get-LintProductFiles -RepoRoot $root)
     $asts = @{}
     foreach ($f in $files) { $asts[$f] = Get-LintAstFromFile -Path $f }
@@ -437,8 +538,30 @@ function Get-LintAstReport {
             }
             else { $unroll.Add($h) }
         }
+        $strings += Get-LintStringCount -Ast $ast
+        foreach ($h in @(Find-LintGlyphHits -Ast $ast -File $rel)) {
+            if ($script:LintGlyphAllowlist.ContainsKey($h.Key)) {
+                $h | Add-Member -NotePropertyName Reason -NotePropertyValue $script:LintGlyphAllowlist[$h.Key]
+                $glyphOk.Add($h)
+            }
+            else { $glyph.Add($h) }
+        }
+    }
+    # Entradas del allowlist que no matchean ningun hit: se pudrieron (el texto
+    # se arreglo o se mudo). Solo se evalua si el barrido vio el archivo: con un
+    # RepoRoot de fixture (tests de mutacion) no aplica.
+    [System.Collections.Generic.List[string]] $stale = [System.Collections.Generic.List[string]]::new()
+    [string[]] $rels = @($files | ForEach-Object { $_.Substring($root.Length + 1) })
+    foreach ($k in @($script:LintGlyphAllowlist.Keys | Sort-Object)) {
+        [string] $kFile = ($k -split '\|')[0]
+        if ($rels -notcontains $kFile) { continue }
+        if (-not @($glyphOk | Where-Object { $_.Key -eq $k }).Count) { $stale.Add($k) }
     }
     return [PSCustomObject]@{
+        GlyphHits     = $glyph.ToArray()
+        GlyphAllowed  = $glyphOk.ToArray()
+        GlyphStale    = $stale.ToArray()
+        GlyphStrings  = $strings
         Files         = $files
         ArchiveHits   = $arch.ToArray()
         AppxSites     = $appx.ToArray()
@@ -492,8 +615,23 @@ if ($MyInvocation.InvocationName -ne '.') {
     if (@($rep.UnrollHits).Count -eq 0) { Write-Host '  [OK]   ningun desenrollado sin @()' -ForegroundColor Green }
 
     Write-Host ''
-    Write-Host ('Resultado: {0} FAIL  (archive {1}, appx {2}, unroll {3}, allowlist {4})' -f `
-        $failCount, @($rep.ArchiveHits).Count, @($rep.AppxHits).Count, @($rep.UnrollHits).Count, @($rep.UnrollAllowed).Count)
+    Write-Host ('-- GLYPH (U1/#95: literales fuera de la code page {0})  {1} literal(es) barridos --' -f $script:LintGlyphCodePage, $rep.GlyphStrings)
+    foreach ($h in @($rep.GlyphHits)) {
+        $failCount++
+        Write-Host ('  [FAIL] {0}:{1}  {2}  en {3}' -f $h.File, $h.Line, $h.Chars, $h.Function) -ForegroundColor Red
+    }
+    foreach ($k in @($rep.GlyphStale)) {
+        $failCount++
+        Write-Host ('  [FAIL] allowlist sin uso (sacarla): {0}' -f $k) -ForegroundColor Red
+    }
+    foreach ($h in @($rep.GlyphAllowed)) {
+        Write-Host ('  [ALLOW] {0}:{1}  {2}  -> {3}' -f $h.File, $h.Line, $h.Chars, $h.Reason) -ForegroundColor DarkGray
+    }
+    if (@($rep.GlyphHits).Count -eq 0 -and @($rep.GlyphStale).Count -eq 0) { Write-Host '  [OK]   todo literal de consola codifica en 850' -ForegroundColor Green }
+
+    Write-Host ''
+    Write-Host ('Resultado: {0} FAIL  (archive {1}, appx {2}, unroll {3}, glyph {4}, allowlist {5}+{6})' -f `
+        $failCount, @($rep.ArchiveHits).Count, @($rep.AppxHits).Count, @($rep.UnrollHits).Count, @($rep.GlyphHits).Count, @($rep.UnrollAllowed).Count, @($rep.GlyphAllowed).Count)
     if ($failCount -gt 0) { exit 1 }
     exit 0
 }

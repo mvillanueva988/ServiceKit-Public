@@ -693,7 +693,7 @@ function Invoke-ActionPrivacy {
         'Aggressive' {
             @(
                 'Todos los Medium',
-                'OneDrive sync DESHABILITADO (policy) — OJO si usas OneDrive!',
+                'OneDrive sync DESHABILITADO (policy) - OJO si usas OneDrive!',
                 'Edge Startup Boost off',
                 'Edge background mode off',
                 'Consumer features de Windows off',
