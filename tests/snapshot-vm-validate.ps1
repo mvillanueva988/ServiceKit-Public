@@ -32,11 +32,15 @@ Log ''
 
 # ---- dot-source modules under test -------------------------------------------
 try {
+    # utils\ completo por loop (como stage3-validate): Start-TelemetryJob llama Get-PctkStamp (#42)
+    # y la lista a mano ya se quedo atras dos veces (#90, #42).
+    Get-ChildItem -Path (Join-Path $RepoRoot 'utils') -Filter '*.ps1' -File |
+        ForEach-Object { . $_.FullName }
     . (Join-Path $RepoRoot 'core\JobManager.ps1')
     . (Join-Path $RepoRoot 'core\MachineProfile.ps1')
     . (Join-Path $RepoRoot 'core\GpuDisplayChecks.ps1')   # #90: Get-MachineProfile llama a los detectores
     . (Join-Path $RepoRoot 'modules\Telemetry.ps1')
-    Log '  dot-source OK (JobManager, MachineProfile, GpuDisplayChecks, Telemetry)'
+    Log '  dot-source OK (utils, JobManager, MachineProfile, GpuDisplayChecks, Telemetry)'
 } catch {
     Fail ("dot-source: {0}" -f $_.Exception.Message)
 }

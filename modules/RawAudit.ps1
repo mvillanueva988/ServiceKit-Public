@@ -49,8 +49,8 @@ function New-RawAuditReport {
         $null = New-Item -ItemType Directory -Path $outputDir -Force
     }
 
-    [string] $stamp     = (Get-Date -Format 'yyyy-MM-dd_HHmmss')
-    [string] $cleanName = ($Snapshot.ComputerName -replace '[^A-Za-z0-9_-]', '_')
+    [string] $stamp     = (Get-PctkStamp)   # minutos: es el mismo informe del equipo (#42)
+    [string] $cleanName = ($Snapshot.ComputerName.ToLowerInvariant() -replace '[^a-z0-9-]', '-')
     [string] $fileName  = ('audit_{0}_{1}.txt' -f $cleanName, $stamp)
     [string] $filePath  = Join-Path $outputDir $fileName
 

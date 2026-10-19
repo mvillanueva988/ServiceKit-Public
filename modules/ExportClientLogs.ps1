@@ -64,9 +64,10 @@ function Invoke-ExportClientLogs {
 
     # Paso 5: componer nombre
     [string] $hostname = $env:COMPUTERNAME
-    [string] $ts       = if ($TimestampOverride) { $TimestampOverride } else { Get-Date -Format 'yyyyMMdd-HHmmss' }
-    [string] $base     = if ($tag) { '{0}-{1}_{2}' -f $hostname, $tag, $ts }
-                         else      { '{0}_{1}'      -f $hostname,      $ts }
+    [string] $hostSlug = $hostname.ToLowerInvariant()   # #42: el nombre del ZIP va en minusculas; el dato (Hostname) no se toca
+    [string] $ts       = if ($TimestampOverride) { $TimestampOverride } else { Get-PctkStamp }   # minutos: la colision ya se resuelve con _2.._10 (#42)
+    [string] $base     = if ($tag) { '{0}-{1}_{2}' -f $hostSlug, $tag, $ts }
+                         else      { '{0}_{1}'      -f $hostSlug,      $ts }
 
     # Paso 6: resolver destino
     [string] $desktop = if (-not [string]::IsNullOrEmpty($DestDirOverride)) {

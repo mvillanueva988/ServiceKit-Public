@@ -475,7 +475,7 @@ function Invoke-AutoProfile {
     } else { 'N/A' }
 
     try {
-        [string] $ts       = $startedAt.ToString('yyyy-MM-dd_HHmmss')
+        [string] $ts       = Get-PctkStamp -Date $startedAt   # minutos: un run dura minutos, no hay otro igual del mismo slug (#42)
         [string] $runSlug  = if ([string]::IsNullOrWhiteSpace($ClientSlug)) {
             'cliente-' + $env:COMPUTERNAME.ToLowerInvariant()
         } else { $ClientSlug }

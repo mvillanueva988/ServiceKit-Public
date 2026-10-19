@@ -1195,8 +1195,22 @@ function Save-Snapshot {
     param(
         [Parameter(Mandatory)]
         [ValidateSet('Pre', 'Post')]
-        [string] $Phase
+        [string] $Phase,
+
+        # #42: Save-Snapshot corre en un job que dot-sourcea SOLO este modulo, o sea
+        # que NO ve Get-PctkStamp (utils\). Start-TelemetryJob calcula el sello afuera
+        # y lo pasa. Vacio = llamada directa con utils\ cargado.
+        [Parameter()]
+        [string] $Stamp = ''
     )
+
+    if ([string]::IsNullOrWhiteSpace($Stamp)) {
+        if (-not (Get-Command -Name 'Get-PctkStamp' -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw 'Save-Snapshot necesita -Stamp cuando corre sin utils\ (job): Get-PctkStamp no esta cargada.'
+        }
+        # Con segundos: PRE y POST seguidos, o dos [7], no se pisan en el mismo minuto.
+        $Stamp = Get-PctkStamp -Seconds
+    }
 
     [string] $toolkitRoot = Split-Path (Split-Path $script:TelemetryModulePath -Parent) -Parent
     [string] $outputDir   = Join-Path $toolkitRoot 'output\snapshots'
@@ -1206,7 +1220,7 @@ function Save-Snapshot {
     }
 
     [PSCustomObject] $snapshot = Get-SystemSnapshot -Phase $Phase
-    [string] $filename = '{0}_{1}.json' -f (Get-Date -Format 'yyyy-MM-dd_HHmmss'), $Phase.ToLower()
+    [string] $filename = '{0}_{1}.json' -f $Stamp, $Phase.ToLower()
     [string] $filePath = Join-Path $outputDir $filename
 
     $snapshot | ConvertTo-Json -Depth 10 | Out-File -FilePath $filePath -Encoding UTF8
@@ -1548,11 +1562,12 @@ function Start-TelemetryJob {
     )
 
     [string] $modPath = $script:TelemetryModulePath
+    [string] $stamp   = Get-PctkStamp -Seconds   # afuera del job: alla adentro no existe (#42)
 
     return Invoke-AsyncToolkitJob -JobName "Telemetry_$Phase" -ScriptBlock {
-        param([string] $ModPath, [string] $Ph)
+        param([string] $ModPath, [string] $Ph, [string] $St)
         Set-StrictMode -Version Latest
         . $ModPath
-        Save-Snapshot -Phase $Ph
-    } -ArgumentList @($modPath, $Phase)
+        Save-Snapshot -Phase $Ph -Stamp $St
+    } -ArgumentList @($modPath, $Phase, $stamp)
 }

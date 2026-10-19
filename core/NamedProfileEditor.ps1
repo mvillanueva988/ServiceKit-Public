@@ -182,7 +182,7 @@ function Save-NamedProfile {
     $clean = $clean -replace '\s+', '-'
     $clean = $clean -replace '[^a-z0-9-]', ''
     $clean = ($clean -replace '-{2,}', '-').Trim('-')
-    if ([string]::IsNullOrWhiteSpace($clean)) { $clean = 'receta-' + (Get-Date -Format 'yyyyMMdd-HHmmss') }
+    if ([string]::IsNullOrWhiteSpace($clean)) { $clean = 'receta-' + (Get-PctkStamp -Seconds) }   # con segundos: dos recetas sin nombre en el mismo minuto no se pisan (#42)
     if ($clean -eq '_sample') { $clean = 'receta-' + $clean }   # no pisar el fixture
 
     [string] $dir = Get-NamedProfileDir

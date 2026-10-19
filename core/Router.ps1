@@ -778,7 +778,7 @@ function Invoke-ClientReport {
     if (-not (Test-Path -LiteralPath $reportsDir)) {
         $null = New-Item -ItemType Directory -Path $reportsDir -Force
     }
-    [string] $stamp    = (Get-Date -Format 'yyyy-MM-dd_HHmmss')
+    [string] $stamp    = (Get-PctkStamp)   # minutos: regenerar en el mismo minuto reemplaza por uno mas nuevo (#42)
     [string] $outPath  = Join-Path $reportsDir ('reporte-cliente_{0}.html' -f $stamp)
 
     # Intentar Compare desde ultimos PRE/POST

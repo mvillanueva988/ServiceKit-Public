@@ -314,11 +314,17 @@ function Backup-Drivers {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string] $OutputRoot
+        [string] $OutputRoot,
+
+        # #42: el job NO ve Get-PctkStamp (utils\): Start-DriverBackupJob calcula el
+        # sello afuera y lo pasa. Vacio = llamada directa, se calcula aca.
+        [Parameter()]
+        [string] $Stamp = ''
     )
 
-    [string] $timestamp  = (Get-Date -Format 'yyyy-MM-dd_HHmmss')
-    [string] $destFolder = Join-Path $OutputRoot $timestamp
+    # Con segundos: dos backups seguidos en el mismo minuto no se mezclan en una carpeta.
+    if ([string]::IsNullOrWhiteSpace($Stamp)) { $Stamp = Get-PctkStamp -Seconds }
+    [string] $destFolder = Join-Path $OutputRoot $Stamp
 
     try {
         New-Item -Path $destFolder -ItemType Directory -Force | Out-Null
@@ -412,12 +418,13 @@ function Start-DriverBackupJob {
 
     [string] $fnBody     = ${Function:Backup-Drivers}.ToString()
     [string] $outputVal  = $OutputRoot
+    [string] $stampVal   = Get-PctkStamp -Seconds   # afuera del job (#42)
 
     [scriptblock] $jobBlock = [scriptblock]::Create(@"
 function Backup-Drivers {
 $fnBody
 }
-Backup-Drivers -OutputRoot '$outputVal'
+Backup-Drivers -OutputRoot '$outputVal' -Stamp '$stampVal'
 "@)
 
     return Invoke-AsyncToolkitJob -ScriptBlock $jobBlock -JobName 'DriverBackup'

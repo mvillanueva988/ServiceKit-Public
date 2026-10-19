@@ -353,7 +353,7 @@ function Invoke-UninstallToolkit {
     }
 
     # Generar el script desprendido (funcion pura, sin side-effects).
-    [string] $ts          = (Get-Date -Format 'yyyyMMdd-HHmmss')
+    [string] $ts          = (Get-PctkStamp)   # script de un solo uso en %TEMP% (#42)
     [string] $deleterPath = Join-Path $env:TEMP ('pctk-uninstall-' + $ts + '.ps1')
     [string] $deleterText = New-PctkUninstallScript -InstallRoot $installRoot -PctkPid $PID
 
