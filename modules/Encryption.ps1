@@ -220,11 +220,12 @@ function Save-BitLockerRecoveryKey {
     } else { $OutputRootOverride }
 
     [string] $host_ = $env:COMPUTERNAME
-    [string] $ts    = if ($TimestampOverride) { $TimestampOverride } else { Get-Date -Format 'yyyyMMdd-HHmmss' }
-    [string] $dir   = Join-Path $outputRoot ('recovery\{0}_{1}' -f $host_, $ts)
+    [string] $hostSlug = $host_.ToLowerInvariant()   # #42: el nombre va en minusculas; el contenido muestra el equipo tal cual
+    [string] $ts    = if ($TimestampOverride) { $TimestampOverride } else { Get-PctkStamp -Seconds }   # con segundos: una clave de recuperacion no se pisa (#42)
+    [string] $dir   = Join-Path $outputRoot ('recovery\{0}_{1}' -f $hostSlug, $ts)
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
 
-    [string] $file = Join-Path $dir ('bitlocker-recovery-{0}.txt' -f $host_)
+    [string] $file = Join-Path $dir ('bitlocker-recovery-{0}.txt' -f $hostSlug)
 
     [System.Collections.Generic.List[string]] $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add('CLAVE(S) DE RECUPERACION BITLOCKER - SENSIBLE')

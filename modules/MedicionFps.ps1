@@ -506,7 +506,7 @@ function Invoke-FpsCaptureBatch {
     $Label = ConvertTo-FpsLabel -Text $Label
 
     [string] $root = Get-FpsOutputRoot -OutputRootOverride $OutputRootOverride
-    [string] $base = Join-Path $root ('{0}_{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $Label)
+    [string] $base = Join-Path $root ('{0}_{1}' -f (Get-PctkStamp), $Label)   # minutos: la colision se resuelve con -2, -3 (#42)
     [string] $dir  = $base
     [int] $k = 2
     while (Test-Path -LiteralPath $dir) { $dir = '{0}-{1}' -f $base, $k; $k++ }
@@ -658,7 +658,10 @@ function Invoke-FpsCompareMenu {
         else { Write-PctkValue ('  ' + $ln) }
     }
     [string] $root = Get-FpsOutputRoot -OutputRootOverride $OutputRootOverride
-    [string] $file = Join-Path $root ('comparacion-{0}.txt' -f (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+    [string] $cmpStamp = Get-PctkStamp -Seconds
+    [string] $file = Join-Path $root ('comparacion-{0}.txt' -f $cmpStamp)
+    [int] $cmpN = 2
+    while (Test-Path -LiteralPath $file) { $file = Join-Path $root ('comparacion-{0}-{1}.txt' -f $cmpStamp, $cmpN); $cmpN++ }
     $lines | Set-Content -LiteralPath $file -Encoding UTF8
     Write-PctkHint ('       {0}' -f $file)
     Write-ActionAudit -Action 'Fps.Compare' -Status 'Success' -Summary ('avg {0} / 1% low {1}' -f $rAvg.Verdict, $rLow.Verdict)
@@ -737,7 +740,7 @@ function Invoke-FpsGate {
     )
     [string] $root = Get-FpsOutputRoot -OutputRootOverride $OutputRootOverride
     if (-not (Test-Path -LiteralPath $root)) { New-Item -Path $root -ItemType Directory -Force | Out-Null }
-    [string] $report = Join-Path $root ('gate-{0}.txt' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    [string] $report = Join-Path $root ('gate-{0}.txt' -f (Get-PctkStamp))
     [System.Collections.Generic.List[string]] $fails = [System.Collections.Generic.List[string]]::new()
     [System.Collections.Generic.List[string]] $body  = [System.Collections.Generic.List[string]]::new()
     $lote = $null

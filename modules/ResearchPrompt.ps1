@@ -408,7 +408,7 @@ function New-ResearchPrompt {
     [string] $outDir = Join-Path $toolkitRoot 'output\research'
     if (-not (Test-Path $outDir)) { $null = New-Item -ItemType Directory -Path $outDir -Force }
 
-    [string] $stamp = (Get-Date -Format 'yyyy-MM-dd_HHmmss')
+    [string] $stamp = (Get-PctkStamp -Seconds)   # con segundos: misma plantilla con otra pregunta/scrub en el mismo minuto no se pisa (#42)
     [string] $fileName = ('prompt_{0}_{1}.md' -f $Template.ToLowerInvariant(), $stamp)
     [string] $filePath = Join-Path $outDir $fileName
 
