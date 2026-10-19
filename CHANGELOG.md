@@ -2,6 +2,22 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.12.0] - 2026-10-19
+
+Release: **PCTk mide cuánto le cuesta Defender a la PC**. Suma el diagnóstico de costo de Defender en `[A][19]`, el menú `[A]` vuelve a entrar entero en una consola de 44 filas, y todos los archivos que escribe PCTk se nombran con un solo formato de fecha.
+
+### Added
+
+- **Medir el costo de Defender, `[M]` en `[A][19]` (`modules/DefenderDiag.ps1`)**: diagnóstico de sólo lectura en cuatro pasos: escaneo programado (estado y eventos 1000/1002 con el motivo literal), reparto de CPU de usuario y de kernel de `MsMpEng`, causalidad contra una línea base (reposo, 1500 archivos, 25 `powershell.exe`) y CPU acumulada contra el tiempo encendido. Deja `output\defender\diagnostico_<fecha>.txt` y una entrada `Defender.Diag` en el audit. Sin admin, lo que no se puede leer queda como omitido. No aplica exclusiones ni cambia nada del equipo. Gate en HW: `tests/defender-diag-hw.ps1`.
+
+### Changed
+
+- **Un solo formato de fecha en los nombres de archivo (`utils/Stamp.ps1`)**: snapshots, backups de drivers, ZIP de logs, audit, informe, research prompt, recetas sin nombre, mediciones de FPS y claves de recuperación de BitLocker se nombran `2026-10-19_1435`, con segundos sólo donde dos archivos pueden caer en el mismo minuto, y el nombre del equipo va en minúsculas. Los archivos con el formato viejo se siguen leyendo.
+
+### Fixed
+
+- **El menú `[A]` ya no se corta en `[17]` en una consola de 44 filas (`utils/ConsoleMenu.ps1`)**: antes de paginar, el menú se redibuja con el banner compacto (sin el logo ni el título, 8 líneas menos) y sólo pagina si así tampoco entra.
+
 ## [2.11.0] - 2026-10-14
 
 Release: **PCTk mide los FPS y ve lo que le roba rendimiento a la placa de video**. Suma el menú `[F]` para medir FPS en CS2 con un A/B que distingue una mejora real del ruido, y el perfil de la máquina avisa solo de seis problemas de GPU y pantalla. El informe al cliente deja de mostrar la salud del disco como un `0` en rojo.
