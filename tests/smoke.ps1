@@ -4654,18 +4654,23 @@ Test-SmokeFunction 'ClientReport' '#30: sin POST, la ficha del equipo sale del P
 # redirigida a un temp. Devuelve el texto del JSON guardado. Se cachea: el job
 # toma un snapshot real y no hace falta repetirlo por test.
 $script:Hd3JobJson = $null
+$script:Hd3JobStamp = ''
+$script:Hd3JobFileName = ''
 function Get-Hd3JobSnapshotJson {
     if ($null -ne $script:Hd3JobJson) { return $script:Hd3JobJson }
     [string] $modPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'modules\Telemetry.ps1'
     [string] $fakeRoot = Join-Path $env:TEMP ('pctk-hd3job-' + [System.Guid]::NewGuid().ToString('N'))
+    # #42: el job no ve utils\ (Get-PctkStamp): el sello se calcula AFUERA y viaja
+    # como argumento, igual que en Start-TelemetryJob.
+    $script:Hd3JobStamp = Get-PctkStamp -Seconds
     $j = Start-Job -ScriptBlock {
-        param([string] $ModPath, [string] $FakeRoot)
+        param([string] $ModPath, [string] $FakeRoot, [string] $Stamp)
         Set-StrictMode -Version Latest
         . $ModPath
         # Save-Snapshot deriva output\snapshots de esta variable: se apunta al temp.
         $script:TelemetryModulePath = Join-Path $FakeRoot 'modules\Telemetry.ps1'
-        Save-Snapshot -Phase Post
-    } -ArgumentList @($modPath, $fakeRoot)
+        Save-Snapshot -Phase Post -Stamp $Stamp
+    } -ArgumentList @($modPath, $fakeRoot, $script:Hd3JobStamp)
     try {
         if (-not (Wait-Job $j -Timeout 240)) { throw 'el job de telemetria no termino en 240 s' }
         $saved = Receive-Job $j -ErrorAction Stop
@@ -4676,6 +4681,7 @@ function Get-Hd3JobSnapshotJson {
         if ($savedPath -notlike ($fakeRoot + '*')) { throw ('el snapshot no cayo en el temp: {0}' -f $savedPath) }
         if (-not (Test-Path -LiteralPath $savedPath)) { throw ('no existe el snapshot guardado: {0}' -f $savedPath) }
         $script:Hd3JobJson = Get-Content -LiteralPath $savedPath -Raw -Encoding UTF8
+        $script:Hd3JobFileName = [System.IO.Path]::GetFileName($savedPath)
     } finally {
         Remove-Item -LiteralPath $fakeRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -7068,6 +7074,8 @@ Test-SmokeFunction 'MedicionFps' 'handler [F] completo bajo StrictMode: captura 
         if (@($script:SmokeFpsStarts | Where-Object { $_ -match '--process_name cs2\.exe' -and $_ -match '--timed \d+' -and $_ -match '--terminate_after_timed' -and $_ -match '--delay \d+' }).Count -ne 3) {
             throw ('argumentos de PresentMon inesperados: {0}' -f ($script:SmokeFpsStarts -join ' || '))
         }
+        # #42: el dir del lote lleva el sello de PCTk (yyyy-MM-dd_HHmm) + etiqueta.
+        if ($lotes[0].Name -cnotmatch '^\d{4}-\d{2}-\d{2}_\d{4}_[a-z0-9-]+(-\d+)?$') { throw ('dir del lote "{0}"' -f $lotes[0].Name) }
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
@@ -7108,6 +7116,9 @@ Test-SmokeFunction 'MedicionFps' 'handler [F] comparar: 3 lotes guardados -> ver
         # Los 3 lotes son el mismo fixture: deriva 0, delta 0.
         if ($all -notmatch 'dentro del ruido') { throw ('falta el veredicto:' + "`n" + $all) }
         if (@(Get-ChildItem -LiteralPath (Join-Path $root 'medicion-fps') -Filter 'comparacion-*.txt').Count -ne 1) { throw 'no escribio la comparacion a archivo' }
+        # #42: comparacion-yyyy-MM-dd_HHmmss.txt (con segundos: no hay otra proteccion contra pisarse)
+        [string] $cn = @(Get-ChildItem -LiteralPath (Join-Path $root 'medicion-fps') -Filter 'comparacion-*.txt')[0].Name
+        if ($cn -cnotmatch '^comparacion-\d{4}-\d{2}-\d{2}_\d{6}(-\d+)?\.txt$') { throw ('comparacion "{0}"' -f $cn) }
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
@@ -7138,6 +7149,8 @@ Test-SmokeFunction 'MedicionFps' 'gate HW (Invoke-FpsGate): con CS2 y PresentMon
         $g = $script:SmokeFpsGate
         [string] $txt = Get-Content -LiteralPath $g.ReportPath -Raw
         if (-not $g.Pass) { throw ('con todo shadowed dio FAIL: ' + $txt) }
+        # #42: gate-yyyy-MM-dd_HHmm.txt
+        if ([System.IO.Path]::GetFileName([string] $g.ReportPath) -cnotmatch '^gate-\d{4}-\d{2}-\d{2}_\d{4}\.txt$') { throw ('reporte del gate "{0}"' -f $g.ReportPath) }
         if ($txt -notmatch 'PASS') { throw 'el reporte no dice PASS' }
         if (@($script:SmokeFpsStarts | Where-Object { $_ -match '--output_file' }).Count -ne 3) { throw 'no hizo 3 capturas' }
     }
@@ -7158,6 +7171,403 @@ Test-SmokeFunction 'MedicionFps' 'menu principal: [F] en DIAGNOSTICO y el dispat
     }
 }
 
+
+# ─── #42: un solo formato de fecha en los nombres que escribe PCTk ────────────
+# Convencion: yyyy-MM-dd_HHmm (con segundos SOLO donde el productor puede pisarse
+# en el mismo minuto). UNA definicion: Get-PctkStamp (utils\Stamp.ps1). El guard
+# lee el AST (los comentarios que describen un formato no cuentan) y distingue
+# nombre de contenido por un hecho duro: un formato con HH y con ':' NO puede ser
+# un nombre de archivo en Windows (pantalla, ISO 8601), uno con HH y sin ':' si.
+
+# Devuelve las violaciones de un AST: 'linea: motivo'.
+function Get-Smoke42Violations {
+    param([Parameter(Mandatory)] [System.Management.Automation.Language.Ast] $Ast)
+    [System.Collections.Generic.List[string]] $out = [System.Collections.Generic.List[string]]::new()
+    # Formato "de nombre": lleva la hora (HH) y ningun ':' en la parte de formato.
+    $esNombre = { param([string] $f) ($f -cmatch 'HH') -and ($f -notmatch ':') }
+
+    # (a) Get-Date -Format / -UFormat
+    foreach ($c in @($Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))) {
+        if ([string] $c.GetCommandName() -ne 'Get-Date') { continue }
+        $els = @($c.CommandElements)
+        for ($i = 1; $i -lt $els.Count; $i++) {
+            $e = $els[$i]
+            if ($e -isnot [System.Management.Automation.Language.CommandParameterAst]) { continue }
+            [string] $pn = $e.ParameterName
+            if (-not ('format'.StartsWith($pn, [System.StringComparison]::OrdinalIgnoreCase) -or
+                      'uformat'.StartsWith($pn, [System.StringComparison]::OrdinalIgnoreCase))) { continue }
+            $arg = if ($null -ne $e.Argument) { $e.Argument } elseif ($i + 1 -lt $els.Count) { $els[$i + 1] } else { $null }
+            if ($arg -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                if (& $esNombre ([string] $arg.Value)) { [void] $out.Add(('{0}: Get-Date -Format ''{1}''' -f $c.Extent.StartLineNumber, $arg.Value)) }
+            } else {
+                [void] $out.Add(('{0}: Get-Date -Format con argumento no constante (no se puede verificar)' -f $c.Extent.StartLineNumber))
+            }
+        }
+    }
+    # (b) <x>.ToString('...HH...')
+    foreach ($m in @($Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true))) {
+        if ($m.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { continue }
+        if ([string] $m.Member.Value -ne 'ToString') { continue }
+        if ($null -eq $m.Arguments -or @($m.Arguments).Count -eq 0) { continue }
+        $a0 = @($m.Arguments)[0]
+        if ($a0 -is [System.Management.Automation.Language.StringConstantExpressionAst] -and (& $esNombre ([string] $a0.Value))) {
+            [void] $out.Add(('{0}: .ToString(''{1}'')' -f $m.Extent.StartLineNumber, $a0.Value))
+        }
+    }
+    # (c) '{0:...HH...}' (operador -f y [string]::Format)
+    foreach ($s in @($Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true))) {
+        [string] $v = [string] $s.Value
+        foreach ($mm in [regex]::Matches($v, '\{\d+:([^}]*)\}')) {
+            if (& $esNombre ([string] $mm.Groups[1].Value)) { [void] $out.Add(('{0}: formato compuesto ''{1}''' -f $s.Extent.StartLineNumber, $mm.Value)) }
+        }
+    }
+    return , $out
+}
+
+function Get-Smoke42SourceViolations {
+    param([Parameter(Mandatory)] [string] $Source)
+    $perr = $null; $tok = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Source, [ref] $tok, [ref] $perr)
+    return , (Get-Smoke42Violations -Ast $ast)
+}
+
+Test-SmokeFunction 'Stamp' 'guard de fecha: reconoce los formatos de nombre (AST) y deja pasar contenido, fecha sola y comentarios' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $malos = [ordered]@{
+        'Get-Date -Format'          = "`$x = Get-Date -Format 'yyyyMMdd-HHmmss'"
+        '-Format con guion bajo'    = "`$x = (Get-Date -Format 'yyyy-MM-dd_HHmmss')"
+        '-f con ToString'           = "`$x = (Get-Date).ToString('yyyy-MM-dd_HHmm')"
+        'String.Format'             = "`$x = [string]::Format('{0:yyyyMMdd-HHmm}', `$d)"
+        'operador -f'               = "`$x = '{0:yyyy-MM-dd_HHmm}' -f `$d"
+        'dentro de string expandible' = "`$x = `"a `$((Get-Date).ToString('yyyyMMdd-HHmmss'))`""
+        'argumento no constante'    = "`$x = Get-Date -Format `$fmt"
+        'parametro abreviado'       = "`$x = Get-Date -f 'yyyyMMdd-HHmmss'"
+    }
+    foreach ($k in $malos.Keys) {
+        if ((Get-Smoke42SourceViolations -Source $malos[$k]).Count -lt 1) { throw ('el guard NO caza: {0}' -f $k) }
+    }
+    $buenos = [ordered]@{
+        'fecha sola'                = "`$x = Get-Date -Format 'yyyy-MM-dd'"
+        'contenido con dos puntos'  = "`$x = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"
+        'ISO'                       = "`$x = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')"
+        'round-trip'                = "`$x = (Get-Date).ToString('o')"
+        'compuesto con dos puntos'  = "`$x = '{0:dd/MM/yyyy HH:mm}' -f `$d"
+        'comentario'                = "# Get-Date -Format 'yyyyMMdd-HHmmss'`n`$x = 1"
+        'string comun'              = "`$x = 'yyyyMMdd-HHmmss'"
+    }
+    foreach ($k in $buenos.Keys) {
+        $v = Get-Smoke42SourceViolations -Source $buenos[$k]
+        if ($v.Count -gt 0) { throw ('el guard marca algo valido ({0}): {1}' -f $k, ($v -join ' | ')) }
+    }
+}
+
+# Sitios permitidos por lista explicita (archivo relativo, motivo). Hoy ninguno:
+# los dos productores que corren en job (Backup-Drivers, Save-Snapshot) reciben el
+# sello como argumento, calculado afuera.
+$script:Smoke42Allow = @()
+
+Test-SmokeFunction 'Stamp' 'guard de fecha: ningun producto formatea fecha+hora para un NOMBRE fuera de Get-PctkStamp' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $root = Split-Path -Parent $PSScriptRoot
+    [System.Collections.Generic.List[string]] $files = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in @(Get-ChildItem -LiteralPath $root -Filter '*.ps1' -File)) { [void] $files.Add($f.FullName) }
+    foreach ($d in @('core', 'modules', 'utils', 'tools')) {
+        $p = Join-Path $root $d
+        if (Test-Path -LiteralPath $p -PathType Container) {
+            foreach ($f in @(Get-ChildItem -LiteralPath $p -Filter '*.ps1' -File -Recurse)) { [void] $files.Add($f.FullName) }
+        }
+    }
+    # Sin esto el guard queda verde por vacuidad si alguien mueve las carpetas.
+    if ($files.Count -lt 40) { throw ('el guard solo vio {0} archivos: se movieron las carpetas del producto?' -f $files.Count) }
+    [string] $helper = Join-Path $root 'utils\Stamp.ps1'
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'falta utils\Stamp.ps1 (Get-PctkStamp)' }
+    [System.Collections.Generic.List[string]] $bad = [System.Collections.Generic.List[string]]::new()
+    foreach ($path in $files) {
+        if ($path -eq $helper) { continue }
+        [string] $rel = $path.Substring($root.Length + 1)
+        if ($script:Smoke42Allow -contains $rel) { continue }
+        $perr = $null; $tok = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tok, [ref] $perr)
+        foreach ($v in (Get-Smoke42Violations -Ast $ast)) { [void] $bad.Add(('{0}:{1}' -f $rel, $v)) }
+    }
+    if ($bad.Count -gt 0) { throw ('formato de fecha+hora para nombre fuera de Get-PctkStamp: ' + ($bad -join ' ;; ')) }
+}
+
+Test-SmokeFunction 'Stamp' 'Get-PctkStamp: yyyy-MM-dd_HHmm exacto, -Seconds agrega segundos, cultura invariante' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    if (-not (Get-Command -Name 'Get-PctkStamp' -CommandType Function -ErrorAction SilentlyContinue)) { throw 'no existe Get-PctkStamp' }
+    [datetime] $d = [datetime]::new(2026, 10, 9, 4, 5, 7)
+    [string] $a = Get-PctkStamp -Date $d
+    if ($a -cne '2026-10-09_0405') { throw ('sin segundos: "{0}"' -f $a) }
+    [string] $b = Get-PctkStamp -Date $d -Seconds
+    if ($b -cne '2026-10-09_040507') { throw ('con segundos: "{0}"' -f $b) }
+    if ((Get-PctkStamp) -notmatch '^\d{4}-\d{2}-\d{2}_\d{4}$') { throw 'default (ahora) no respeta el formato' }
+    if ((Get-PctkStamp -Seconds) -notmatch '^\d{4}-\d{2}-\d{2}_\d{6}$') { throw '-Seconds (ahora) no respeta el formato' }
+    # Una cultura con otro calendario/digitos no tiene que colarse.
+    $prev = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('ar-SA')
+        [string] $c = Get-PctkStamp -Date $d
+        if ($c -cne '2026-10-09_0405') { throw ('cultura ar-SA cambio el sello: "{0}"' -f $c) }
+    } finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $prev }
+}
+
+# ─── #42 productores: cada uno escribe su nombre con el sello nuevo ───────────
+$script:Smoke42Host = [string] $env:COMPUTERNAME.ToLowerInvariant()
+
+Test-SmokeFunction 'Stamp' 'Save-BitLockerRecoveryKey: dir <host-en-minusculas>_yyyy-MM-dd_HHmmss (con segundos: una clave no se pisa)' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [object[]] $one = @([PSCustomObject]@{ KeyProtectorId = '{1}'; KeyId8 = '12345678'; RecoveryPassword = '111111-222222' })
+    [string] $tmp = Join-Path $env:TEMP ('pctk-s42-enc-' + [System.Guid]::NewGuid().ToString('N'))
+    try {
+        [string] $path = Save-BitLockerRecoveryKey -Keys $one -OutputRootOverride $tmp
+        [string] $dirName = Split-Path -Leaf (Split-Path -Parent $path)
+        if ($dirName -cnotmatch ('^' + [regex]::Escape($script:Smoke42Host) + '_\d{4}-\d{2}-\d{2}_\d{6}$')) { throw ('dir "{0}"' -f $dirName) }
+    } finally { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue } }
+}
+
+Test-SmokeFunction 'Stamp' 'Invoke-ExportClientLogs: ZIP <host-en-minusculas>_yyyy-MM-dd_HHmm.zip en el Escritorio' {
+    $ErrorActionPreference = 'Stop'
+    [string] $tmpOut  = Join-Path $env:TEMP ('pctk-s42-out-'  + [System.Guid]::NewGuid().ToString('N'))
+    [string] $tmpDest = Join-Path $env:TEMP ('pctk-s42-dest-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -Path (Join-Path $tmpOut 'audit') -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmpDest -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $tmpOut 'audit\2026-10-19.jsonl') -Value '{"Action":"test"}' -Encoding UTF8
+    try {
+        function Read-Host { '' }
+        $r = Invoke-ExportClientLogs -OutputRootOverride $tmpOut -DestDirOverride $tmpDest
+        if ($r.Status -ne 'OK') { throw ('Status {0}' -f $r.Status) }
+        [string] $n = [System.IO.Path]::GetFileName($r.ZipPath)
+        if ($n -cnotmatch ('^' + [regex]::Escape($script:Smoke42Host) + '_\d{4}-\d{2}-\d{2}_\d{4}\.zip$')) { throw ('zip "{0}"' -f $n) }
+    } finally {
+        Remove-Item -LiteralPath $tmpOut  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpDest -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'Stamp' 'New-RawAuditReport: audit_<host-en-minusculas>_yyyy-MM-dd_HHmm.txt' {
+    $ErrorActionPreference = 'Stop'
+    if ($null -eq $script:_snapshotResult) { $script:_snapshotResult = Get-SystemSnapshot -Phase Pre }
+    [PSCustomObject] $snap = $script:_snapshotResult.PSObject.Copy()
+    $snap.ComputerName = 'PC_De-Prueba'
+    [string] $name = ''
+    $ra = $null
+    try {
+        $ra = New-RawAuditReport -Snapshot $snap
+        if ($null -eq $ra -or [string]::IsNullOrEmpty([string] $ra.FilePath)) { throw 'New-RawAuditReport no devolvio FilePath' }
+        $name = [System.IO.Path]::GetFileName([string] $ra.FilePath)
+    } finally {
+        if ($null -ne $ra -and $ra.FilePath -and (Test-Path -LiteralPath $ra.FilePath)) { Remove-Item -LiteralPath $ra.FilePath -Force -ErrorAction SilentlyContinue }
+    }
+    if ($name -cnotmatch '^audit_pc-de-prueba_\d{4}-\d{2}-\d{2}_\d{4}\.txt$') { throw ('audit "{0}"' -f $name) }
+}
+
+Test-SmokeFunction 'Stamp' 'Save-NamedProfile: la receta sin nombre se guarda como receta-yyyy-MM-dd_HHmmss' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $tmp = Join-Path $env:TEMP ('pctk-s42-np-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    $realDir = ${function:Get-NamedProfileDir}
+    try {
+        function Get-NamedProfileDir { return $tmp }
+        [string] $p = Save-NamedProfile -Profile ([PSCustomObject]@{ name = 'x' }) -Slug '!!!'
+        [string] $bn = [System.IO.Path]::GetFileNameWithoutExtension($p)
+        if ($bn -cnotmatch '^receta-\d{4}-\d{2}-\d{2}_\d{6}$') { throw ('slug "{0}"' -f $bn) }
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Stamp' 'handler [8] (Invoke-ClientReport): el HTML se llama reporte-cliente_yyyy-MM-dd_HHmm.html' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $script:S42Out = $null
+    function Test-Path {
+        [CmdletBinding()] param([Parameter(Position = 0)] [string] $Path, [string] $LiteralPath, [string] $PathType)
+        [string] $p = if ($PSBoundParameters.ContainsKey('LiteralPath')) { $LiteralPath } else { $Path }
+        if ($p -match '[\\/]output[\\/](snapshots|reports)$') { return $true }
+        return (Microsoft.PowerShell.Management\Test-Path @PSBoundParameters)
+    }
+    function Compare-Snapshot { return $null }
+    function Start-Process { param([Parameter(Position = 0)] [string] $FilePath) }
+    function New-ClientReport {
+        [CmdletBinding()] param([object] $PostSnapshot, [object] $Compare, [object] $Result, [string] $OutputPath, [switch] $OpenAfter)
+        $script:S42Out = $OutputPath
+        return [PSCustomObject]@{ Success = $true; FilePath = $OutputPath }
+    }
+    Invoke-ClientReport -MachineProfile ([PSCustomObject]@{ IsLaptop = $false; RamMB = 8192; Tier = 'Mid'; IsHome = $true }) | Out-Null
+    if ([string]::IsNullOrEmpty($script:S42Out)) { throw 'el handler no llamo a New-ClientReport' }
+    [string] $n = [System.IO.Path]::GetFileName($script:S42Out)
+    if ($n -cnotmatch '^reporte-cliente_\d{4}-\d{2}-\d{2}_\d{4}\.html$') { throw ('html "{0}"' -f $n) }
+}
+
+Test-SmokeFunction 'Stamp' 'New-ResearchPrompt: prompt_<plantilla>_yyyy-MM-dd_HHmmss.md (con segundos: mismos params, otra pregunta)' {
+    $ErrorActionPreference = 'Stop'
+    $snap = [PSCustomObject]@{ CPU = [PSCustomObject]@{ Name = 'x' } }
+    $r = New-ResearchPrompt -Template Optimization -Snapshot $snap -MachineProfile ([PSCustomObject]@{ })
+    try {
+        if ($null -eq $r -or -not $r.Success) { throw 'New-ResearchPrompt fallo' }
+        [string] $n = [System.IO.Path]::GetFileName([string] $r.FilePath)
+        if ($n -cnotmatch '^prompt_optimization_\d{4}-\d{2}-\d{2}_\d{6}\.md$') { throw ('prompt "{0}"' -f $n) }
+    } finally {
+        if ($null -ne $r -and $r.FilePath -and (Test-Path -LiteralPath $r.FilePath)) { Remove-Item -LiteralPath $r.FilePath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# ─── #42 productores en job: el sello viaja como argumento ────────────────────
+Test-SmokeFunction 'Stamp' 'Start-TelemetryJob: calcula el sello afuera (con segundos) y lo pasa al job' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $script:S42Args = $null
+    function Invoke-AsyncToolkitJob { param([scriptblock] $ScriptBlock, [string] $JobName, [object[]] $ArgumentList) $script:S42Args = @($ArgumentList); return 'job-falso' }
+    $null = Start-TelemetryJob -Phase Pre
+    if ($null -eq $script:S42Args -or @($script:S42Args).Count -lt 3) { throw ('ArgumentList sin el sello: {0}' -f (@($script:S42Args) -join ' | ')) }
+    if ([string] @($script:S42Args)[2] -notmatch '^\d{4}-\d{2}-\d{2}_\d{6}$') { throw ('3er argumento no es el sello con segundos: "{0}"' -f @($script:S42Args)[2]) }
+}
+
+Test-SmokeFunction 'Stamp' 'Save-Snapshot en un job REAL (solo Telemetry.ps1, sin utils\): el archivo se llama <sello que viaja como argumento>_post.json' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $null = Get-Hd3JobSnapshotJson
+    [string] $n = [string] $script:Hd3JobFileName
+    if ($n -cne ($script:Hd3JobStamp + '_post.json')) { throw ('archivo "{0}", esperado "{1}_post.json"' -f $n, $script:Hd3JobStamp) }
+    if ($script:Hd3JobStamp -notmatch '^\d{4}-\d{2}-\d{2}_\d{6}$') { throw ('sello "{0}"' -f $script:Hd3JobStamp) }
+}
+
+Test-SmokeFunction 'Stamp' 'Backup-Drivers en un job REAL (sin utils\): la carpeta lleva el sello que viaja como argumento' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $script:S42Block = $null
+    function Invoke-AsyncToolkitJob { param([scriptblock] $ScriptBlock, [string] $JobName, [object[]] $ArgumentList) $script:S42Block = $ScriptBlock; return 'job-falso' }
+    [string] $root = Join-Path $env:TEMP ('pctk-s42-drv-' + [guid]::NewGuid().ToString('N'))
+    $null = Start-DriverBackupJob -OutputRoot $root
+    if ($null -eq $script:S42Block) { throw 'Start-DriverBackupJob no armo el job' }
+    [string] $text = $script:S42Block.ToString()
+    # El sello viaja EMBEBIDO en la llamada (con segundos: dos backups seguidos no se mezclan).
+    if ($text -notmatch "Backup-Drivers\s+-OutputRoot\s+'[^']*'\s+-Stamp\s+'\d{4}-\d{2}-\d{2}_\d{6}'") { throw ('el job no lleva -Stamp con el sello: ' + $text) }
+    # Runspace fresco como Start-Job: ni Get-PctkStamp ni Get-WindowsDriver reales.
+    $j = Start-Job -ScriptBlock {
+        param([string] $Text)
+        Set-StrictMode -Version Latest
+        function Get-WindowsDriver { param([switch] $Online, [switch] $All) }
+        & ([scriptblock]::Create($Text))
+    } -ArgumentList @($text)
+    try {
+        if (-not (Wait-Job $j -Timeout 120)) { throw 'el job no termino' }
+        $d = Receive-Job $j -ErrorAction Stop
+    } finally { Remove-Job $j -Force -ErrorAction SilentlyContinue }
+    try {
+        if ($null -eq $d) { throw 'el job no devolvio resultado' }
+        [string] $leaf = Split-Path -Leaf ([string] $d.Destination)
+        if ($leaf -cnotmatch '^\d{4}-\d{2}-\d{2}_\d{6}$') { throw ('carpeta "{0}"' -f $leaf) }
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# ─── #42 lectores: aceptan nombre VIEJO y NUEVO (puede haber un PRE de una visita
+# vieja y un POST de hoy). Ninguno parsea la fecha del nombre: glob por sufijo +
+# orden por LastWriteTime. Esto lo fija para que no se rompa.
+function New-Smoke42SnapFixture {
+    param([string] $Dir, [string] $Name, [string] $Computer, [datetime] $When)
+    $obj = [ordered]@{
+        Phase = 'x'; ComputerName = $Computer; Volumes = @(); Services = [ordered]@{ RunningCount = 10; BloatRunning = @() }
+        StartupCount = 5; MultipleAvProblem = $false; UptimeHours = 5.0; Battery = $null; Timestamp = '2026-10-19 10:00:00'
+    }
+    [string] $p = Join-Path $Dir $Name
+    ($obj | ConvertTo-Json -Depth 5) | Out-File -FilePath $p -Encoding UTF8
+    (Get-Item -LiteralPath $p).LastWriteTime = $When
+}
+
+Test-SmokeFunction 'Stamp' 'Compare-Snapshot lee PRE/POST con nombre viejo (yyyy-MM-dd_HHmmss) y nuevo mezclados: gana el mas reciente por fecha del archivo' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $tmp = Join-Path $env:TEMP ('pctk-s42-cmp-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $snap = Join-Path $tmp 'output\snapshots'
+    New-Item -ItemType Directory -Path $snap -Force | Out-Null
+    $prevMod = $script:TelemetryModulePath
+    try {
+        $script:TelemetryModulePath = Join-Path $tmp 'modules\Telemetry.ps1'
+        # Viejo mas nuevo en fecha que el nuevo: tiene que ganar el de MTIME, no el que "se ve" mas nuevo por nombre.
+        New-Smoke42SnapFixture -Dir $snap -Name '2026-10-01_090000_pre.json'  -Computer 'A' -When ([datetime]'2026-10-01 09:00')
+        New-Smoke42SnapFixture -Dir $snap -Name '2026-10-19_1000_pre.json'    -Computer 'A' -When ([datetime]'2026-10-19 10:00')
+        New-Smoke42SnapFixture -Dir $snap -Name '2026-10-19_1030_post.json'   -Computer 'A' -When ([datetime]'2026-10-19 10:30')
+        New-Smoke42SnapFixture -Dir $snap -Name '2026-10-02_110000_post.json' -Computer 'A' -When ([datetime]'2026-10-02 11:00')
+        $r = Compare-Snapshot
+        if ([string] $r.PreFile  -ne '2026-10-19_1000_pre.json')  { throw ('PRE elegido: {0}'  -f $r.PreFile) }
+        if ([string] $r.PostFile -ne '2026-10-19_1030_post.json') { throw ('POST elegido: {0}' -f $r.PostFile) }
+        # Y al reves: el viejo es el mas reciente.
+        (Get-Item -LiteralPath (Join-Path $snap '2026-10-01_090000_pre.json')).LastWriteTime = [datetime]'2026-10-20 08:00'
+        (Get-Item -LiteralPath (Join-Path $snap '2026-10-02_110000_post.json')).LastWriteTime = [datetime]'2026-10-20 09:00'
+        $r2 = Compare-Snapshot
+        if ([string] $r2.PreFile  -ne '2026-10-01_090000_pre.json')  { throw ('PRE (viejo ganador): {0}'  -f $r2.PreFile) }
+        if ([string] $r2.PostFile -ne '2026-10-02_110000_post.json') { throw ('POST (viejo ganador): {0}' -f $r2.PostFile) }
+    } finally {
+        $script:TelemetryModulePath = $prevMod
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-SmokeFunction 'Stamp' 'handler [8] lee el POST con nombre viejo y con nombre nuevo (el mas reciente gana; sin POST cae al PRE)' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $tmp = Join-Path $env:TEMP ('pctk-s42-h8-' + [System.Guid]::NewGuid().ToString('N'))
+    [string] $snapDir = Join-Path $tmp 'snapshots'
+    New-Item -ItemType Directory -Path $snapDir -Force | Out-Null
+    $script:S42Seen = $null
+    function Test-Path {
+        [CmdletBinding()] param([Parameter(Position = 0)] [string] $Path, [string] $LiteralPath, [string] $PathType)
+        [string] $p = if ($PSBoundParameters.ContainsKey('LiteralPath')) { $LiteralPath } else { $Path }
+        if ($p -match '[\\/]output[\\/](snapshots|reports)$') { return $true }
+        return (Microsoft.PowerShell.Management\Test-Path @PSBoundParameters)
+    }
+    function Get-ChildItem {
+        [CmdletBinding()] param([Parameter(Position = 0)] [string] $Path, [string] $Filter, [switch] $File)
+        if ($Path -match '[\\/]output[\\/]snapshots$') { $PSBoundParameters['Path'] = $snapDir }
+        Microsoft.PowerShell.Management\Get-ChildItem @PSBoundParameters
+    }
+    function Compare-Snapshot { return $null }
+    function Start-Process { param([Parameter(Position = 0)] [string] $FilePath) }
+    function New-ClientReport {
+        [CmdletBinding()] param([object] $PostSnapshot, [object] $Compare, [object] $Result, [string] $OutputPath, [switch] $OpenAfter)
+        $script:S42Seen = [string] $PostSnapshot.ComputerName
+        return [PSCustomObject]@{ Success = $true; FilePath = $OutputPath }
+    }
+    try {
+        $mp = [PSCustomObject]@{ IsLaptop = $false; RamMB = 8192; Tier = 'Mid'; IsHome = $true }
+        # POST viejo (nombre viejo, mas viejo) vs POST nuevo (nombre nuevo, mas reciente)
+        New-Smoke42SnapFixture -Dir $snapDir -Name '2026-10-01_090000_post.json' -Computer 'POST-VIEJO' -When ([datetime]'2026-10-01 09:00')
+        New-Smoke42SnapFixture -Dir $snapDir -Name '2026-10-19_1030_post.json'   -Computer 'POST-NUEVO' -When ([datetime]'2026-10-19 10:30')
+        Invoke-ClientReport -MachineProfile $mp | Out-Null
+        if ($script:S42Seen -ne 'POST-NUEVO') { throw ('leyo "{0}", esperaba POST-NUEVO' -f $script:S42Seen) }
+        (Microsoft.PowerShell.Management\Get-Item -LiteralPath (Join-Path $snapDir '2026-10-01_090000_post.json')).LastWriteTime = [datetime]'2026-10-20 08:00'
+        Invoke-ClientReport -MachineProfile $mp | Out-Null
+        if ($script:S42Seen -ne 'POST-VIEJO') { throw ('leyo "{0}", esperaba POST-VIEJO (el mas reciente)' -f $script:S42Seen) }
+        # Sin POST: cae al PRE, tambien con nombre viejo y nuevo
+        Microsoft.PowerShell.Management\Remove-Item -Path (Join-Path $snapDir '*_post.json') -Force
+        New-Smoke42SnapFixture -Dir $snapDir -Name '2026-10-01_090000_pre.json' -Computer 'PRE-VIEJO' -When ([datetime]'2026-10-01 09:00')
+        New-Smoke42SnapFixture -Dir $snapDir -Name '2026-10-19_1000_pre.json'   -Computer 'PRE-NUEVO' -When ([datetime]'2026-10-19 10:00')
+        Invoke-ClientReport -MachineProfile $mp | Out-Null
+        if ($script:S42Seen -ne 'PRE-NUEVO') { throw ('sin POST leyo "{0}", esperaba PRE-NUEVO' -f $script:S42Seen) }
+    } finally { Microsoft.PowerShell.Management\Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Stamp' 'MedicionFps Get-FpsBatches: lotes con dir viejo (yyyyMMdd-HHmmss_) y nuevo (yyyy-MM-dd_HHmm_) conviven, ordenados por CreatedAt del JSON' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $root = Join-Path $env:TEMP ('pctk-s42-fps-' + [System.Guid]::NewGuid().ToString('N'))
+    try {
+        $base = Join-Path $root 'medicion-fps'
+        foreach ($x in @(@('20261001-090000_base', '2026-10-01T09:00:00'), @('2026-10-19_1000_reflex', '2026-10-19T10:00:00'))) {
+            $dd = Join-Path $base $x[0]
+            New-Item -ItemType Directory -Path $dd -Force | Out-Null
+            ([ordered]@{ CreatedAt = $x[1]; Label = 'l' } | ConvertTo-Json) | Out-File -FilePath (Join-Path $dd 'lote.json') -Encoding UTF8
+        }
+        [object[]] $b = @(Get-FpsBatches -OutputRootOverride $root)
+        if ($b.Count -ne 2) { throw ('lotes: {0}' -f $b.Count) }
+        if ([string] $b[0].DirName -ne '20261001-090000_base' -or [string] $b[1].DirName -ne '2026-10-19_1000_reflex') { throw ('orden: {0} / {1}' -f $b[0].DirName, $b[1].DirName) }
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
 
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
