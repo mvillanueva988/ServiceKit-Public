@@ -902,6 +902,136 @@ Test-SmokeFunction 'Router' 'Invoke-ActionDefenderScan definida ([A][19])' {
     if (-not (Get-Command Invoke-ActionDefenderScan -ErrorAction SilentlyContinue)) { throw 'Invoke-ActionDefenderScan no definida' }
 }
 
+# ─── #54 (A): diagnostico de Defender en 4 pasos (solo lectura) ──────────────
+# (a) calculo puro con numeros fijos (los medidos el 26-08: 74 min en 82,4 h = 0,094 % con 16 cores).
+Test-SmokeFunction 'DefenderDiag' 'paso 4: 74 min en 82,4 h con 1 core = ~1,5 %' {
+    [double] $p = Get-DefenderCpuShare -CpuSeconds (74 * 60) -WallSeconds (82.4 * 3600) -Cores 1
+    if ([math]::Abs($p - 1.4968) -gt 0.001) { throw ('esperaba ~1.497, dio {0}' -f $p) }
+}
+Test-SmokeFunction 'DefenderDiag' 'paso 4: 74 min en 82,4 h con 16 cores = ~0,094 % (se divide por cores)' {
+    [double] $p = Get-DefenderCpuShare -CpuSeconds (74 * 60) -WallSeconds (82.4 * 3600) -Cores 16
+    if ([math]::Abs($p - 0.0936) -gt 0.0005) { throw ('esperaba ~0.094, dio {0}' -f $p) }
+}
+Test-SmokeFunction 'DefenderDiag' 'paso 3: delta de CPU / (pared x cores): 10 s en 20 s con 4 cores = 12,5 %' {
+    [double] $p = Get-DefenderCpuShare -CpuSeconds 10 -WallSeconds 20 -Cores 4
+    if ([math]::Abs($p - 12.5) -gt 0.0001) { throw ('esperaba 12.5, dio {0}' -f $p) }
+    if ((Get-DefenderCpuShare -CpuSeconds 10 -WallSeconds 0 -Cores 4) -ne 0) { throw 'pared 0 debe dar 0, no dividir' }
+}
+Test-SmokeFunction 'DefenderDiag' 'linea del paso 4: formato exacto, cultura invariante (aunque el hilo sea es-AR)' {
+    [System.Globalization.CultureInfo] $prev = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('es-AR')
+        [string] $l = Get-DefenderDiagUptimeLine -CpuMinutes 74 -UptimeHours 82.4 -Cores 16
+        [string] $want = '74.0 min de CPU en 82.4 h de uptime = 0.094 % del CPU entero (16 cores logicos)'
+        if ($l -ne $want) { throw ('linea: "{0}" (esperaba "{1}")' -f $l, $want) }
+    } finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $prev }
+}
+Test-SmokeFunction 'DefenderDiag' 'paso 2: lectura user-heavy / kernel-heavy / motivo del 1002' {
+    if ((Get-DefenderUserKernelReading -UserMinutes 65.7 -KernelMinutes 8.3) -notmatch '^user-heavy') { throw 'el caso medido (65,7/8,3) debe ser user-heavy' }
+    if ((Get-DefenderUserKernelReading -UserMinutes 2 -KernelMinutes 8) -notmatch '^kernel-heavy') { throw 'kernel-heavy no detectado' }
+    [string] $r = Get-DefenderStopReason -Message ("Se detuvo el examen.`r`n Id.: {ABC}`r`n Motivo de detencion: Examen omitido por bateria")
+    if ($r -ne 'Examen omitido por bateria') { throw ('motivo: "{0}"' -f $r) }
+    [string] $r2 = Get-DefenderEventReason -EventRecord ([PSCustomObject]@{ Message = "x`r`n Motivo: del mensaje" })   # sin Properties -> plan B
+    if ($r2 -ne 'del mensaje') { throw ('plan B: "{0}"' -f $r2) }
+}
+
+# Fixture del handler: Defender "disponible" con datos fijos. Todo lo que sale de la maquina
+# (Get-MpComputerStatus, Get-WinEvent, Get-CimInstance, las dos cargas) va sombreado.
+# (b) EL HANDLER, no la funcion pura, bajo StrictMode Latest + EAP=Stop (espejo de main.ps1).
+Test-SmokeFunction 'DefenderDiag' 'handler Invoke-ActionDefenderScan "M": .txt con la linea del paso 4 + audit (StrictMode+Stop)' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    [string] $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-smoke-ddiag-b-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Path $root
+    $script:DdAudit = [System.Collections.Generic.List[string]]::new()
+    $script:DdLoads = [System.Collections.Generic.List[string]]::new()
+    function Read-Host { param([object] $Prompt) return 'M' }
+    function Start-Sleep { param($Seconds, $Milliseconds) }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:DdAudit.Add(('{0}|{1}|{2}' -f $Action, $Status, $Summary)) }
+    function Get-MpComputerStatus { [CmdletBinding()] param() [PSCustomObject]@{ AMServiceEnabled = $true; QuickScanEndTime = (Get-Date).AddHours(-3); FullScanEndTime = (Get-Date).AddDays(-9); FullScanAge = [uint32]9 } }
+    # UN solo evento (coleccion de 1 elemento: el caso que rompe StrictMode si se desenrolla).
+    # Forma real medida en la PC de Mateo: Message pegado en una linea con adornos; el motivo limpio es la ULTIMA Properties.
+    function Get-WinEvent {
+        [CmdletBinding()] param($FilterHashtable)
+        [object[]] $pp = @(1..11 | ForEach-Object { [PSCustomObject]@{ Value = ('p' + $_) } }) + @([PSCustomObject]@{ Value = 'Scan skipped (on battery)' })
+        [PSCustomObject]@{ Id = 1002; TimeCreated = (Get-Date).AddHours(-1); Message = '%a Scan ID:%b{X}%c %d Stop Reason:%eXXXX garbled'; Properties = $pp }
+    }
+    function Get-CimInstance {
+        [CmdletBinding()] param($ClassName, $Filter)
+        if ($ClassName -eq 'Win32_Process') {
+            return [PSCustomObject]@{ UserModeTime = [uint64]39420000000; KernelModeTime = [uint64]4980000000; CreationDate = (Get-Date).AddHours(-82.4) }
+        }
+        if ($ClassName -eq 'Win32_OperatingSystem') { return [PSCustomObject]@{ LastBootUpTime = (Get-Date).AddHours(-82.4) } }
+        throw ('Get-CimInstance inesperado: {0}' -f $ClassName)
+    }
+    function Invoke-DefenderDiagFileLoad { param($TempRoot, $Count) $script:DdLoads.Add('files:' + $TempRoot); return '' }
+    function Invoke-DefenderDiagScriptLoad { param($Count) $script:DdLoads.Add('scripts') }
+    try {
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $root -TempRootOverride $root
+        [object[]] $txts = @(Get-ChildItem -LiteralPath (Join-Path $root 'defender') -Filter 'diagnostico_*.txt' -File)
+        if ($txts.Count -ne 1) { throw ('esperaba 1 diagnostico_*.txt, hay {0}' -f $txts.Count) }
+        [string] $txt = [System.IO.File]::ReadAllText($txts[0].FullName)
+        [int] $cores = [Environment]::ProcessorCount
+        [string] $wantHead = '74.0 min de CPU en 82.4 h de uptime = '
+        if (-not $txt.Contains($wantHead)) { throw ('el .txt no trae la linea del paso 4 ("{0}")' -f $wantHead) }
+        if (-not $txt.Contains(('({0} cores logicos)' -f $cores))) { throw 'la linea del paso 4 no lleva los cores' }
+        if (-not $txt.Contains('Scan skipped (on battery)')) { throw 'falta el motivo literal del 1002' }
+        if ($script:DdLoads.Count -ne 2 -or $script:DdLoads[0] -ne ('files:' + $root)) { throw ('cargas: {0}' -f ($script:DdLoads -join ',')) }
+        [string[]] $au = @($script:DdAudit | Where-Object { $_ -like 'Defender.Diag|Success|*' })
+        if ($au.Count -ne 1 -or -not $au[0].Contains('74.0 min de CPU')) { throw ('audit: {0}' -f ($script:DdAudit -join ' // ')) }
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# (c) Defender no disponible (AV de terceros): el handler no revienta y reporta Skipped.
+Test-SmokeFunction 'DefenderDiag' 'handler "M" con Defender no disponible: Skipped, sin crash, audit Info' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    [string] $root = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-smoke-ddiag-c-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Path $root
+    $script:DdAudit = [System.Collections.Generic.List[string]]::new()
+    function Read-Host { param([object] $Prompt) return 'M' }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:DdAudit.Add(('{0}|{1}|{2}' -f $Action, $Status, $Summary)) }
+    function Get-MpComputerStatus { [CmdletBinding()] param() throw 'Defender no esta instalado / hay otro AV' }
+    function Get-WinEvent { [CmdletBinding()] param($FilterHashtable) throw 'no debia leer eventos sin Defender' }
+    function Get-CimInstance { [CmdletBinding()] param($ClassName, $Filter) throw 'no debia leer CIM sin Defender' }
+    function Invoke-DefenderDiagFileLoad { param($TempRoot, $Count) throw 'no debia cargar sin Defender' }
+    function Invoke-DefenderDiagScriptLoad { param($Count) throw 'no debia cargar sin Defender' }
+    try {
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $root -TempRootOverride $root
+        [object[]] $txts = @(Get-ChildItem -LiteralPath (Join-Path $root 'defender') -Filter 'diagnostico_*.txt' -File)
+        if ($txts.Count -ne 1) { throw ('esperaba 1 diagnostico_*.txt, hay {0}' -f $txts.Count) }
+        [string] $txt = [System.IO.File]::ReadAllText($txts[0].FullName)
+        [int] $nSkip = ([regex]::Matches($txt, 'Skipped')).Count
+        if ($nSkip -ne 4) { throw ('esperaba 4 pasos Skipped, hay {0}' -f $nSkip) }
+        if ($script:DdAudit -notcontains 'Defender.Diag|Info|skipped: defender no disponible') { throw ('audit: {0}' -f ($script:DdAudit -join ' // ')) }
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# (d) guard POR CARPETA: ninguna receta auto gana exclusiones (pin; pasa contra master).
+Test-SmokeFunction 'DefenderDiag' 'recetas auto/: ninguna tiene defender_exclusions (guard por carpeta, piso >= 1)' {
+    [object[]] $autos = @(Get-ChildItem -Path (Join-Path $repoRoot 'data\profiles\auto') -Filter '*.json' -File)
+    if ($autos.Count -lt 1) { throw 'la carpeta auto/ no tiene JSON: el guard quedaria vacuo' }
+    foreach ($a in $autos) {
+        if ([System.IO.File]::ReadAllText($a.FullName) -match 'defender_exclusions') { throw ('{0} tiene defender_exclusions' -f $a.Name) }
+    }
+}
+
+# (e) la carga del paso 3 borra SOLO la carpeta que creo.
+Test-SmokeFunction 'DefenderDiag' 'carga de archivos: borra SOLO su carpeta (un centinela al lado sobrevive)' {
+    [string] $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-smoke-ddiag-e-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Path $tmp
+    [string] $sentinel = Join-Path $tmp 'centinela.txt'
+    [System.IO.File]::WriteAllText($sentinel, 'no me borres')
+    [string] $sentinelDir = Join-Path $tmp 'pctk-defdiag-ajena'   # misma familia de nombre, NO la creo la carga
+    $null = New-Item -ItemType Directory -Path $sentinelDir
+    try {
+        [string] $used = Invoke-DefenderDiagFileLoad -TempRoot $tmp -Count 30
+        if ([string]::IsNullOrEmpty($used) -or (Test-Path -LiteralPath $used)) { throw 'la carpeta de la carga no se borro' }
+        if (-not (Test-Path -LiteralPath $sentinel)) { throw 'borro el centinela' }
+        if (-not (Test-Path -LiteralPath $sentinelDir)) { throw 'borro una carpeta pctk-defdiag-* que no era suya (borrado por patron)' }
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # ─── ITEM C: Test-StepSucceeded (D-SD2 adapters, structural-debt-plan.md) ────
 # Entradas read-only: solo ejercitan el helper con fixtures en memoria, sin mutar.
 Test-SmokeFunction 'JobManager' 'Test-StepSucceeded null -> false' {
