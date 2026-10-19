@@ -1172,15 +1172,27 @@ function Invoke-ActionDefenderScan {
         El nombre de la funcion queda por compatibilidad con el dispatch y el smoke.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile,
+        # Solo para el smoke: donde cae el .txt de [M] y de donde cuelga la carpeta de la carga.
+        [Parameter()] [string] $OutputRootOverride = '',
+        [Parameter()] [string] $TempRootOverride = ''
+    )
     $null = $MachineProfile
 
     Write-PctkSection '  DEFENDER'
     Write-Host '  [R]eagendar escaneo (anti-stutter)  /  [V]er exclusiones  /'
-    Write-Host '  [D]ev: excluir WSL2+Docker+VSCode   /  [Q]uitar exclusiones dev  /  [B]volver'
+    Write-Host '  [D]ev: excluir WSL2+Docker+VSCode   /  [Q]uitar exclusiones dev  /'
+    Write-Host '  [M]edir costo de Defender (4 pasos, solo lectura)  /  [B]volver'
     [string] $dsub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
 
     if ($dsub -eq 'B' -or [string]::IsNullOrEmpty($dsub)) { return }
+
+    if ($dsub -eq 'M') {
+        # #54 (A): diagnostico de costo. Solo lectura; no entra al [1] ni a recetas.
+        Show-DefenderDiag -OutputRootOverride $OutputRootOverride -TempRootOverride $TempRootOverride
+        return
+    }
 
     if ($dsub -eq 'V') {
         # Get-CustomDefenderExclusions devuelve un OBJETO { Available; Paths[] },
