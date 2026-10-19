@@ -5952,6 +5952,110 @@ Test-SmokeFunction 'Router' '#28: el banner muestra modelo y Service Tag (handle
     if ([string]$sn2[0].Value -ne 'N/A')   { throw ('sin serial deberia decir N/A; got {0}' -f $sn2[0].Value) }
 }
 
+# ─── #129: el banner respeta el ancho de la ventana (+ nit #54 A) ─────────────
+# Gate Sandbox v2.12.0: en conhost de ~120 cols la fila GPU (3 adaptadores) mandaba
+# el ancho de la caja y cada linea wrapeaba a 2 filas. Se testea el render REAL
+# (no el shadow), con el ancho de ventana shadoweado.
+
+function Get-Smoke129Rows {
+    return @(
+        @{ Label = 'OS';  Value = 'Win11 25H2 (Build 26200) x64' },
+        @{ Label = 'CPU'; Value = 'AMD Ryzen 7 5800H with Radeon Graphics (8C/16T)' },
+        @{ Label = 'GPU'; Value = ('NVIDIA GeForce RTX 3050 Laptop GPU | AMD Radeon(TM) Graphics | Microsoft Basic Display Adapter | Intel(R) UHD Graphics 770  [dGPU 4 GB VRAM]') }
+    )
+}
+
+function Assert-Smoke129Ancho {
+    param([string[]] $Lines, [int] $Max, [string] $Ctx)
+    [string[]] $plain = @($Lines | ForEach-Object { ([string]$_) -replace '\x1b\[[0-9;]*m', '' })
+    foreach ($l in $plain) {
+        if ($l.Length -gt $Max) { throw ("{0}: linea de {1} cols > {2}: {3}" -f $Ctx, $l.Length, $Max, $l) }
+    }
+    [string[]] $box = @($plain | Where-Object { $_ -match '^  [╔║╠╚]' })
+    if ($box.Count -gt 0) {
+        [int[]] $lens = @($box | ForEach-Object { $_.Length } | Select-Object -Unique)
+        if ($lens.Count -ne 1) { throw ("{0}: la caja quedo rota, anchos distintos: {1}" -f $Ctx, ($lens -join ',')) }
+    }
+    $gpu = @($plain | Where-Object { $_ -match 'GPU' -and $_ -notmatch 'PCTk' } | Select-Object -First 1)
+    if ($gpu.Count -eq 0) { throw "$Ctx`: no hay fila GPU" }
+    if (([string]$gpu[0]).TrimEnd(' ', [char]0x2551) -notmatch '\.\.\.$') { throw ("{0}: la fila GPU no termina en '...': {1}" -f $Ctx, $gpu[0]) }
+}
+
+Test-SmokeFunction 'ConsoleTheme' '#129 T-129a banner VT on: ninguna linea pasa ancho-1 y la caja queda entera' {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) $lines.Add([string]$Object) }
+    function Get-PctkConsoleWindowWidth { return 120 }
+    [bool] $vtBefore = $script:PctkVT; [bool] $flagBefore = $script:PctkBannerCompact
+    try {
+        $script:PctkVT = $true; $script:PctkBannerCompact = $false
+        Write-PctkMachineBanner -Rows (Get-Smoke129Rows) -Tier 'MID' -VmLine 'VirtualBox'
+        Assert-Smoke129Ancho -Lines @($lines) -Max 119 -Ctx 'VT on'
+    } finally { $script:PctkVT = $vtBefore; $script:PctkBannerCompact = $flagBefore }
+}
+
+Test-SmokeFunction 'ConsoleTheme' '#129 T-129b banner VT off: ninguna linea pasa ancho-1' {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) $lines.Add([string]$Object) }
+    function Get-PctkConsoleWindowWidth { return 120 }
+    [bool] $vtBefore = $script:PctkVT; [bool] $flagBefore = $script:PctkBannerCompact
+    try {
+        $script:PctkVT = $false; $script:PctkBannerCompact = $false
+        Write-PctkMachineBanner -Rows (Get-Smoke129Rows) -Tier 'MID' -VmLine 'VirtualBox'
+        foreach ($l in @($lines)) { if ($l.Length -gt 119) { throw ("VT off: linea de {0} cols > 119: {1}" -f $l.Length, $l) } }
+        if (-not (@($lines) | Where-Object { $_ -match 'GPU' -and $_ -match '\.\.\.$' })) { throw "VT off: la fila GPU no termina en '...'" }
+    } finally { $script:PctkVT = $vtBefore; $script:PctkBannerCompact = $flagBefore }
+}
+
+Test-SmokeFunction 'ConsoleTheme' '#129 T-129c banner sin ancho medible: la fila larga sale entera (como antes)' {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) $lines.Add([string]$Object) }
+    function Get-PctkConsoleWindowWidth { return 0 }
+    [bool] $vtBefore = $script:PctkVT; [bool] $flagBefore = $script:PctkBannerCompact
+    try {
+        foreach ($vt in @($true, $false)) {
+            $script:PctkVT = $vt; $script:PctkBannerCompact = $true; $lines.Clear()
+            Write-PctkMachineBanner -Rows (Get-Smoke129Rows) -Tier 'MID'
+            if (-not (($lines -join "`n") -match 'Intel\(R\) UHD Graphics 770  \[dGPU 4 GB VRAM\]')) { throw "VT=${vt}: con ancho 0 la fila GPU se recorto" }
+            if (($lines -join "`n") -match '\.\.\.') { throw "VT=${vt}: con ancho 0 aparecio '...'" }
+        }
+    } finally { $script:PctkVT = $vtBefore; $script:PctkBannerCompact = $flagBefore }
+}
+
+Test-SmokeFunction 'Router' '#129 handler: Show-MachineBanner con 4 GPUs a 120 cols no pasa ancho-1' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    $lines = [System.Collections.Generic.List[string]]::new()
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) $lines.Add([string]$Object) }
+    function Get-PctkConsoleWindowWidth { return 120 }
+    function Get-PctkBannerCim { return [PSCustomObject]@{ Os = $null; Cpu = $null } }
+    [PSCustomObject] $mp = [PSCustomObject]@{
+        IsWin11 = $true; IsHome = $false; Build = 26200; RamMB = 16384
+        GpuNames = @('NVIDIA GeForce RTX 3050 Laptop GPU', 'AMD Radeon(TM) Graphics', 'Microsoft Basic Display Adapter', 'Intel(R) UHD Graphics 770')
+        HasIGpuOnly = $false; HasDGpu = $true; DGpuVramMb = 4096
+        Manufacturer = 'LENOVO'; Tier = 'Mid'; CpuClass = 'Modern'
+        Model = '82K2'; SerialNumber = 'PF3ABCDE'
+    }
+    [bool] $vtBefore = $script:PctkVT; [bool] $flagBefore = $script:PctkBannerCompact
+    try {
+        foreach ($vt in @($true, $false)) {
+            $script:PctkVT = $vt; $script:PctkBannerCompact = $false; $lines.Clear()
+            Show-MachineBanner -MachineProfile $mp
+            foreach ($l in @($lines | ForEach-Object { ([string]$_) -replace '\x1b\[[0-9;]*m', '' })) {
+                if ($l.Length -gt 119) { throw ("VT={0}: linea de {1} cols > 119: {2}" -f $vt, $l.Length, $l) }
+            }
+        }
+    } finally { $script:PctkVT = $vtBefore; $script:PctkBannerCompact = $flagBefore }
+}
+
+Test-SmokeFunction 'DefenderDiag' '#54 nit: AMServiceEnabled apagado NO afirma que hay otro antivirus' {
+    $ErrorActionPreference = 'Stop'
+    function Get-MpComputerStatus { param($ErrorAction) return [PSCustomObject]@{ AMServiceEnabled = $false } }
+    $r = Get-DefenderDiagStatus
+    if ($r.Available) { throw 'con AMServiceEnabled=false no deberia estar disponible' }
+    if ([string]$r.Reason -match 'otro antivirus') { throw ('el motivo infiere una causa: {0}' -f $r.Reason) }
+    if ([string]$r.Reason -notmatch 'AMServiceEnabled') { throw ('el motivo perdio el hecho: {0}' -f $r.Reason) }
+}
+
 # ─── #28 (remate): SystemSku + SystemFamily ──────────────────────────────────
 # En Lenovo y HP el Model del SMBIOS viene enmascarado ("82K2", "15-fd0xxx") y
 # no alcanza para identificar el equipo ni para auto-seleccionar un recipe.

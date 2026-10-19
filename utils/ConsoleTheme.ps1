@@ -73,6 +73,27 @@ $script:PctkBanner = @(
     '██      ██         ██    ██ ██ ',
     '██       ██████    ██    ██  ██')
 
+function Get-PctkConsoleWindowWidth {
+    # #129: ancho de la ventana en columnas. 0 = no medible (sin tope, como antes).
+    # Helper aparte para que el smoke lo shadowee.
+    [OutputType([int])]
+    param()
+    try { return [int] [Console]::WindowWidth }
+    catch {
+        try { return [int] $Host.UI.RawUI.WindowSize.Width }
+        catch { return 0 }
+    }
+}
+
+function Limit-PctkText {
+    # #129: corta $Text a $Max caracteres terminando en '...' (ASCII). $Max <= 0 = sin tope.
+    [OutputType([string])]
+    param([string] $Text, [int] $Max)
+    if ($Max -le 0 -or $Text.Length -le $Max) { return $Text }
+    if ($Max -le 3) { return $Text.Substring(0, $Max) }
+    return $Text.Substring(0, $Max - 3) + '...'
+}
+
 function Write-PctkMachineBanner {
     <#
     .SYNOPSIS
@@ -86,16 +107,22 @@ function Write-PctkMachineBanner {
         [string] $VmLine = ''
     )
 
+    # #129: tope de ancho. Cada linea de la caja mide innerW + 6 y tiene que quedar
+    # <= ancho - 1 (escribir hasta la ultima columna de conhost genera el salto doble).
+    [int] $winW = Get-PctkConsoleWindowWidth
+
     if (-not $script:PctkVT) {
+        [int] $vOff = 0   # ancho maximo del valor: linea '  {0,-4} : ' = 9 cols de prefijo
+        if ($winW -gt 0) { $vOff = [Math]::Max(21, $winW - 1 - 9) }
         Write-Host '================================================' -ForegroundColor DarkCyan
         if (-not $script:PctkBannerCompact) {
             Write-Host '                   PCTk v2' -ForegroundColor Cyan
             Write-Host '        Mateo Villanueva ~ mvillanueva988' -ForegroundColor DarkGray
         }
         Write-Host '================================================' -ForegroundColor DarkCyan
-        foreach ($r in $Rows) { Write-Host ('  {0,-4} : {1}' -f $r.Label, $r.Value) }
+        foreach ($r in $Rows) { Write-Host ('  {0,-4} : {1}' -f $r.Label, (Limit-PctkText ([string]$r.Value) $vOff)) }
         Write-Host ('  TIER : {0}' -f $Tier) -ForegroundColor Yellow
-        if (-not [string]::IsNullOrEmpty($VmLine)) { Write-Host ('  VM   : {0}' -f $VmLine) -ForegroundColor Yellow }
+        if (-not [string]::IsNullOrEmpty($VmLine)) { Write-Host ('  VM   : {0}' -f (Limit-PctkText $VmLine $vOff)) -ForegroundColor Yellow }
         Write-Host '================================================' -ForegroundColor DarkCyan
         Write-Host ''
         return
@@ -115,20 +142,28 @@ function Write-PctkMachineBanner {
     if (-not [string]::IsNullOrEmpty($VmLine)) { [int] $l = ('{0,-4} {1}' -f 'VM', $VmLine).Length; if ($l -gt $innerW) { $innerW = $l } }
     [int] $tl = $title.Length + $badge.Length + 1; if ($tl -gt $innerW) { $innerW = $tl }
 
+    if ($winW -gt 0) {
+        [int] $cap = [Math]::Max(30, $winW - 7)
+        if ($innerW -gt $cap) { $innerW = $cap }
+    }
+    [int] $valMax = $innerW - 5   # '{0,-4} ' = 5 cols de label
+
     [string] $bx = Pf 80 92 108
     Write-Host ('  ' + $bx + '╔' + ('═' * ($innerW + 2)) + '╗' + (Pe))
     [int] $tpad = $innerW - $title.Length - $badge.Length; if ($tpad -lt 1) { $tpad = 1 }
     Write-Host ('  ' + $bx + '║ ' + (Pe) + (Pbold) + (Pf 235 238 242) + $title + (Pe) + (' ' * $tpad) + (Pb 150 95 0) + (Pf 25 20 0) + $badge + (Pe) + ' ' + $bx + '║' + (Pe))
     Write-Host ('  ' + $bx + '╠' + ('═' * ($innerW + 2)) + '╣' + (Pe))
     foreach ($r in $Rows) {
-        [string] $plain = ('{0,-4} {1}' -f $r.Label, $r.Value)
+        [string] $val = Limit-PctkText ([string]$r.Value) $valMax
+        [string] $plain = ('{0,-4} {1}' -f $r.Label, $val)
         [int] $pad = $innerW - $plain.Length; if ($pad -lt 0) { $pad = 0 }
-        Write-Host ('  ' + $bx + '║ ' + (Pe) + (Pf 95 150 150) + ('{0,-4} ' -f $r.Label) + (Pe) + (Pf 140 152 166) + $r.Value + (Pe) + (' ' * $pad) + ' ' + $bx + '║' + (Pe))
+        Write-Host ('  ' + $bx + '║ ' + (Pe) + (Pf 95 150 150) + ('{0,-4} ' -f $r.Label) + (Pe) + (Pf 140 152 166) + $val + (Pe) + (' ' * $pad) + ' ' + $bx + '║' + (Pe))
     }
     if (-not [string]::IsNullOrEmpty($VmLine)) {
-        [string] $plain = ('{0,-4} {1}' -f 'VM', $VmLine)
+        [string] $vmv = Limit-PctkText $VmLine $valMax
+        [string] $plain = ('{0,-4} {1}' -f 'VM', $vmv)
         [int] $pad = $innerW - $plain.Length; if ($pad -lt 0) { $pad = 0 }
-        Write-Host ('  ' + $bx + '║ ' + (Pe) + (Pf 230 190 80) + ('{0,-4} ' -f 'VM') + $VmLine + (Pe) + (' ' * $pad) + ' ' + $bx + '║' + (Pe))
+        Write-Host ('  ' + $bx + '║ ' + (Pe) + (Pf 230 190 80) + ('{0,-4} ' -f 'VM') + $vmv + (Pe) + (' ' * $pad) + ' ' + $bx + '║' + (Pe))
     }
     Write-Host ('  ' + $bx + '╚' + ('═' * ($innerW + 2)) + '╝' + (Pe))
     Write-Host ''
