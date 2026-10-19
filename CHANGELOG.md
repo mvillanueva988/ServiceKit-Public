@@ -2,6 +2,15 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.12.1] - 2026-10-19
+
+Release: **el banner entra en la ventana**. Con una placa de video de nombre largo, o varias, la caja del banner salía más ancha que una consola de 120 columnas, cada línea ocupaba dos filas y el menú principal paginaba aunque hubiera lugar.
+
+### Fixed
+
+- **La caja del banner respeta el ancho de la ventana (`utils/ConsoleTheme.ps1`)**: el ancho se topa al de la consola y los valores que no entran se recortan con `...`, también en consolas sin colores. Con eso el menú principal y `[A]` vuelven a entrar enteros en una consola de 44 filas por 120 columnas.
+- **El diagnóstico de Defender ya no afirma que hay otro antivirus (`modules/DefenderDiag.ps1`)**: cuando el servicio de Defender está apagado, lo dice así, sin suponer la causa.
+
 ## [2.12.0] - 2026-10-19
 
 Release: **PCTk mide cuánto le cuesta Defender a la PC**. Suma el diagnóstico de costo de Defender en `[A][19]`, el menú `[A]` vuelve a entrar entero en una consola de 44 filas, y todos los archivos que escribe PCTk se nombran con un solo formato de fecha.
