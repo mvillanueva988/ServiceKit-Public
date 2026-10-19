@@ -164,7 +164,7 @@ function Get-DefenderDiagStatus {
     }
     $am = Get-DefenderDiagProp -Object $s -Name 'AMServiceEnabled'
     if ($null -ne $am -and -not [bool]$am) {
-        return [PSCustomObject]@{ Available = $false; Reason = 'El servicio de Defender (AMServiceEnabled) esta apagado: hay otro antivirus activo.'; Status = $s }
+        return [PSCustomObject]@{ Available = $false; Reason = 'El servicio de Defender (AMServiceEnabled) esta apagado.'; Status = $s }
     }
     return [PSCustomObject]@{ Available = $true; Reason = ''; Status = $s }
 }
