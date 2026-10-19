@@ -7315,6 +7315,60 @@ Test-SmokeFunction 'Stamp' 'Get-PctkStamp: yyyy-MM-dd_HHmm exacto, -Seconds agre
     } finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $prev }
 }
 
+# ─── #42 validadores: todo tests\*.ps1 que dot-sourcea sueltos de core\/modules\ carga utils\ por loop ───
+# Un validador de Sandbox con lista a mano se queda atras de cada dependencia nueva (#90: detectores;
+# #42: Get-PctkStamp). Se le pregunta a la carpeta, por AST (los comentarios no cuentan).
+# Excepciones por archivo, con motivo.
+$script:Smoke42ValidatorAllow = @{
+    'uninstall-validate.ps1' = 'T1 corre en un runspace aparte con _stub + UninstallToolkit en un root falso: sale por el guard antes de Get-PctkStamp'
+}
+
+Test-SmokeFunction 'Stamp' 'validadores de tests\: si dot-sourcean sueltos de core\/modules\, cargan utils\ completo por loop' {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    [string] $root = Split-Path -Parent $PSScriptRoot
+    [int] $seen = 0
+    [System.Collections.Generic.List[string]] $bad = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $root 'tests') -Filter '*.ps1' -File)) {
+        if ($script:Smoke42ValidatorAllow.ContainsKey($f.Name)) { continue }
+        $perr = $null; $tok = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref] $tok, [ref] $perr)
+        # dot-source (`. expr`) cuyo argumento nombra un archivo suelto core\X.ps1 / modules\X.ps1
+        [object[]] $loose = @($ast.FindAll({
+            param($n)
+            if ($n -isnot [System.Management.Automation.Language.CommandAst]) { return $false }
+            if ($n.InvocationOperator -ne [System.Management.Automation.Language.TokenKind]::Dot) { return $false }
+            [object[]] $s = @($n.FindAll({
+                param($m)
+                ($m -is [System.Management.Automation.Language.StringConstantExpressionAst]) -and
+                ($m.Value -match '^(core|modules)\\[^\\]+\.ps1$')
+            }, $true))
+            return ($s.Count -gt 0)
+        }, $true))
+        if ($loose.Count -eq 0) { continue }
+        $seen++
+        # carga utils\ por loop: Get-ChildItem sobre una ruta que nombra 'utils' (literal, no comentario)
+        [bool] $loop = $false
+        foreach ($c in @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.CommandAst]) -and ($n.GetCommandName() -in @('Get-ChildItem', 'gci', 'dir', 'ls')) }, $true))) {
+            [object[]] $u = @($ast.FindAll({
+                param($m)
+                ($m -is [System.Management.Automation.Language.StringConstantExpressionAst]) -and ($m.Value -ceq 'utils')
+            }, $true) | Where-Object { $_.Extent.StartOffset -ge $c.Extent.StartOffset -and $_.Extent.EndOffset -le $c.Extent.EndOffset })
+            [object[]] $folderLoop = @($ast.FindAll({
+                param($m)
+                ($m -is [System.Management.Automation.Language.ForEachStatementAst]) -and
+                ($m.Extent.StartOffset -le $c.Extent.StartOffset) -and ($m.Extent.EndOffset -ge $c.Extent.EndOffset) -and
+                (@($m.Condition.FindAll({ param($k) ($k -is [System.Management.Automation.Language.StringConstantExpressionAst]) -and ($k.Value -ceq 'utils') }, $true)).Count -gt 0)
+            }, $true))
+            if ($u.Count -gt 0 -or $folderLoop.Count -gt 0) { $loop = $true; break }
+        }
+        if (-not $loop) { [void] $bad.Add($f.Name) }
+    }
+    # Piso contra vacuidad: hoy snapshot-vm-validate.ps1 es de este tipo.
+    if ($seen -lt 1) { throw 'no se encontro ningun validador con dot-source suelto de core\/modules\: el test quedo vacio' }
+    if ($bad.Count -gt 0) { throw ('validador(es) que dot-sourcean sueltos de core\/modules\ sin cargar utils\ por loop: ' + ($bad -join ', ')) }
+}
+
 # ─── #42 productores: cada uno escribe su nombre con el sello nuevo ───────────
 $script:Smoke42Host = [string] $env:COMPUTERNAME.ToLowerInvariant()
 
