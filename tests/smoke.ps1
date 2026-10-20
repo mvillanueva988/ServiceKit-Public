@@ -1143,6 +1143,10 @@ $script:DpSetup = {
         $script:DpEtl = [string]$RecordTo
         if ($script:DpRecThrow) { throw 'grabacion fallo (simulado)' }
         [System.IO.File]::WriteAllText($RecordTo, 'etl falso')
+        # Espejo del real: llama a wpr.exe -start/-stop sin capturar, su stdout sale al pipeline
+        # (MSFT_MpPerformanceRecording.psm1). Gate HW 20-10: rompia `$cap.Ok` bajo StrictMode.
+        'Microsoft Windows Performance Recorder Version 10.0 (simulado)'
+        'The trace was successfully saved.'
     }
     function Get-MpPerformanceReport {
         [CmdletBinding()] param($Path, $TopPaths, $TopPathsDepth, $TopExtensions, [switch] $Raw)
