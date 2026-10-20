@@ -108,7 +108,11 @@ $job = $null
 [bool] $excluded = $false
 try {
     # El real, ANTES de la sombra de abajo. Es Function (modulo ConfigDefenderPerformance), no Cmdlet.
-    $script:RealReport = Get-Command -Name 'Get-MpPerformanceReport' -CommandType Function, Cmdlet -ErrorAction Stop
+    # Por nombre calificado con el modulo: el FunctionInfo de un modulo sin importar se resuelve otra
+    # vez por nombre al invocarlo, encuentra la sombra y recursa (gate HW 20-10 01:42).
+    [object] $realCmd = Get-Command -Name 'Get-MpPerformanceReport' -CommandType Function, Cmdlet -ErrorAction Stop
+    $script:RealReport = '{0}\{1}' -f $realCmd.ModuleName, $realCmd.Name
+    $script:ShadowCalls = 0
     $null = New-Item -ItemType Directory -Path $gateDir -ErrorAction Stop
     # El job escribe y lee ~1500 archivos chicos ahi en bucle mientras se graba.
     $job = Start-Job -ArgumentList $gateDir -ScriptBlock {
@@ -141,10 +145,19 @@ try {
         return ''
     }
     function Get-MpPerformanceReport {
+        $script:ShadowCalls++
         $r = & $script:RealReport @args
         $script:RawReport = $r
         return $r
     }
+    # Sonda antes de grabar: la sombra tiene que llegar al real UNA vez (el real tira por el .etl
+    # inexistente). Si recursa, se corta aca con el motivo, sin gastar la grabacion.
+    [string] $probeErr = ''
+    try { $null = Get-MpPerformanceReport -Path (Join-Path $gateDir 'sonda-no-existe.etl') -Raw -ErrorAction Stop } catch { $probeErr = $_.Exception.Message }
+    if ($script:ShadowCalls -ne 1 -or $probeErr -match 'profundidad|call depth') {
+        throw ('sonda: la sombra de Get-MpPerformanceReport no llega al real ({0} llamadas; {1})' -f $script:ShadowCalls, $probeErr)
+    }
+    $log.Add('--- sonda de la sombra OK: ' + $probeErr)
 
     [string] $screen = (Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) *>&1 | Out-String)
     $log.Add('--- parte B+C: pantalla del handler'); $log.Add($screen)
