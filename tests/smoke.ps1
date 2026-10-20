@@ -1032,6 +1032,226 @@ Test-SmokeFunction 'DefenderDiag' 'carga de archivos: borra SOLO su carpeta (un 
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# --- #54 (B)+(C): rutas caras de Defender por grabacion real + menu de exclusiones medidas ---
+# Shadows POR DEFECTO de la categoria: lo que muta o graba Defender TIRA en el smoke. Cada test pone
+# el suyo encima. Si un dia el smoke corre elevado, que falle, no que excluya.
+function New-MpPerformanceRecording { [CmdletBinding()] param($RecordTo, $Seconds) throw 'llamada real prohibida en el smoke: New-MpPerformanceRecording' }
+function Get-MpPerformanceReport    { [CmdletBinding()] param($Path, $TopPaths, $TopPathsDepth, $TopExtensions, [switch] $Raw) throw 'llamada real prohibida en el smoke: Get-MpPerformanceReport' }
+function Add-MpPreference           { [CmdletBinding()] param($ExclusionPath) throw 'llamada real prohibida en el smoke: Add-MpPreference' }
+function Remove-MpPreference        { [CmdletBinding()] param($ExclusionPath) throw 'llamada real prohibida en el smoke: Remove-MpPreference' }
+
+# (a) funcion pura "se ofrece / por que" con raices fijas.
+Test-SmokeFunction 'DefenderPaths' 'se ofrece o no: tabla de reglas (Windows, raices, perfil, TEMP, Descargas, ancestros, ya excluida)' {
+    Set-StrictMode -Version Latest
+    $roots = @{
+        WindowsDir      = 'C:\Windows'
+        ProgramFilesDir = @('C:\Program Files', 'C:\Program Files (x86)')
+        UserProfile     = 'C:\Users\x'
+        TempDir         = @('C:\Users\x\AppData\Local\Temp', 'C:\Windows\Temp')
+        DownloadsDir    = 'C:\Users\x\Downloads'
+    }
+    $table = @(
+        @('C:\Windows\System32', $false), @('C:\Program Files', $false), @('C:\Program Files\Steam', $true),
+        @('C:\Users\x', $false), @('C:\Users\x\Documents\Dev', $true), @('C:\Users\x\Downloads\algo', $false),
+        @('C:\Users\x\AppData\Local\Temp\algo', $false), @('C:\', $false), @('C:\Users', $false),
+        @('c:\users\X\documents\dev\', $true), @('C:\Users\x\AppData\Local', $false), @('D:\', $false), @('D:\Games', $true)
+    )
+    foreach ($row in $table) {
+        $r = Test-DefenderPathOfferable -Path $row[0] @roots -ExcludedPath @()
+        if ([bool]$r.Offerable -ne [bool]$row[1]) { throw ('{0}: esperaba Offerable={1}, dio {2} ({3})' -f $row[0], $row[1], $r.Offerable, $r.Reason) }
+        if (-not $r.Offerable -and [string]::IsNullOrWhiteSpace([string]$r.Reason)) { throw ('{0}: no ofrecible sin motivo' -f $row[0]) }
+    }
+    $ex = Test-DefenderPathOfferable -Path 'c:\users\X\documents\dev\src' @roots -ExcludedPath @('C:\Users\x\Documents\Dev')
+    if ($ex.Offerable -or $ex.Reason -notmatch 'ya excluida') { throw ('adentro de una exclusion existente: {0}/{1}' -f $ex.Offerable, $ex.Reason) }
+}
+
+# (b) funcion pura reporte -> filas, con UN solo elemento (StrictMode) y con varios.
+Test-SmokeFunction 'DefenderPaths' 'reporte -Raw -> filas: 1 solo elemento, varios, orden por costo, % suma 100, ms promedio, extensiones' {
+    Set-StrictMode -Version Latest
+    [System.Globalization.CultureInfo] $prev = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('es-AR')
+        $one = [PSCustomObject]@{
+            TopPaths      = [PSCustomObject]@{ Path = 'D:\Proyectos\Dev'; Count = 2000; TotalDuration = [int64]200000000 }
+            TopExtensions = [PSCustomObject]@{ Extension = '.md'; Count = 495; TotalDuration = [int64]48510000 }
+        }
+        $p1 = ConvertFrom-DefenderPerfReport -Report $one
+        if (@($p1.Rows).Count -ne 1 -or @($p1.Extensions).Count -ne 1) { throw 'un solo elemento debe dar 1 fila y 1 extension' }
+        if ([math]::Abs($p1.Rows[0].Percent - 100) -gt 0.001) { throw 'con 1 fila el % debe ser 100' }
+        if ([math]::Abs($p1.Rows[0].AvgMs - 10) -gt 0.001) { throw ('ms promedio: {0}' -f $p1.Rows[0].AvgMs) }
+        $many = [PSCustomObject]@{
+            TopPaths = @(
+                [PSCustomObject]@{ Path = 'C:\Windows\System32'; Count = 100; TotalDuration = [int64]50000000 },
+                [PSCustomObject]@{ Path = 'D:\Proyectos\Dev'; Count = 2000; TotalDuration = [int64]200000000 },
+                [PSCustomObject]@{ Path = 'C:\Program Files\Steam'; Count = 10; TotalDuration = [int64]40000000 })
+            TopExtensions = @(
+                [PSCustomObject]@{ Extension = '.ts'; Count = 370; TotalDuration = [int64]46250000 },
+                [PSCustomObject]@{ Extension = '.md'; Count = 495; TotalDuration = [int64]48510000 })
+        }
+        $p = ConvertFrom-DefenderPerfReport -Report $many
+        [object[]] $rows = @($p.Rows)
+        if ($rows.Count -ne 3 -or $rows[0].Path -ne 'D:\Proyectos\Dev') { throw 'filas no ordenadas por costo' }
+        if ([math]::Abs($rows[0].Percent - 68.9655) -gt 0.01) { throw ('% fila 1: {0}' -f $rows[0].Percent) }
+        [double] $sum = 0
+        foreach ($r in $rows) { $sum += $r.Percent }
+        if ([math]::Abs($sum - 100) -gt 0.001) { throw ('los % suman {0}, no 100' -f $sum) }
+        if ([math]::Abs($rows[1].AvgMs - 50) -gt 0.001) { throw ('ms promedio de Windows/Steam: {0}' -f $rows[1].AvgMs) }
+        [object[]] $ext = @($p.Extensions)
+        if ($ext.Count -ne 2 -or $ext[0].Extension -ne '.md' -or [math]::Abs($ext[0].AvgMs - 9.8) -gt 0.001) { throw 'extensiones mal ordenadas o ms promedio mal' }
+        [string] $line = Format-DefenderPathsExtLine -Extensions $ext
+        if ($line -notmatch '\.md' -or $line -notmatch '9\.8') { throw ('linea de extensiones (cultura invariante): "{0}"' -f $line) }
+        $empty = ConvertFrom-DefenderPerfReport -Report ([PSCustomObject]@{})
+        if (@($empty.Rows).Count -ne 0) { throw 'reporte sin TopPaths debe dar 0 filas' }
+    } finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $prev }
+}
+
+# Fixture compartida de los tests del handler: se dot-sourcea dentro de cada test.
+$script:DpSetup = {
+    $script:DpAnswers = [System.Collections.Generic.Queue[string]]::new()
+    $script:DpAudit   = [System.Collections.Generic.List[string]]::new()
+    $script:DpAdded   = [System.Collections.Generic.List[string]]::new()
+    $script:DpRecCalls = 0
+    $script:DpEtl     = ''
+    $script:DpAdmin   = $true
+    $script:DpRecThrow = $false
+    function Read-Host { param([object] $Prompt) if ($script:DpAnswers.Count -eq 0) { throw 'Read-Host sin respuesta en cola' }; return $script:DpAnswers.Dequeue() }
+    function Start-Sleep { param($Seconds, $Milliseconds) }
+    function Test-DefenderPathsElevated { return $script:DpAdmin }
+    function Write-ActionAudit { param($Action, $Status, $Summary, $Details) $script:DpAudit.Add(('{0}|{1}|{2}|{3}' -f $Action, $Status, $Summary, ($Details | ConvertTo-Json -Depth 8 -Compress))) }
+    function Get-MpComputerStatus { [CmdletBinding()] param() [PSCustomObject]@{ AMServiceEnabled = $true } }
+    function Get-MpPreference { [CmdletBinding()] param() [PSCustomObject]@{ ExclusionPath = @() } }
+    function Add-MpPreference { [CmdletBinding()] param($ExclusionPath) $script:DpAdded.Add([string]$ExclusionPath) }
+    function New-MpPerformanceRecording {
+        [CmdletBinding()] param($RecordTo, $Seconds)
+        $script:DpRecCalls++
+        $script:DpEtl = [string]$RecordTo
+        if ($script:DpRecThrow) { throw 'grabacion fallo (simulado)' }
+        [System.IO.File]::WriteAllText($RecordTo, 'etl falso')
+    }
+    function Get-MpPerformanceReport {
+        [CmdletBinding()] param($Path, $TopPaths, $TopPathsDepth, $TopExtensions, [switch] $Raw)
+        if (-not (Test-Path -LiteralPath $Path)) { throw 'el .etl no existe al pedir el reporte' }
+        [PSCustomObject]@{
+            TopPaths = @(
+                [PSCustomObject]@{ Path = 'D:\Proyectos\Dev'; Count = 2000; TotalDuration = [int64]200000000 },
+                [PSCustomObject]@{ Path = 'C:\Windows\System32'; Count = 100; TotalDuration = [int64]50000000 })
+            TopExtensions = @([PSCustomObject]@{ Extension = '.md'; Count = 495; TotalDuration = [int64]48510000 })
+        }
+    }
+    [string] $script:DpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk-smoke-dpaths-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Path $script:DpRoot
+    [System.IO.File]::WriteAllText((Join-Path $script:DpRoot 'centinela.txt'), 'no me borres')
+}
+
+# (c) EL HANDLER completo: G, Enter, Enter, 1, S -> aplica exactamente la fila 1.
+Test-SmokeFunction 'DefenderPaths' 'handler "G": aplica SOLO la ruta de la fila 1, deja rutas_*.txt y los dos audits (StrictMode+Stop)' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    . $script:DpSetup
+    foreach ($a in @('G', '', '', '1', 'S')) { $script:DpAnswers.Enqueue($a) }
+    try {
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $script:DpRoot -TempRootOverride $script:DpRoot *>&1 | Out-Null
+        if ($script:DpAdded.Count -ne 1 -or $script:DpAdded[0] -ne 'D:\Proyectos\Dev') { throw ('Add-MpPreference recibio: [{0}]' -f ($script:DpAdded -join ';')) }
+        [object[]] $txts = @(Get-ChildItem -LiteralPath (Join-Path $script:DpRoot 'defender') -Filter 'rutas_*.txt' -File)
+        if ($txts.Count -ne 1) { throw ('esperaba 1 rutas_*.txt, hay {0}' -f $txts.Count) }
+        [string] $txt = [System.IO.File]::ReadAllText($txts[0].FullName)
+        if ($txt -notmatch '\[1\]' -or $txt -notmatch '\[2\]' -or -not $txt.Contains('D:\Proyectos\Dev')) { throw 'el .txt no trae las filas numeradas' }
+        [string[]] $paths = @($script:DpAudit | Where-Object { $_ -like 'Defender.Paths|*' })
+        if ($paths.Count -ne 1 -or -not $paths[0].Contains('D:\\Proyectos\\Dev')) { throw ('audit Defender.Paths: {0}' -f ($script:DpAudit -join ' // ')) }
+        [string[]] $m = @($script:DpAudit | Where-Object { $_ -like 'Defender.Exclusions.Measured|Success|*' })
+        if ($m.Count -ne 1) { throw ('audit Measured: {0}' -f ($script:DpAudit -join ' // ')) }
+        if (-not $m[0].Contains('D:\\Proyectos\\Dev') -or -not $m[0].Contains('Remove-MpPreference -ExclusionPath') -or $m[0] -notmatch '"Percent":\s*80') { throw ('audit Measured sin ruta/%/undo: {0}' -f $m[0]) }
+        [int] $iPaths = $script:DpAudit.IndexOf($paths[0])
+        [int] $iMeas = $script:DpAudit.IndexOf($m[0])
+        if ($iPaths -ge $iMeas) { throw 'la evidencia (Defender.Paths) debe ir ANTES de la aplicacion' }
+    } finally { Remove-Item -LiteralPath $script:DpRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# (d) fila no ofrecible + numero inexistente -> nada; confirmacion N -> nada.
+Test-SmokeFunction 'DefenderPaths' 'handler "G": fila no ofrecible + inexistente se rechazan nombrados; confirmacion N no aplica' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    . $script:DpSetup
+    foreach ($a in @('G', '', '', '2,9')) { $script:DpAnswers.Enqueue($a) }
+    try {
+        [string] $screen = (Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $script:DpRoot -TempRootOverride $script:DpRoot *>&1 | Out-String)
+        if ($script:DpAdded.Count -ne 0) { throw 'aplico algo con numeros invalidos' }
+        if ($screen -notmatch 'Numero 2' -or $screen -notmatch 'Numero 9') { throw 'el rechazo no nombra los numeros 2 y 9' }
+        if (@($script:DpAudit | Where-Object { $_ -like 'Defender.Exclusions.Measured|Cancelled|*' }).Count -ne 1) { throw ('audit: {0}' -f ($script:DpAudit -join ' // ')) }
+        $script:DpAudit.Clear()
+        foreach ($a in @('G', '', '', '1', 'N')) { $script:DpAnswers.Enqueue($a) }
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $script:DpRoot -TempRootOverride $script:DpRoot *>&1 | Out-Null
+        if ($script:DpAdded.Count -ne 0) { throw 'aplico con confirmacion N' }
+        if (@($script:DpAudit | Where-Object { $_ -like 'Defender.Exclusions.Measured|Cancelled|*' }).Count -ne 1) { throw ('audit tras N: {0}' -f ($script:DpAudit -join ' // ')) }
+    } finally { Remove-Item -LiteralPath $script:DpRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# (e) sin admin / Defender no disponible -> Skipped sin crash y sin grabar.
+Test-SmokeFunction 'DefenderPaths' 'handler "G" sin admin o sin Defender: Skipped, nunca graba, audit Info' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    . $script:DpSetup
+    $script:DpAdmin = $false
+    $script:DpAnswers.Enqueue('G')
+    try {
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $script:DpRoot -TempRootOverride $script:DpRoot *>&1 | Out-Null
+        if ($script:DpRecCalls -ne 0) { throw 'grabo sin admin' }
+        if (@($script:DpAudit | Where-Object { $_ -like 'Defender.Paths|Info|*' }).Count -ne 1) { throw ('audit sin admin: {0}' -f ($script:DpAudit -join ' // ')) }
+        $script:DpAudit.Clear()
+        $script:DpAdmin = $true
+        function Get-MpComputerStatus { [CmdletBinding()] param() throw 'Defender no esta instalado / hay otro AV' }
+        $script:DpAnswers.Enqueue('G')
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $script:DpRoot -TempRootOverride $script:DpRoot *>&1 | Out-Null
+        if ($script:DpRecCalls -ne 0) { throw 'grabo sin Defender' }
+        if (@($script:DpAudit | Where-Object { $_ -like 'Defender.Paths|Info|*' }).Count -ne 1) { throw ('audit sin Defender: {0}' -f ($script:DpAudit -join ' // ')) }
+    } finally { Remove-Item -LiteralPath $script:DpRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# (f) la carpeta propia pctk-defrec-* se borra (tambien si la grabacion tira); el centinela sobrevive.
+Test-SmokeFunction 'DefenderPaths' 'carpeta propia pctk-defrec-*: se borra al terminar y cuando la grabacion tira; centinela y carpeta ajena sobreviven' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    . $script:DpSetup
+    [string] $ajena = Join-Path $script:DpRoot 'pctk-defrec-ajena'
+    $null = New-Item -ItemType Directory -Path $ajena
+    try {
+        foreach ($a in @('G', '', '', '')) { $script:DpAnswers.Enqueue($a) }
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $script:DpRoot -TempRootOverride $script:DpRoot *>&1 | Out-Null
+        if ([string]::IsNullOrEmpty($script:DpEtl) -or (Test-Path -LiteralPath (Split-Path -Parent $script:DpEtl))) { throw 'la carpeta de la grabacion exitosa no se borro' }
+        $script:DpRecThrow = $true
+        $script:DpAnswers.Clear()
+        foreach ($a in @('G', '', '')) { $script:DpAnswers.Enqueue($a) }
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $script:DpRoot -TempRootOverride $script:DpRoot *>&1 | Out-Null
+        if (Test-Path -LiteralPath (Split-Path -Parent $script:DpEtl)) { throw 'la carpeta de la grabacion que tiro no se borro' }
+        if (-not (Test-Path -LiteralPath (Join-Path $script:DpRoot 'centinela.txt'))) { throw 'borro el centinela' }
+        if (-not (Test-Path -LiteralPath $ajena)) { throw 'borro una pctk-defrec-* ajena (borrado por patron)' }
+        if (@($script:DpAudit | Where-Object { $_ -like 'Defender.Paths|Failed|*' }).Count -ne 1) { throw ('audit Failed: {0}' -f ($script:DpAudit -join ' // ')) }
+    } finally { Remove-Item -LiteralPath $script:DpRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# (g) guard por AST: la entrada de (B)+(C) y la grabacion solo viven en el handler de [A][19] / el modulo.
+Test-SmokeFunction 'DefenderPaths' 'guard AST: Show-DefenderPaths y New-MpPerformanceRecording solo en Invoke-ActionDefenderScan / DefenderPaths.ps1' {
+    [string[]] $files = @()
+    foreach ($d in @('core', 'modules', 'utils')) { $files += @(Get-ChildItem -Path (Join-Path $repoRoot $d) -Filter '*.ps1' -File | ForEach-Object { $_.FullName }) }
+    $files += (Join-Path $repoRoot 'main.ps1')
+    if ($files.Count -lt 20) { throw ('piso de archivos barridos: {0} (< 20), el guard quedaria vacuo' -f $files.Count) }
+    [int] $legit = 0
+    foreach ($f in $files) {
+        $tokens = $null; $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tokens, [ref]$errs)
+        [object[]] $calls = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in @('Show-DefenderPaths', 'New-MpPerformanceRecording') }, $true))
+        foreach ($c in $calls) {
+            $p = $c.Parent
+            while ($null -ne $p -and $p -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $p = $p.Parent }
+            [string] $fn = if ($null -ne $p) { $p.Name } else { '(script)' }
+            if ($fn -eq 'Invoke-ActionDefenderScan' -and $c.GetCommandName() -eq 'Show-DefenderPaths') { $legit++; continue }
+            if ((Split-Path -Leaf $f) -eq 'DefenderPaths.ps1') { continue }
+            throw ('{0} llama {1} desde {2}: solo se permite en Invoke-ActionDefenderScan / modules\DefenderPaths.ps1' -f (Split-Path -Leaf $f), $c.GetCommandName(), $fn)
+        }
+    }
+    if ($legit -lt 1) { throw 'Invoke-ActionDefenderScan no llama a Show-DefenderPaths: el guard no ve la feature' }
+}
+
 # ─── ITEM C: Test-StepSucceeded (D-SD2 adapters, structural-debt-plan.md) ────
 # Entradas read-only: solo ejercitan el helper con fixtures en memoria, sin mutar.
 Test-SmokeFunction 'JobManager' 'Test-StepSucceeded null -> false' {

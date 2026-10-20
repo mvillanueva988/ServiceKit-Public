@@ -1183,10 +1183,16 @@ function Invoke-ActionDefenderScan {
     Write-PctkSection '  DEFENDER'
     Write-Host '  [R]eagendar escaneo (anti-stutter)  /  [V]er exclusiones  /'
     Write-Host '  [D]ev: excluir WSL2+Docker+VSCode   /  [Q]uitar exclusiones dev  /'
-    Write-Host '  [M]edir costo de Defender (4 pasos, solo lectura)  /  [B]volver'
+    Write-Host '  [M]edir costo de Defender (4 pasos, solo lectura)  /  [G]rabar rutas caras (admin)  /  [B]volver'
     [string] $dsub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
 
     if ($dsub -eq 'B' -or [string]::IsNullOrEmpty($dsub)) { return }
+
+    if ($dsub -eq 'G') {
+        # #54 (B)+(C): grabacion real -> rutas caras -> exclusiones que Mateo tilda. Nunca en el [1].
+        Show-DefenderPaths -OutputRootOverride $OutputRootOverride -TempRootOverride $TempRootOverride
+        return
+    }
 
     if ($dsub -eq 'M') {
         # #54 (A): diagnostico de costo. Solo lectura; no entra al [1] ni a recetas.
