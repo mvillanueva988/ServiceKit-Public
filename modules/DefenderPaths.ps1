@@ -276,7 +276,8 @@ function Invoke-DefenderPathsCapture {
     [string] $etl = Join-Path $dir 'grabacion.etl'
     try {
         $null = New-Item -ItemType Directory -Path $dir -ErrorAction Stop
-        New-MpPerformanceRecording -RecordTo $etl -Seconds $Seconds -ErrorAction Stop
+        # $null: el real deja salir el stdout de wpr.exe al pipeline y la funcion devolveria un array.
+        $null = New-MpPerformanceRecording -RecordTo $etl -Seconds $Seconds -ErrorAction Stop
         $rep = Get-MpPerformanceReport -Path $etl -TopPaths $TopPaths -TopPathsDepth $TopPathsDepth -TopExtensions $TopExtensions -Raw -ErrorAction Stop
         return [PSCustomObject]@{ Ok = $true; Reason = ''; Report = $rep }
     } catch {

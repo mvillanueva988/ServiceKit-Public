@@ -149,12 +149,6 @@ try {
     [string] $screen = (Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) *>&1 | Out-String)
     $log.Add('--- parte B+C: pantalla del handler'); $log.Add($screen)
 
-    if ($null -ne $script:RawReport) {
-        [string] $rawPath = Join-Path $outDir ('hw-gate-raw_{0}.json' -f $stamp)
-        [System.IO.File]::WriteAllText($rawPath, ($script:RawReport | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($true)))
-        $log.Add('--- salida -Raw real guardada en ' + $rawPath)
-    } else { $fails.Add('B+C: Get-MpPerformanceReport no fue llamado (no hubo grabacion)') }
-
     # Verificaciones.
     [object[]] $rutas = @(Get-ChildItem -LiteralPath $outDir -Filter 'rutas_*.txt' -File | Sort-Object LastWriteTime -Descending)
     if ($rutas.Count -eq 0) {
@@ -196,6 +190,14 @@ try {
     Start-Sleep -Seconds 1
     if (Test-Path -LiteralPath $gateDir) { Remove-Item -LiteralPath $gateDir -Recurse -Force -ErrorAction SilentlyContinue }
 }
+# Fuera del try: la forma real del reporte se guarda tambien si el handler tiro (20-10 no quedo).
+if ($null -ne $script:RawReport) {
+    try {
+        [string] $rawPath = Join-Path $outDir ('hw-gate-raw_{0}.json' -f $stamp)
+        [System.IO.File]::WriteAllText($rawPath, ($script:RawReport | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($true)))
+        $log.Add('--- salida -Raw real guardada en ' + $rawPath)
+    } catch { $fails.Add('B+C: no se pudo guardar la salida -Raw: ' + $_.Exception.Message) }
+} else { $fails.Add('B+C: Get-MpPerformanceReport no fue llamado (no hubo grabacion)') }
 $partB = if (@($fails | Where-Object { $_ -like 'B+C*' -or $_ -like 'parte B+C*' }).Count -eq 0) { 'PASS' } else { 'FAIL' }
 
 if ($partA -eq 'PASS' -and $partB -eq 'PASS') { Save-Gate 'PASS'; exit 0 }
