@@ -102,11 +102,13 @@ $script:GateDir = $gateDir
 $script:GateOut = $outDir
 $script:GateStamp = $stamp
 $script:RawReport = $null
-$script:RealReport = Get-Command -Name 'Get-MpPerformanceReport' -CommandType Cmdlet -ErrorAction Stop
+$script:RealReport = $null
 $job = $null
 [datetime] $t0 = Get-Date
 [bool] $excluded = $false
 try {
+    # El real, ANTES de la sombra de abajo. Es Function (modulo ConfigDefenderPerformance), no Cmdlet.
+    $script:RealReport = Get-Command -Name 'Get-MpPerformanceReport' -CommandType Function, Cmdlet -ErrorAction Stop
     $null = New-Item -ItemType Directory -Path $gateDir -ErrorAction Stop
     # El job escribe y lee ~1500 archivos chicos ahi en bucle mientras se graba.
     $job = Start-Job -ArgumentList $gateDir -ScriptBlock {

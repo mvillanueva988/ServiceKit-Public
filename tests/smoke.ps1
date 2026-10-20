@@ -1054,7 +1054,8 @@ Test-SmokeFunction 'DefenderPaths' 'se ofrece o no: tabla de reglas (Windows, ra
         @('C:\Windows\System32', $false), @('C:\Program Files', $false), @('C:\Program Files\Steam', $true),
         @('C:\Users\x', $false), @('C:\Users\x\Documents\Dev', $true), @('C:\Users\x\Downloads\algo', $false),
         @('C:\Users\x\AppData\Local\Temp\algo', $false), @('C:\', $false), @('C:\Users', $false),
-        @('c:\users\X\documents\dev\', $true), @('C:\Users\x\AppData\Local', $false), @('D:\', $false), @('D:\Games', $true)
+        @('c:\users\X\documents\dev\', $true), @('C:\Users\x\AppData\Local', $false), @('D:\', $false), @('D:\Games', $true),
+        @('Dev', $false), @('Documents\Dev', $false)
     )
     foreach ($row in $table) {
         $r = Test-DefenderPathOfferable -Path $row[0] @roots -ExcludedPath @()
@@ -1063,6 +1064,12 @@ Test-SmokeFunction 'DefenderPaths' 'se ofrece o no: tabla de reglas (Windows, ra
     }
     $ex = Test-DefenderPathOfferable -Path 'c:\users\X\documents\dev\src' @roots -ExcludedPath @('C:\Users\x\Documents\Dev')
     if ($ex.Offerable -or $ex.Reason -notmatch 'ya excluida') { throw ('adentro de una exclusion existente: {0}/{1}' -f $ex.Offerable, $ex.Reason) }
+    # Descargas redirigida: la known folder Y la del perfil quedan protegidas, y su ancestro tambien.
+    $roots.DownloadsDir = @('D:\Descargas')
+    foreach ($row in @(@('D:\Descargas\iso', $false), @('C:\Users\x\Downloads', $false), @('D:\Juegos', $true))) {
+        $r = Test-DefenderPathOfferable -Path $row[0] @roots -ExcludedPath @()
+        if ([bool]$r.Offerable -ne [bool]$row[1]) { throw ('Descargas redirigida, {0}: esperaba Offerable={1}, dio {2} ({3})' -f $row[0], $row[1], $r.Offerable, $r.Reason) }
+    }
 }
 
 # (b) funcion pura reporte -> filas, con UN solo elemento (StrictMode) y con varios.
@@ -1102,6 +1109,15 @@ Test-SmokeFunction 'DefenderPaths' 'reporte -Raw -> filas: 1 solo elemento, vari
         if ($line -notmatch '\.md' -or $line -notmatch '9\.8') { throw ('linea de extensiones (cultura invariante): "{0}"' -f $line) }
         $empty = ConvertFrom-DefenderPerfReport -Report ([PSCustomObject]@{})
         if (@($empty.Rows).Count -ne 0) { throw 'reporte sin TopPaths debe dar 0 filas' }
+        # Arbol (Folder[] por nodo, forma de ConvertTo-DefenderScannedPathsStats): filas = HOJAS, y un
+        # hijo con ruta relativa se cuelga del padre. El padre (C:\Users\x) no es fila.
+        $tree = [PSCustomObject]@{ TopPaths = [PSCustomObject]@{ Path = 'C:\Users\x'; Count = 300; TotalDuration = [int64]60000000; Folder = @(
+            [PSCustomObject]@{ Path = 'C:\Users\x\Documents'; Count = 200; TotalDuration = [int64]40000000; Folder = [PSCustomObject]@{ Path = 'C:\Users\x\Documents\Dev'; Count = 200; TotalDuration = [int64]40000000 } },
+            [PSCustomObject]@{ Path = 'Juegos'; Count = 100; TotalDuration = [int64]20000000 }) } }
+        [object[]] $tr = @((ConvertFrom-DefenderPerfReport -Report $tree).Rows)
+        [string] $trPaths = (@($tr | ForEach-Object { $_.Path }) -join ';')
+        if ($trPaths -ne 'C:\Users\x\Documents\Dev;C:\Users\x\Juegos') { throw ('arbol -> hojas: [{0}]' -f $trPaths) }
+        if ([math]::Abs($tr[0].Percent - 66.6667) -gt 0.01 -or $tr[0].Count -ne 200) { throw ('arbol: % o archivos de la hoja: {0} / {1}' -f $tr[0].Percent, $tr[0].Count) }
     } finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $prev }
 }
 
@@ -1239,7 +1255,7 @@ Test-SmokeFunction 'DefenderPaths' 'guard AST: Show-DefenderPaths y New-MpPerfor
     foreach ($f in $files) {
         $tokens = $null; $errs = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tokens, [ref]$errs)
-        [object[]] $calls = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in @('Show-DefenderPaths', 'New-MpPerformanceRecording') }, $true))
+        [object[]] $calls = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in @('Show-DefenderPaths', 'Invoke-DefenderPathsCapture', 'New-MpPerformanceRecording') }, $true))
         foreach ($c in $calls) {
             $p = $c.Parent
             while ($null -ne $p -and $p -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $p = $p.Parent }

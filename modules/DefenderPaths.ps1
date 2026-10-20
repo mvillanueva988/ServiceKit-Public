@@ -10,9 +10,11 @@
 # carpeta propia de TEMP (pctk-defrec-<sello>) que se borra por la ruta guardada antes de preguntar:
 # no queda en la PC del cliente. Lo aplicado queda en el audit (Defender.Exclusions.Measured).
 #
-# Forma del reporte (-Raw), segun la doc de Microsoft: duraciones en ticks de 100 ns (TimeSpan);
-# TopPaths = lista de { Path; Count; TotalDuration; ... }. El parser es TOLERANTE (un solo elemento,
-# nombres alternativos, TimeSpan ya convertido): la forma real se confirma en el gate HW elevado.
+# Forma del reporte (-Raw), leida del modulo de Windows (ConfigDefenderPerformance,
+# MSFT_MpPerformanceRecording.psm1: ConvertTo-DefenderScanStats / ConvertTo-DefenderScannedPathsStats):
+# duraciones en ticks de 100 ns (uint64); TopPaths = lista de { Path; Count; TotalDuration; ...;
+# Folder[] opcional con los hijos }. Se aplana a las hojas. El parser es TOLERANTE (un solo elemento,
+# TimeSpan ya convertido): lo que arma MpCmdRun en cada nivel se confirma en el gate HW elevado.
 #
 # ASCII puro a proposito (sin BOM): no mezclar non-ASCII aca sin re-aplicar el BOM.
 
@@ -56,20 +58,22 @@ function Test-DefenderPathOfferable {
         [Parameter()] [string[]] $ProgramFilesDir = @($env:ProgramFiles, ${env:ProgramFiles(x86)}),
         [Parameter()] [string]   $UserProfile = $env:USERPROFILE,
         [Parameter()] [string[]] $TempDir = @($env:TEMP),
-        [Parameter()] [string]   $DownloadsDir = '',
+        [Parameter()] [string[]] $DownloadsDir = @(),
         [Parameter()] [string[]] $ExcludedPath = @()
     )
     [string] $k = ConvertTo-DefenderPathKey -Path $Path
     [string] $win = ConvertTo-DefenderPathKey -Path $WindowsDir
     [string] $prof = ConvertTo-DefenderPathKey -Path $UserProfile
-    [string] $dl = ConvertTo-DefenderPathKey -Path $DownloadsDir
-    if ($dl -eq '' -and $prof -ne '') { $dl = $prof + '\downloads' }
+    # Descargas: la del perfil SIEMPRE, mas la known folder si esta redirigida (D:\Descargas, OneDrive).
+    [string[]] $dls = @($DownloadsDir | ForEach-Object { ConvertTo-DefenderPathKey -Path $_ } | Where-Object { $_ -ne '' })
+    if ($prof -ne '') { $dls = @($dls) + @($prof + '\downloads') }
     [string[]] $pf = @($ProgramFilesDir | ForEach-Object { ConvertTo-DefenderPathKey -Path $_ } | Where-Object { $_ -ne '' })
     [string[]] $tmp = @($TempDir | ForEach-Object { ConvertTo-DefenderPathKey -Path $_ } | Where-Object { $_ -ne '' })
     [string[]] $exc = @($ExcludedPath | ForEach-Object { ConvertTo-DefenderPathKey -Path $_ } | Where-Object { $_ -ne '' })
 
     if ($k -eq '') { return [PSCustomObject]@{ Offerable = $false; Reason = 'ruta vacia' } }
     if ($k -match '^[a-z]:$') { return [PSCustomObject]@{ Offerable = $false; Reason = 'raiz de unidad' } }
+    if (-not ($k -match '^[a-z]:\\' -or $k.StartsWith('\\'))) { return [PSCustomObject]@{ Offerable = $false; Reason = 'ruta no absoluta' } }
     if (Test-DefenderPathUnder -Key $k -Root $win) { return [PSCustomObject]@{ Offerable = $false; Reason = 'Windows' } }
     foreach ($p in $pf) {
         if ($k -eq $p) { return [PSCustomObject]@{ Offerable = $false; Reason = 'raiz de Program Files' } }
@@ -78,9 +82,11 @@ function Test-DefenderPathOfferable {
     foreach ($t in $tmp) {
         if (Test-DefenderPathUnder -Key $k -Root $t) { return [PSCustomObject]@{ Offerable = $false; Reason = 'TEMP' } }
     }
-    if (Test-DefenderPathUnder -Key $k -Root $dl) { return [PSCustomObject]@{ Offerable = $false; Reason = 'Descargas' } }
+    foreach ($d in $dls) {
+        if (Test-DefenderPathUnder -Key $k -Root $d) { return [PSCustomObject]@{ Offerable = $false; Reason = 'Descargas' } }
+    }
     # Ancestro de cualquier protegida (C:\Users, C:\Users\x\AppData\Local, ...).
-    [string[]] $protected = @($win, $prof, $dl) + $pf + $tmp
+    [string[]] $protected = @($win, $prof) + $dls + $pf + $tmp
     foreach ($root in $protected) {
         if ($root -ne '' -and $root.StartsWith($k + '\')) { return [PSCustomObject]@{ Offerable = $false; Reason = 'ancestro de una ruta protegida' } }
     }
@@ -102,6 +108,7 @@ function Get-DefenderPathsReasonText {
         'raiz de unidad'                  { return 'La raiz de una unidad equivale a apagar Defender en ese disco.' }
         'ancestro de una ruta protegida'  { return 'Contiene una ruta protegida (Windows, perfil, TEMP, Descargas): excluirla las arrastra.' }
         'ya excluida'                     { return 'Ya esta excluida (o cuelga de una exclusion existente).' }
+        'ruta no absoluta'                { return 'El reporte no trajo la ruta completa: excluirla tal cual no apunta a la carpeta medida.' }
         default                           { return $Reason }
     }
 }
@@ -146,6 +153,32 @@ function ConvertTo-DefenderPerfList {
     return , $out
 }
 
+function Get-DefenderPerfPathLeaves {
+    <#
+    .SYNOPSIS
+        TopPaths puede venir en ARBOL: cada nodo trae Folder[] con sus hijos (lo arma MpCmdRun; el
+        mapeo esta en ConvertTo-DefenderScannedPathsStats de MSFT_MpPerformanceRecording.psm1). Se
+        aplana a las HOJAS, la agrupacion mas especifica (la exclusion mas angosta). Un hijo con
+        ruta relativa se cuelga de la del padre. Devuelve { Path; Node }[]. Pura.
+    #>
+    param([object[]] $Nodes = @(), [string] $ParentPath = '')
+    [System.Collections.Generic.List[object]] $leaves = [System.Collections.Generic.List[object]]::new()
+    foreach ($node in $Nodes) {
+        if ($null -eq $node) { continue }
+        [string] $nodePath = [string](Get-DefenderDiagProp -Object $node -Name 'Path')
+        if ($ParentPath -ne '' -and $nodePath -ne '' -and -not ($nodePath -match '^[A-Za-z]:' -or $nodePath.StartsWith('\\'))) {
+            $nodePath = $ParentPath.TrimEnd('\') + '\' + $nodePath.TrimStart('\')
+        }
+        [object[]] $kids = ConvertTo-DefenderPerfList -Value (Get-DefenderDiagProp -Object $node -Name 'Folder')
+        if ($kids.Count -gt 0) {
+            foreach ($leaf in (Get-DefenderPerfPathLeaves -Nodes $kids -ParentPath $nodePath)) { $leaves.Add($leaf) }
+        } else {
+            $leaves.Add([PSCustomObject]@{ Path = $nodePath; Node = $node })
+        }
+    }
+    return , $leaves.ToArray()
+}
+
 function ConvertFrom-DefenderPerfReport {
     <#
     .SYNOPSIS
@@ -159,8 +192,9 @@ function ConvertFrom-DefenderPerfReport {
     [System.Collections.Generic.List[object]] $exts = [System.Collections.Generic.List[object]]::new()
 
     [object[]] $paths = ConvertTo-DefenderPerfList -Value (Get-DefenderDiagProp -Object $Report -Name 'TopPaths')
-    foreach ($p in $paths) {
-        [string] $path = [string](Get-DefenderDiagProp -Object $p -Name 'Path')
+    foreach ($leaf in (Get-DefenderPerfPathLeaves -Nodes $paths)) {
+        $p = $leaf.Node
+        [string] $path = $leaf.Path
         if ([string]::IsNullOrWhiteSpace($path)) { continue }
         $dur = Get-DefenderDiagProp -Object $p -Name 'TotalDuration'
         if ($null -eq $dur) { $dur = Get-DefenderDiagProp -Object $p -Name 'Duration' }
@@ -255,6 +289,16 @@ function Invoke-DefenderPathsCapture {
     }
 }
 
+function Get-DefenderPathsDownloadsDir {
+    # Descargas real del usuario: la known folder puede estar redirigida. Solo lectura; nunca lanza.
+    try {
+        $shell = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction Stop
+        $v = Get-DefenderDiagProp -Object $shell -Name '{374DE290-123F-4565-9164-39C4925E467B}'
+        if ($null -ne $v) { return [Environment]::ExpandEnvironmentVariables([string]$v) }
+    } catch { }
+    return ''
+}
+
 function Read-DefenderPathsSeconds {
     # Segundos a grabar: Enter = 60, rango 10-300; fuera de rango o no numerico -> se pide UNA vez mas, despues 60.
     [CmdletBinding()]
@@ -326,7 +370,9 @@ function Show-DefenderPaths {
         return
     }
     $parsed = ConvertFrom-DefenderPerfReport -Report $cap.Report
-    [object[]] $rows0 = @($parsed.Rows)
+    # Aplanado el arbol puede haber mas hojas que $TopPaths: la tabla muestra las $TopPaths mas caras.
+    [int] $measured = @($parsed.Rows).Count
+    [object[]] $rows0 = @($parsed.Rows | Select-Object -First $TopPaths)
     if ($rows0.Count -eq 0) {
         Write-PctkWarn '  [!] La grabacion no registro escaneos por carpeta. Reproduci actividad real y repeti.'
         Write-ActionAudit -Action 'Defender.Paths' -Status 'Info' -Summary 'grabacion sin filas de TopPaths'
@@ -340,19 +386,20 @@ function Show-DefenderPaths {
     [string] $winDir = [string]$env:windir
     [string[]] $tempDirs = @($env:TEMP)
     if ($winDir -ne '') { $tempDirs += (Join-Path $winDir 'Temp') }
+    [string] $downloads = Get-DefenderPathsDownloadsDir
     [System.Collections.Generic.List[object]] $offer = [System.Collections.Generic.List[object]]::new()
     [int] $n = 0
     foreach ($r in $rows0) {
         $n++
         $verdict = Test-DefenderPathOfferable -Path $r.Path -WindowsDir $winDir -ProgramFilesDir @($env:ProgramFiles, ${env:ProgramFiles(x86)}) `
-            -UserProfile $env:USERPROFILE -TempDir $tempDirs -ExcludedPath $excluded
+            -UserProfile $env:USERPROFILE -TempDir $tempDirs -DownloadsDir @($downloads) -ExcludedPath $excluded
         $offer.Add([PSCustomObject]@{ Index = $n; Path = $r.Path; Count = $r.Count; TotalMs = $r.TotalMs; AvgMs = $r.AvgMs; Percent = $r.Percent; Offerable = [bool]$verdict.Offerable; Reason = [string]$verdict.Reason })
     }
 
     [System.Collections.Generic.List[object]] $out = [System.Collections.Generic.List[object]]::new()
     $out.Add([PSCustomObject]@{ Kind = 'section'; Text = 'PCTk - Rutas caras de Defender' })
     $out.Add([PSCustomObject]@{ Kind = 'hint'; Text = ('Equipo: {0}   Fecha: {1}   Grabado: {2} s' -f $env:COMPUTERNAME, (Get-PctkStamp), $seconds) })
-    $out.Add([PSCustomObject]@{ Kind = 'hint'; Text = ('El % es del costo de escaneo grabado en {0} s (suma de las {1} filas).' -f $seconds, $offer.Count) })
+    $out.Add([PSCustomObject]@{ Kind = 'hint'; Text = ('El % es del costo de escaneo grabado en {0} s (suma de las {1} carpetas medidas).' -f $seconds, $measured) })
     foreach ($o in $offer) {
         [string] $line = '[{0}] {1} | {2} % | {3} archivos | {4} ms prom/archivo' -f $o.Index, $o.Path,
             (Format-DefenderNumber -Value ([double]$o.Percent) -Decimals 1), $o.Count, (Format-DefenderNumber -Value ([double]$o.AvgMs) -Decimals 1)
