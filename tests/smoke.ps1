@@ -4080,6 +4080,107 @@ Test-SmokeFunction 'Router' '#72 guard: ninguna funcion de core\ compara la elec
         throw ('intercepcion por tecla literal fuera de la tabla ({0}); la decide Salida en Get-MainMenuSpec -> {1}' -f $hits.Count, ($hits -join ' | '))
     }
 }
+function Get-Smoke72ChoiceLiteralHits {
+    # Toda funcion que llame a Read-PctkMenuChoice (la que define el alcance: un
+    # submenu nuevo queda cubierto solo) y compare la eleccion contra un string
+    # literal: if/-eq/-in/-like/... o un switch con clausulas literales. La
+    # eleccion es la variable asignada desde Read-PctkMenuChoice, y lo que se
+    # derive de ella por expresion pura ($up = $c.ToUpperInvariant()); lo que pasa
+    # por un comando (Get-PctkMenuEntry -Choice $c) ya es la tabla y no cuenta.
+    # Por AST: un comentario que nombra 'B' no cuenta.
+    param([System.Management.Automation.Language.Ast] $Ast, [string] $Source)
+    $isReader = { param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Read-PctkMenuChoice' }
+    [System.Collections.Generic.List[string]] $hits = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $scanned = [System.Collections.Generic.List[string]]::new()
+    foreach ($fn in @($Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+        if ($null -eq $fn.Body.Find($isReader, $true)) { continue }
+        [void] $scanned.Add($fn.Name)
+        # Variables que llevan la eleccion (punto fijo: la derivada de una derivada tambien).
+        $tainted = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $assigns = @($fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true))
+        [bool] $grew = $true
+        while ($grew) {
+            $grew = $false
+            foreach ($a in $assigns) {
+                $left = $a.Left
+                while ($left -is [System.Management.Automation.Language.ConvertExpressionAst] -or $left -is [System.Management.Automation.Language.AttributedExpressionAst]) { $left = $left.Child }
+                if ($left -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+                [string] $name = $left.VariablePath.UserPath
+                if ($tainted.Contains($name)) { continue }
+                [bool] $fromReader = $null -ne $a.Right.Find($isReader, $true)
+                [bool] $derived = $false
+                if (-not $fromReader -and $null -eq $a.Right.Find({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+                    $derived = @($a.Right.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] -and $tainted.Contains($n.VariablePath.UserPath) }, $true)).Count -gt 0
+                }
+                if ($fromReader -or $derived) { [void] $tainted.Add($name); $grew = $true }
+            }
+        }
+        $carries = {
+            param($node)
+            if ($null -ne $node.Find($isReader, $true)) { return $true }
+            return @($node.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] -and $tainted.Contains($n.VariablePath.UserPath) }, $true)).Count -gt 0
+        }
+        $literals = {
+            param($node)
+            return @($node.FindAll({ param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -and -not [string]::IsNullOrEmpty($n.Value) }, $true)).Count -gt 0
+        }
+        foreach ($b in @($fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.BinaryExpressionAst] }, $true))) {
+            if ($b.Operator.ToString() -notmatch '^[IC]?(eq|ne|like|notlike|match|notmatch|in|notin|contains|notcontains)$') { continue }
+            if (((& $carries $b.Left) -and (& $literals $b.Right)) -or ((& $carries $b.Right) -and (& $literals $b.Left))) {
+                [void] $hits.Add(('{0}:{1} {2}: {3}' -f $Source, $b.Extent.StartLineNumber, $fn.Name, $b.Extent.Text))
+            }
+        }
+        foreach ($sw in @($fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.SwitchStatementAst] }, $true))) {
+            if (-not (& $carries $sw.Condition)) { continue }
+            foreach ($clause in @($sw.Clauses)) {
+                if ($clause.Item1 -is [System.Management.Automation.Language.StringConstantExpressionAst] -and -not [string]::IsNullOrEmpty($clause.Item1.Value)) {
+                    [void] $hits.Add(('{0}:{1} {2}: switch {3}' -f $Source, $clause.Item1.Extent.StartLineNumber, $fn.Name, $clause.Item1.Extent.Text))
+                }
+            }
+        }
+    }
+    return [PSCustomObject]@{ Hits = [string[]] $hits.ToArray(); Scanned = [string[]] $scanned.ToArray() }
+}
+
+Test-SmokeFunction 'Router' '#72 guard: ninguna funcion de core\ que llame a Read-PctkMenuChoice compara la eleccion contra una tecla literal (AST)' {
+    # Anti-vacuidad 1: el detector caza las formas viejas en un AST de muestra: if
+    # directo, -in, switch sobre una derivada y la comparacion en linea; y no marca
+    # lo que decide la tabla (Salida de la entrada) ni un comentario.
+    $tk = $null; $pe = $null
+    $muestra = [System.Management.Automation.Language.Parser]::ParseInput(@'
+function Show-Muestra {
+    [string] $c = Read-PctkMenuChoice -Rows $r -RenderHeader $h
+    # if ($c -eq 'B') { return }
+    if ($c -eq 'B') { return }
+    if ($c -in @('X', 'Q')) { return }
+    $up = $c.ToUpperInvariant()
+    switch ($up) { '1' { } default { } }
+    if ((Read-PctkMenuChoice -Rows $r -RenderHeader $h) -eq '2') { }
+    $entry = Get-PctkMenuEntry -Spec $s -Choice $c
+    if ([string] $entry.Salida -eq 'Vuelve') { return }
+}
+'@, [ref] $tk, [ref] $pe)
+    [string[]] $hm = @((Get-Smoke72ChoiceLiteralHits -Ast $muestra -Source 'muestra').Hits)
+    if ($hm.Count -ne 4) { throw ("el detector cazo {0} de 4 en la muestra: {1}" -f $hm.Count, ($hm -join ' | ')) }
+    # El barrido: toda la carpeta core\, no un archivo (si el codigo se muda, sigue guardando).
+    [System.Collections.Generic.List[string]] $hits = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $scanned = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'core') -Filter '*.ps1' -File)) {
+        $tk = $null; $pe = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref] $tk, [ref] $pe)
+        $r = Get-Smoke72ChoiceLiteralHits -Ast $ast -Source $f.Name
+        foreach ($h in @($r.Hits)) { [void] $hits.Add($h) }
+        foreach ($s in @($r.Scanned)) { [void] $scanned.Add($s) }
+    }
+    # Anti-vacuidad 2: los tres menus de seleccion unica tienen que estar entre lo
+    # barrido ([T] no llama a Read-PctkMenuChoice: tiene su lector de seleccion multiple).
+    foreach ($must in @('Show-MainMenu', 'Show-IndividualActionsSubmenu', 'Invoke-NamedProfileMenu')) {
+        if (-not $scanned.Contains($must)) { throw ('el barrido no vio {0} (vio: {1}): el guard quedaria verde por vacuidad' -f $must, ($scanned -join ', ')) }
+    }
+    if ($hits.Count -gt 0) {
+        throw ('eleccion de menu comparada contra una tecla literal ({0}); el despacho sale de la tabla -> {1}' -f $hits.Count, ($hits -join ' | '))
+    }
+}
 Test-SmokeFunction 'Router' '#46 Get-PctkBannerCim: consulta CIM UNA vez por sesion (1122 ms medidos por consulta)' {
     # Medido 2026-09-09 en la maquina de Mateo: Win32_Processor tarda ~1040 ms y
     # Win32_OperatingSystem ~28 ms. Eso corria en CADA redibujo completo del menu

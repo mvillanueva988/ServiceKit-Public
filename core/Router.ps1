@@ -524,7 +524,7 @@ function Show-MainMenu {
         # #72: como sigue el menu despues de la accion lo dice la tabla (Salida),
         # no un if por tecla. Una tecla que no esta en la tabla se despacha igual:
         # el despacho dice "Opcion invalida." y el menu pausa.
-        $entry = Get-MainMenuEntry -Choice $choice -Spec $menuSpec
+        $entry = Get-PctkMenuEntry -Spec $menuSpec -Choice $choice
         [string] $salida = 'Pausa'
         if ($null -ne $entry) { $salida = [string] $entry.Salida }
 
@@ -573,7 +573,7 @@ function Invoke-MainMenuDispatch {
         [switch] $PassThru
     )
 
-    $entry = Get-MainMenuEntry -Choice $Choice
+    $entry = Get-PctkMenuEntry -Spec (Get-MainMenuSpec) -Choice $Choice
     if ($null -eq $entry) {
         Write-PctkErr '  Opcion invalida.'
         return
@@ -1264,7 +1264,10 @@ function Show-IndividualActionsSubmenu {
         [PSCustomObject] $MachineProfile
     )
 
-    [object[]] $rows = Get-IndividualActionRows
+    # #72: el submenu es una tabla (Get-IndividualActionSpec): de ahi salen las
+    # filas, el despacho y las teclas que vuelven (Salida = 'Vuelve': B, y X oculta).
+    $menuSpec = Get-IndividualActionSpec
+    [object[]] $rows = ConvertTo-PctkMenuRows -Spec $menuSpec
     $script:PctkBannerProfile = $MachineProfile   # ver nota en Show-MainMenu (no GetNewClosure)
     [scriptblock] $renderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $script:PctkBannerProfile }
 
@@ -1274,9 +1277,8 @@ function Show-IndividualActionsSubmenu {
         # Enter vacio = re-mostrar el submenu
         if ([string]::IsNullOrEmpty($choice)) { continue }
 
-        if ($choice -eq 'B' -or $choice -eq 'X') {
-            return
-        }
+        $entry = Get-PctkMenuEntry -Spec $menuSpec -Choice $choice
+        if ($null -ne $entry -and [string] $entry.Salida -eq 'Vuelve') { return }
 
         try {
             Invoke-IndividualActionDispatch -Choice $choice -MachineProfile $MachineProfile
@@ -1292,9 +1294,11 @@ function Show-IndividualActionsSubmenu {
 function Invoke-IndividualActionDispatch {
     <#
     .SYNOPSIS
-        Cablea cada opcion del submenu a su modulo. Cada handler usa el
-        JobManager (Start-* / Wait-ToolkitJobs) para correr async y mostrar
-        el resumen al final.
+        Despacha una tecla del submenu [A] desde la tabla (Get-IndividualActionSpec):
+        busca la entrada por Tecla (sin importar mayusculas) e invoca su Accion.
+        Sin entrada, o una entrada sin Accion (las que vuelven) -> "Opcion
+        invalida.". Cada handler usa el JobManager (Start-* / Wait-ToolkitJobs)
+        para correr async y mostrar el resumen al final.
     #>
     [CmdletBinding()]
     param(
@@ -1302,32 +1306,12 @@ function Invoke-IndividualActionDispatch {
         [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
     )
 
-    [string] $up = $Choice.ToUpperInvariant()
-    switch ($up) {
-        '1'  { Invoke-ActionDebloat        -MachineProfile $MachineProfile; return }
-        '2'  { Invoke-ActionCleanup        -MachineProfile $MachineProfile; return }
-        '3'  { Invoke-ActionMaintenance    -MachineProfile $MachineProfile; return }
-        '4'  { Invoke-ActionRestorePoint   -MachineProfile $MachineProfile; return }
-        '5'  { Invoke-ActionNetwork        -MachineProfile $MachineProfile; return }
-        '6'  { Invoke-ActionPerformance    -MachineProfile $MachineProfile; return }
-        '7'  { Invoke-ActionDriverBackup   -MachineProfile $MachineProfile; return }
-        '8'  { Invoke-ActionApps           -MachineProfile $MachineProfile; return }
-        '9'  { Invoke-ActionPrivacy        -MachineProfile $MachineProfile; return }
-        '10' { Invoke-ActionStartup        -MachineProfile $MachineProfile; return }
-        '11' { Invoke-ActionWindowsUpdate  -MachineProfile $MachineProfile; return }
-        '12' { Invoke-ActionCoreIsolation   -MachineProfile $MachineProfile; return }
-        '13' { Invoke-ActionHags            -MachineProfile $MachineProfile; return }
-        '14' { Invoke-ActionTimerResolution -MachineProfile $MachineProfile; return }
-        '15' { Invoke-ActionProcessPriority -MachineProfile $MachineProfile; return }
-        '16' { Invoke-ActionUsbPower        -MachineProfile $MachineProfile; return }
-        '17' { Invoke-ActionDiskMaintenance -MachineProfile $MachineProfile; return }
-        '18' { Invoke-ActionEncryption      -MachineProfile $MachineProfile; return }
-        '19' { Invoke-ActionDefenderScan    -MachineProfile $MachineProfile; return }
-        '20' { Invoke-ActionEnergyLaptop    -MachineProfile $MachineProfile; return }
-        default {
-            Write-PctkErr '  Opcion invalida.'
-        }
+    $entry = Get-PctkMenuEntry -Spec (Get-IndividualActionSpec) -Choice $Choice
+    if ($null -eq $entry -or $null -eq $entry.Accion) {
+        Write-PctkErr '  Opcion invalida.'
+        return
     }
+    & $entry.Accion $MachineProfile
 }
 
 # ─── Invoke-ApplyAutoProfile (handler [1] del menu principal) ────────────────
@@ -1449,141 +1433,173 @@ function Invoke-NamedProfileMenu {
         ultima. Reusa Confirm-Action, prompt de cliente y gate RP (mismo patron
         que Invoke-ApplyAutoProfile). Invoke-NamedProfile escribe la entrada de
         audit consolidada; aca solo se auditan Cancelled/Failed.
+    .NOTES
+        #72: el submenu es una tabla (Get-NamedProfileSpec): de ahi salen las filas
+        y el despacho. De un solo disparo, sin pausa propia (la pone el menu
+        principal). Las opciones son Invoke-NamedProfileNew e
+        Invoke-NamedProfileLoad (-Reapply).
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
     )
 
-    function script:_Np_ClientSlug {
-        [string] $raw = (Read-Host '  Identificador del cliente (Enter para autogenerar)').Trim()
-        if ([string]::IsNullOrWhiteSpace($raw)) { return 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant() }
-        [string] $s = $raw.ToLowerInvariant()
-        $s = $s -replace '\s+', '-'
-        $s = $s -replace '[^a-z0-9-]', ''
-        $s = ($s -replace '-{2,}', '-').Trim('-')
-        if ([string]::IsNullOrWhiteSpace($s)) { return 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant() }
-        return $s
-    }
-    function script:_Np_RpGate {
-        return (Confirm-Action -Title 'Crear Restore Point automaticamente?' -Lines @(
-            'Crea un punto de restauracion antes de aplicar la receta.',
-            'Permite revertir con System Restore si algo sale mal.',
-            'Recomendado.') -DefaultYes:$true)
-    }
-    function script:_Np_ShowResult($r) {
-        [string] $st = if ($null -ne $r -and $r.PSObject.Properties['NamedStatus']) { [string]$r.NamedStatus }
-                       elseif ($null -ne $r -and $r.PSObject.Properties['Status']) { [string]$r.Status }
-                       else { 'Unknown' }
-        [string] $npKind = switch ($st) { 'Success' { 'ok' } 'Partial' { 'warn' } default { 'err' } }
-        Write-Host ''
-        Write-PctkLine ('  === Resultado receta nombrada: {0} ===' -f $st) $npKind
-        if ($null -ne $r -and $r.PSObject.Properties['RebootNeeded'] -and [bool]$r.RebootNeeded) {
-            Write-PctkWarn '  [i] Requiere REINICIO para efecto pleno (HVCI/HAGS).'
-        }
-        if ($null -ne $r -and $r.PSObject.Properties['ClientRun'] -and $null -ne $r.ClientRun) {
-            [object] $d = $r.ClientRun.PSObject.Properties['Dir']
-            if ($null -ne $d -and -not [string]::IsNullOrWhiteSpace([string]$d.Value)) {
-                Write-PctkWork ('  Carpeta de run: {0}' -f [string]$d.Value)
-            }
-        }
-    }
-
+    $menuSpec = Get-NamedProfileSpec
     $script:PctkBannerProfile = $MachineProfile   # ver nota en Show-MainMenu (no GetNewClosure)
     [scriptblock] $npRenderHeader = { Clear-Host; Show-MachineBanner -MachineProfile $script:PctkBannerProfile }
-    [string] $c = Read-PctkMenuChoice -Rows (Get-NamedProfileRows) -RenderHeader $npRenderHeader
+    [string] $c = Read-PctkMenuChoice -Rows (ConvertTo-PctkMenuRows -Spec $menuSpec) -RenderHeader $npRenderHeader
 
-    if ($c -eq 'B') { return }
-
-    if ($c -eq '1') {
-        [bool] $useGamingPreset = [bool] (Confirm-Action -Title 'Usar preset gaming HW-smart? (pre-llena los toggles segun tu hardware; podes sobreescribir cada uno)' -DefaultYes:$true)
-        [PSCustomObject] $prof = New-NamedProfileInteractive -MachineProfile $MachineProfile -UseGamingPreset:$useGamingPreset
-        [string[]] $lines = Get-NamedProfilePreviewLines -Profile $prof -MachineProfile $MachineProfile
-        if (-not (Confirm-Action -Title ("Guardar receta '{0}'?" -f [string]$prof._name) -Lines $lines)) {
-            Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Cancelled'
-            return
-        }
-        [string] $slug = (Read-Host '  Nombre de archivo (slug, ej. pc-carlos-cs2)').Trim()
-        [string] $path = Save-NamedProfile -Profile $prof -Slug $slug
-        Write-PctkOk ('  [OK] Guardada: {0}' -f $path)
-        if (Confirm-Action -Title 'Aplicar la receta ahora?' -DefaultYes:$true) {
-            [string] $cs = _Np_ClientSlug
-            [bool]   $rp = _Np_RpGate
-            Write-Host ''
-            Write-PctkWork '  Iniciando pipeline (core + gaming_tweaks)...'
-            $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
-                -ClientSlug $cs -SourcePath $path -SkipRestorePoint:(-not $rp) -ShowProgress
-            _Np_ShowResult $r
-        }
+    $entry = Get-PctkMenuEntry -Spec $menuSpec -Choice $c
+    if ($null -eq $entry) {
+        Write-PctkErr '  Opcion invalida.'
         return
     }
+    if ([string] $entry.Salida -eq 'Vuelve') { return }
+    & $entry.Accion $MachineProfile
+}
 
-    if ($c -eq '2' -or $c -eq '3') {
-        [object[]] $list = @(Get-NamedProfileList)
-        if ($c -eq '3') { $list = @($list | Where-Object { -not $_.IsSample }) }
-        if ($list.Count -eq 0) {
-            Write-PctkWarn '  No hay recetas nombradas guardadas.'
-            return
+# Helpers de la receta nombrada ([2]). Antes vivian adentro de
+# Invoke-NamedProfileMenu; con las opciones en funciones propias (#72) pasan a
+# nivel de archivo.
+function script:_Np_ClientSlug {
+    [string] $raw = (Read-Host '  Identificador del cliente (Enter para autogenerar)').Trim()
+    if ([string]::IsNullOrWhiteSpace($raw)) { return 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant() }
+    [string] $s = $raw.ToLowerInvariant()
+    $s = $s -replace '\s+', '-'
+    $s = $s -replace '[^a-z0-9-]', ''
+    $s = ($s -replace '-{2,}', '-').Trim('-')
+    if ([string]::IsNullOrWhiteSpace($s)) { return 'cliente-' + $env:COMPUTERNAME.ToLowerInvariant() }
+    return $s
+}
+function script:_Np_RpGate {
+    return (Confirm-Action -Title 'Crear Restore Point automaticamente?' -Lines @(
+        'Crea un punto de restauracion antes de aplicar la receta.',
+        'Permite revertir con System Restore si algo sale mal.',
+        'Recomendado.') -DefaultYes:$true)
+}
+function script:_Np_ShowResult($r) {
+    [string] $st = if ($null -ne $r -and $r.PSObject.Properties['NamedStatus']) { [string]$r.NamedStatus }
+                   elseif ($null -ne $r -and $r.PSObject.Properties['Status']) { [string]$r.Status }
+                   else { 'Unknown' }
+    [string] $npKind = switch ($st) { 'Success' { 'ok' } 'Partial' { 'warn' } default { 'err' } }
+    Write-Host ''
+    Write-PctkLine ('  === Resultado receta nombrada: {0} ===' -f $st) $npKind
+    if ($null -ne $r -and $r.PSObject.Properties['RebootNeeded'] -and [bool]$r.RebootNeeded) {
+        Write-PctkWarn '  [i] Requiere REINICIO para efecto pleno (HVCI/HAGS).'
+    }
+    if ($null -ne $r -and $r.PSObject.Properties['ClientRun'] -and $null -ne $r.ClientRun) {
+        [object] $d = $r.ClientRun.PSObject.Properties['Dir']
+        if ($null -ne $d -and -not [string]::IsNullOrWhiteSpace([string]$d.Value)) {
+            Write-PctkWork ('  Carpeta de run: {0}' -f [string]$d.Value)
         }
+    }
+}
 
-        [PSCustomObject] $sel = $null
-        if ($c -eq '3') {
-            # Reaplicar ultima: la de _last_applied mas reciente; si ninguna se
-            # aplico, la de archivo mas nuevo.
-            [object[]] $applied = @($list | Where-Object { $null -ne $_.LastApplied -and -not [string]::IsNullOrWhiteSpace([string]$_.LastApplied) })
-            if ($applied.Count -gt 0) {
-                $sel = ($applied | Sort-Object { [string]$_.LastApplied } -Descending | Select-Object -First 1)
-            } else {
-                $sel = ($list | Sort-Object { (Get-Item -LiteralPath $_.Path).LastWriteTime } -Descending | Select-Object -First 1)
-            }
-            Write-PctkWork ('  Ultima receta: {0}  (last_applied: {1})' -f $sel.Name, $(if ($sel.LastApplied) { $sel.LastApplied } else { 'nunca' }))
-        } else {
-            Write-Host ''
-            for ($i = 0; $i -lt $list.Count; $i++) {
-                [string] $tag = if ($list[$i].IsSample) { '  [fixture]' } else { '' }
-                Write-Host ('  [{0}] {1}{2}' -f ($i + 1), $list[$i].Name, $tag)
-            }
-            Write-Host ''
-            [string] $pick = (Read-Host '  Numero de receta').Trim()
-            [int] $idx = 0
-            if (-not [int]::TryParse($pick, [ref]$idx) -or $idx -lt 1 -or $idx -gt $list.Count) {
-                Write-PctkErr '  Seleccion invalida.'
-                return
-            }
-            $sel = $list[$idx - 1]
-        }
+function Invoke-NamedProfileNew {
+    <#
+    .SYNOPSIS
+        [2][1] Nueva receta: editor (con o sin preset gaming), preview, guardar y,
+        si el operador quiere, aplicarla en el acto.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile
+    )
 
-        [PSCustomObject] $prof = $null
-        try {
-            $prof = Import-NamedProfile -Path $sel.Path
-        } catch {
-            Write-PctkErr ('  [!] No se pudo cargar: {0}' -f $_.Exception.Message)
-            Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Failed' -Summary $_.Exception.Message
-            return
-        }
-
-        [string[]] $lines = Get-NamedProfilePreviewLines -Profile $prof -MachineProfile $MachineProfile
-        if (-not (Confirm-Action -Title ("Aplicar receta '{0}'?" -f [string]$prof._name) -Lines $lines)) {
-            Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Cancelled'
-            return
-        }
-
+    [bool] $useGamingPreset = [bool] (Confirm-Action -Title 'Usar preset gaming HW-smart? (pre-llena los toggles segun tu hardware; podes sobreescribir cada uno)' -DefaultYes:$true)
+    [PSCustomObject] $prof = New-NamedProfileInteractive -MachineProfile $MachineProfile -UseGamingPreset:$useGamingPreset
+    [string[]] $lines = Get-NamedProfilePreviewLines -Profile $prof -MachineProfile $MachineProfile
+    if (-not (Confirm-Action -Title ("Guardar receta '{0}'?" -f [string]$prof._name) -Lines $lines)) {
+        Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Cancelled'
+        return
+    }
+    [string] $slug = (Read-Host '  Nombre de archivo (slug, ej. pc-carlos-cs2)').Trim()
+    [string] $path = Save-NamedProfile -Profile $prof -Slug $slug
+    Write-PctkOk ('  [OK] Guardada: {0}' -f $path)
+    if (Confirm-Action -Title 'Aplicar la receta ahora?' -DefaultYes:$true) {
         [string] $cs = _Np_ClientSlug
+        [bool]   $rp = _Np_RpGate
         Write-Host ''
         Write-PctkWork '  Iniciando pipeline (core + gaming_tweaks)...'
-        if ($c -eq '3') {
-            # Reaplicar = headless (prereq #3): -Unattended evita que la falla
-            # dura de RP cuelgue. RP igual se intenta (no -SkipRestorePoint).
-            $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
-                -ClientSlug $cs -SourcePath $sel.Path -Unattended
-        } else {
-            [bool] $rp = _Np_RpGate
-            $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
-                -ClientSlug $cs -SourcePath $sel.Path -SkipRestorePoint:(-not $rp) -ShowProgress
-        }
+        $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
+            -ClientSlug $cs -SourcePath $path -SkipRestorePoint:(-not $rp) -ShowProgress
         _Np_ShowResult $r
+    }
+}
+
+function Invoke-NamedProfileLoad {
+    <#
+    .SYNOPSIS
+        [2][2] Cargar existente (elegir de la lista) o, con -Reapply, [2][3]
+        Reaplicar ultima (la de _last_applied mas reciente, headless).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile,
+        [switch] $Reapply
+    )
+
+    [object[]] $list = @(Get-NamedProfileList)
+    if ($Reapply) { $list = @($list | Where-Object { -not $_.IsSample }) }
+    if ($list.Count -eq 0) {
+        Write-PctkWarn '  No hay recetas nombradas guardadas.'
         return
     }
 
-    Write-PctkErr '  Opcion invalida.'
+    [PSCustomObject] $sel = $null
+    if ($Reapply) {
+        # Reaplicar ultima: la de _last_applied mas reciente; si ninguna se
+        # aplico, la de archivo mas nuevo.
+        [object[]] $applied = @($list | Where-Object { $null -ne $_.LastApplied -and -not [string]::IsNullOrWhiteSpace([string]$_.LastApplied) })
+        if ($applied.Count -gt 0) {
+            $sel = ($applied | Sort-Object { [string]$_.LastApplied } -Descending | Select-Object -First 1)
+        } else {
+            $sel = ($list | Sort-Object { (Get-Item -LiteralPath $_.Path).LastWriteTime } -Descending | Select-Object -First 1)
+        }
+        Write-PctkWork ('  Ultima receta: {0}  (last_applied: {1})' -f $sel.Name, $(if ($sel.LastApplied) { $sel.LastApplied } else { 'nunca' }))
+    } else {
+        Write-Host ''
+        for ($i = 0; $i -lt $list.Count; $i++) {
+            [string] $tag = if ($list[$i].IsSample) { '  [fixture]' } else { '' }
+            Write-Host ('  [{0}] {1}{2}' -f ($i + 1), $list[$i].Name, $tag)
+        }
+        Write-Host ''
+        [string] $pick = (Read-Host '  Numero de receta').Trim()
+        [int] $idx = 0
+        if (-not [int]::TryParse($pick, [ref]$idx) -or $idx -lt 1 -or $idx -gt $list.Count) {
+            Write-PctkErr '  Seleccion invalida.'
+            return
+        }
+        $sel = $list[$idx - 1]
+    }
+
+    [PSCustomObject] $prof = $null
+    try {
+        $prof = Import-NamedProfile -Path $sel.Path
+    } catch {
+        Write-PctkErr ('  [!] No se pudo cargar: {0}' -f $_.Exception.Message)
+        Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Failed' -Summary $_.Exception.Message
+        return
+    }
+
+    [string[]] $lines = Get-NamedProfilePreviewLines -Profile $prof -MachineProfile $MachineProfile
+    if (-not (Confirm-Action -Title ("Aplicar receta '{0}'?" -f [string]$prof._name) -Lines $lines)) {
+        Write-ActionAudit -Action 'Profile.Apply.Named' -Status 'Cancelled'
+        return
+    }
+
+    [string] $cs = _Np_ClientSlug
+    Write-Host ''
+    Write-PctkWork '  Iniciando pipeline (core + gaming_tweaks)...'
+    if ($Reapply) {
+        # Reaplicar = headless (prereq #3): -Unattended evita que la falla
+        # dura de RP cuelgue. RP igual se intenta (no -SkipRestorePoint).
+        $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
+            -ClientSlug $cs -SourcePath $sel.Path -Unattended
+    } else {
+        [bool] $rp = _Np_RpGate
+        $r = Invoke-NamedProfile -Profile $prof -MachineProfile $MachineProfile `
+            -ClientSlug $cs -SourcePath $sel.Path -SkipRestorePoint:(-not $rp) -ShowProgress
+    }
+    _Np_ShowResult $r
 }
