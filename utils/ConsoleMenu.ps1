@@ -1,35 +1,147 @@
 ﻿Set-StrictMode -Version Latest
 
+function Get-MainMenuSpec {
+    <#
+    .SYNOPSIS
+        El menu principal como DATOS (#72): de esta tabla salen las filas que
+        dibuja Read-PctkMenuChoice (ConvertTo-PctkMenuRows) y el despacho
+        (Invoke-MainMenuDispatch). Cambiar un boton es cambiar una entrada aca.
+
+    .DESCRIPTION
+        Entradas, en el orden en que se ven:
+        - Seccion   : @{ Tipo = 'Seccion'; Texto } (la sangria la pone el formateador).
+        - Separador : @{ Tipo = 'Separador' }.
+        - Opcion    : @{ Tipo = 'Opcion'; Tecla; Texto; Aclaracion; Color; Salida; Accion }
+            Aclaracion : va entre parentesis, alineada sola a AnchoTexto. $null = sin.
+            Color      : nombre 16-color de la fila ($null = el de siempre).
+            Salida     : que hace el menu despues de la accion.
+                         'Pausa'         -> pide [Enter] y vuelve al menu.
+                         'Termina'       -> el menu devuelve 'X' (salir), sin pausa.
+                         'TerminaSiTrue' -> si la accion devuelve $true el menu devuelve
+                                            'U' (PCTk se cierra para que el deleter
+                                            pueda borrar la instalacion); si no, pausa.
+            Accion     : scriptblock LITERAL que recibe el MachineProfile. Nunca
+                         .GetNewClosure(): ata el bloque a un modulo que solo ve
+                         funciones globales (rompe con '& main.ps1' y con las sombras
+                         de los tests, que resuelven por la pila).
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+    [object[]] $entradas = @(
+        @{ Tipo = 'Seccion'; Texto = 'PERFILES' }
+        @{ Tipo = 'Opcion'; Tecla = '1'; Texto = 'Aplicar perfil automatico'; Aclaracion = 'Generic/Work/Multimedia'; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ApplyAutoProfile -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '2'; Texto = 'Receta nombrada'; Aclaracion = 'cliente especifico'; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-NamedProfileMenu -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Seccion'; Texto = 'DIAGNOSTICO' }
+        @{ Tipo = 'Opcion'; Tecla = '3'; Texto = 'Snapshot PRE-service'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-DiagnosticSnapshot -Phase Pre -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '4'; Texto = 'Snapshot POST-service'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-DiagnosticSnapshot -Phase Post -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '5'; Texto = 'Comparar PRE vs POST'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-DiagnosticCompare -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '6'; Texto = 'Historial de BSOD / Crashes'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-DiagnosticBsod -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '7'; Texto = 'Salud de discos (SMART / wear)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-DiagnosticDiskHealth -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '8'; Texto = 'Reporte para el cliente'; Aclaracion = 'HTML para mostrar/imprimir'; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ClientReport -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = 'R'; Texto = 'Generar prompt de research'; Aclaracion = 'para LLM con web search'; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ResearchPrompt -MachineProfile $MachineProfile } }
+        # #90 (4): medicion de FPS en CS2 (modules\MedicionFps.ps1). Solo a pedido
+        # del operador: nunca corre dentro del [1].
+        @{ Tipo = 'Opcion'; Tecla = 'F'; Texto = 'Medir FPS en CS2'; Aclaracion = 'PresentMon, A/B base-variante-base'; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-FpsMeasurement -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Seccion'; Texto = 'ACCIONES MANUALES' }
+        @{ Tipo = 'Opcion'; Tecla = 'A'; Texto = 'Submenu: acciones individuales'; Aclaracion = 'debloat, limpieza, rendimiento, privacidad, etc.'; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Show-IndividualActionsSubmenu -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Seccion'; Texto = 'HERRAMIENTAS' }
+        @{ Tipo = 'Opcion'; Tecla = 'T'; Texto = 'Herramientas externas'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Show-ToolsMenu -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = 'I'; Texto = 'Informe tecnico del equipo'; Aclaracion = '.txt legible para leer/mandar'; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-RawAuditReport -MachineProfile $MachineProfile } }
+        # [L] = cerrar service (POST auto + meta.json + ZIP) y ofrecer desinstalar.
+        # Puede terminar en desinstalacion: por eso TerminaSiTrue, igual que el [U].
+        @{ Tipo = 'Opcion'; Tecla = 'L'; Texto = 'Cerrar service y llevarse el paquete'; Aclaracion = 'POST + ZIP'; Color = $null; Salida = 'TerminaSiTrue'
+           Accion = { param($MachineProfile) Invoke-ServiceClose } }
+        @{ Tipo = 'Opcion'; Tecla = 'X'; Texto = 'Salir'; Aclaracion = $null; Color = $null; Salida = 'Termina'
+           Accion = { param($MachineProfile) Write-PctkWork '  Saliendo de PCTk v2...' } }
+        @{ Tipo = 'Opcion'; Tecla = 'U'; Texto = 'Desinstalar PCTk de esta PC (borra todo)'; Aclaracion = $null; Color = 'DarkRed'; Salida = 'TerminaSiTrue'
+           Accion = { param($MachineProfile) Invoke-UninstallToolkit } }
+        @{ Tipo = 'Separador' }
+    )
+    return [PSCustomObject]@{ AnchoTexto = 34; Entradas = $entradas }
+}
+
+function Get-MainMenuEntry {
+    <#
+    .SYNOPSIS
+        La entrada Opcion de la tabla del menu principal para una tecla, sin
+        importar mayusculas/minusculas. $null si la tecla no esta en la tabla.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Choice,
+        [object] $Spec = $null
+    )
+    if ($null -eq $Spec) { $Spec = Get-MainMenuSpec }
+    foreach ($e in @($Spec.Entradas)) {
+        if ($e.Tipo -eq 'Opcion' -and [string]::Equals([string]$e.Tecla, $Choice, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $e
+        }
+    }
+    return $null
+}
+
+function ConvertTo-PctkMenuRows {
+    <#
+    .SYNOPSIS
+        Arma desde una tabla de menu (Get-MainMenuSpec) las filas Kind/Key/Label/Color
+        que consume Read-PctkMenuChoice.
+    .DESCRIPTION
+        Alinea la aclaracion sola: '  [Tecla]  ' + Texto rellenado a AnchoTexto, y si
+        el texto llega o pasa el ancho, 2 espacios; la aclaracion va entre
+        parentesis. Sin aclaracion, la fila termina en el texto (sin relleno).
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param([Parameter(Mandatory)] [object] $Spec)
+    [int] $ancho = [int] $Spec.AnchoTexto
+    [object[]] $rows = @()
+    foreach ($e in @($Spec.Entradas)) {
+        switch ([string] $e.Tipo) {
+            'Seccion' {
+                $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = ('  ' + [string]$e.Texto); Color = 'DarkCyan' }
+            }
+            'Separador' {
+                $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+            }
+            'Opcion' {
+                [string] $texto = [string] $e.Texto
+                [string] $label = '  [' + [string]$e.Tecla + ']  ' + $texto
+                if (-not [string]::IsNullOrEmpty([string]$e.Aclaracion)) {
+                    [int] $relleno = 2
+                    if ($texto.Length -lt $ancho) { $relleno = $ancho - $texto.Length }
+                    $label = $label + (' ' * $relleno) + '(' + [string]$e.Aclaracion + ')'
+                }
+                $rows += [PSCustomObject]@{ Kind = 'Item'; Key = [string]$e.Tecla; Label = $label; Color = $e.Color }
+            }
+            default { throw ("ConvertTo-PctkMenuRows: tipo de entrada desconocido '{0}'" -f [string]$e.Tipo) }
+        }
+    }
+    return $rows
+}
+
 function Get-MainMenuRows {
     [CmdletBinding()]
     [OutputType([object[]])]
     param()
-    [object[]] $rows = @()
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  PERFILES';          Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '1';   Label = '  [1]  Aplicar perfil automatico         (Generic/Work/Multimedia)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '2';   Label = '  [2]  Receta nombrada                   (cliente especifico)';       Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = '';                    Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  DIAGNOSTICO';        Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '3';   Label = '  [3]  Snapshot PRE-service';             Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '4';   Label = '  [4]  Snapshot POST-service';            Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '5';   Label = '  [5]  Comparar PRE vs POST';             Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '6';   Label = '  [6]  Historial de BSOD / Crashes';      Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '7';   Label = '  [7]  Salud de discos (SMART / wear)';   Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '8';   Label = '  [8]  Reporte para el cliente           (HTML para mostrar/imprimir)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'R';   Label = '  [R]  Generar prompt de research        (para LLM con web search)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'F';   Label = '  [F]  Medir FPS en CS2                  (PresentMon, A/B base-variante-base)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = '';                    Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  ACCIONES MANUALES';  Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'A';   Label = '  [A]  Submenu: acciones individuales    (debloat, limpieza, rendimiento, privacidad, etc.)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = '';                    Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  HERRAMIENTAS';       Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'T';   Label = '  [T]  Herramientas externas';            Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'I';   Label = '  [I]  Informe tecnico del equipo        (.txt legible para leer/mandar)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'L';   Label = '  [L]  Cerrar service y llevarse el paquete  (POST + ZIP)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'X';   Label = '  [X]  Salir';                           Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'U';   Label = '  [U]  Desinstalar PCTk de esta PC (borra todo)'; Color = 'DarkRed' }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = '';                    Color = $null }
-    return $rows
+    return (ConvertTo-PctkMenuRows -Spec (Get-MainMenuSpec))
 }
 
 function Get-IndividualActionRows {

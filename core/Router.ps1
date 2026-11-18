@@ -472,7 +472,9 @@ function Show-MainMenu {
         [PSCustomObject] $MachineProfile
     )
 
-    [object[]] $rows = Get-MainMenuRows
+    # #72: el menu es una tabla (Get-MainMenuSpec): de ahi salen las filas y el despacho.
+    $menuSpec = Get-MainMenuSpec
+    [object[]] $rows = ConvertTo-PctkMenuRows -Spec $menuSpec
     # NO usar el closure dinamico (GetNewClosure): ata el scriptblock a un modulo que SOLO ve
     # funciones globales. Con '& main.ps1' (vs powershell -File) las funciones de
     # main.ps1 quedan en un script-scope hijo, no global -> el closure no resuelve
@@ -519,45 +521,30 @@ function Show-MainMenu {
         # Enter vacio = re-mostrar el menu
         if ([string]::IsNullOrEmpty($choice)) { continue }
 
-        if ($choice -eq 'X') {
+        # #72: como sigue el menu despues de la accion lo dice la tabla (Salida),
+        # no un if por tecla. Una tecla que no esta en la tabla se despacha igual:
+        # el despacho dice "Opcion invalida." y el menu pausa.
+        $entry = Get-MainMenuEntry -Choice $choice -Spec $menuSpec
+        [string] $salida = 'Pausa'
+        if ($null -ne $entry) { $salida = [string] $entry.Salida }
+
+        if ($salida -eq 'TerminaSiTrue') {
+            # [U] y [L]: pueden terminar en desinstalacion, y ahi PCTk tiene que
+            # CERRARSE para que el deleter pueda borrar la instalacion (espera al
+            # PID, max 30s). -PassThru: el menu necesita el resultado de la accion.
+            [bool] $ok = $false
+            try {
+                $ok = Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile -PassThru
+            }
+            catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
+            if ($ok) { return 'U' }
+        } else {
             try {
                 Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
             }
             catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
-            return 'X'
+            if ($salida -eq 'Termina') { return 'X' }
         }
-
-        if ($choice -eq 'U') {
-            [bool] $ok = $false
-            try {
-                $ok = Invoke-UninstallToolkit
-            }
-            catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
-            if ($ok) { return 'U' }
-            Write-Host ''
-            Read-Host '  [Enter] para continuar' | Out-Null
-            continue
-        }
-
-        # El [L] se maneja aca (no en el dispatch) por la misma razon que el [U]:
-        # puede terminar en desinstalacion, y ahi PCTk tiene que CERRARSE para que
-        # el deleter pueda borrar la instalacion (espera al PID, max 30s).
-        if ($choice -eq 'L') {
-            [bool] $okClose = $false
-            try {
-                $okClose = Invoke-ServiceClose
-            }
-            catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
-            if ($okClose) { return 'U' }
-            Write-Host ''
-            Read-Host '  [Enter] para continuar' | Out-Null
-            continue
-        }
-
-        try {
-            Invoke-MainMenuDispatch -Choice $choice -MachineProfile $MachineProfile
-        }
-        catch { Write-DispatchCrash -ErrorRecord $_ -Choice $choice -MenuLabel 'menu principal' }
         Write-Host ''
         Read-Host '  [Enter] para continuar' | Out-Null
     }
@@ -566,65 +553,41 @@ function Show-MainMenu {
 
 # ─── Invoke-MainMenuDispatch ──────────────────────────────────────────────────
 function Invoke-MainMenuDispatch {
+    <#
+    .SYNOPSIS
+        Despacha una tecla del menu principal desde la tabla (Get-MainMenuSpec):
+        busca la entrada por Tecla (sin importar mayusculas) e invoca su Accion.
+        Sin entrada -> "Opcion invalida.".
+    .PARAMETER PassThru
+        Devuelve el resultado de la Accion. Lo usa Show-MainMenu para las entradas
+        TerminaSiTrue ([U] y [L]), que deciden si PCTk se cierra.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [string] $Choice,
 
         [Parameter(Mandatory)]
-        [PSCustomObject] $MachineProfile
+        [PSCustomObject] $MachineProfile,
+
+        [switch] $PassThru
     )
 
-    [string] $up = $Choice.ToUpperInvariant()
-
-    switch ($up) {
-        '1' {
-            Invoke-ApplyAutoProfile -MachineProfile $MachineProfile
-            return
-        }
-        '2' {
-            Invoke-NamedProfileMenu -MachineProfile $MachineProfile
-            return
-        }
-        '3' { Invoke-DiagnosticSnapshot -Phase Pre  -MachineProfile $MachineProfile; return }
-        '4' { Invoke-DiagnosticSnapshot -Phase Post -MachineProfile $MachineProfile; return }
-        '5' { Invoke-DiagnosticCompare  -MachineProfile $MachineProfile; return }
-        '6' { Invoke-DiagnosticBsod     -MachineProfile $MachineProfile; return }
-        '7' { Invoke-DiagnosticDiskHealth -MachineProfile $MachineProfile; return }
-        '8' { Invoke-ClientReport -MachineProfile $MachineProfile; return }
-        'I' { Invoke-RawAuditReport -MachineProfile $MachineProfile; return }
-        'R' { Invoke-ResearchPrompt -MachineProfile $MachineProfile; return }
-        # #90 (4): medicion de FPS en CS2 (modules\MedicionFps.ps1). Solo a pedido
-        # del operador: nunca corre dentro del [1].
-        'F' { Invoke-FpsMeasurement -MachineProfile $MachineProfile; return }
-        'A' {
-            Show-IndividualActionsSubmenu -MachineProfile $MachineProfile
-            return
-        }
-        'L' {
-            # Pieza C (recolector): [L] = Cerrar service. Incluye POST auto + meta.json.
-            # El camino real pasa por Show-MainMenu, que intercepta la 'L' antes de
-            # llegar aca porque necesita poder SALIR si el operador desinstala.
-            # Este caso queda como red por si alguien despacha 'L' directo.
-            # El $null = es obligatorio: sin el, el objeto de resultado se imprime
-            # crudo en la consola del cliente.
-            $null = Invoke-ServiceClose
-            return
-        }
-        'T' { Show-ToolsMenu -MachineProfile $MachineProfile; return }
-        'U' {
-            $null = Invoke-UninstallToolkit
-            return
-        }
-        'X' {
-            Write-PctkWork '  Saliendo de PCTk v2...'
-            return
-        }
-        default {
-            Write-PctkErr '  Opcion invalida.'
-            return
-        }
+    $entry = Get-MainMenuEntry -Choice $Choice
+    if ($null -eq $entry) {
+        Write-PctkErr '  Opcion invalida.'
+        return
     }
+    if ($PassThru) {
+        return (& $entry.Accion $MachineProfile)
+    }
+    if ([string] $entry.Salida -eq 'TerminaSiTrue') {
+        # El $null = es obligatorio: [U] y [L] devuelven un resultado, y sin el
+        # se imprime crudo en la consola del cliente.
+        $null = & $entry.Accion $MachineProfile
+        return
+    }
+    & $entry.Accion $MachineProfile
 }
 
 # ─── Diagnostic actions del menu principal ────────────────────────────────────
