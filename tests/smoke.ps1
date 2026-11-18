@@ -4242,7 +4242,7 @@ function Get-Smoke72ChoiceLiteralHits {
     return [PSCustomObject]@{ Hits = [string[]] $hits.ToArray(); Scanned = [string[]] $scanned.ToArray() }
 }
 
-Test-SmokeFunction 'Router' '#72 guard: ninguna funcion de core\ que llame a Read-PctkMenuChoice compara la eleccion contra una tecla literal (AST)' {
+Test-SmokeFunction 'Router' '#72 guard: ninguna funcion del producto (core\, modules\, raiz) que llame a Read-PctkMenuChoice compara la eleccion contra una tecla literal (AST)' {
     # Anti-vacuidad 1: el detector caza las formas viejas en un AST de muestra: if
     # directo, -in, switch sobre una derivada y la comparacion en linea; y no marca
     # lo que decide la tabla (Salida de la entrada) ni un comentario.
@@ -4262,19 +4262,29 @@ function Show-Muestra {
 '@, [ref] $tk, [ref] $pe)
     [string[]] $hm = @((Get-Smoke72ChoiceLiteralHits -Ast $muestra -Source 'muestra').Hits)
     if ($hm.Count -ne 4) { throw ("el detector cazo {0} de 4 en la muestra: {1}" -f $hm.Count, ($hm -join ' | ')) }
-    # El barrido: toda la carpeta core\, no un archivo (si el codigo se muda, sigue guardando).
+    # El barrido: todo lo de producto, preguntandole a las carpetas y no a una lista
+    # de archivos (si el codigo se muda o aparece un menu nuevo, sigue guardando):
+    # core\, modules\ (recursivo: un submenu puede vivir en su modulo, como [F]) y
+    # los .ps1 de la raiz del repo.
+    [object[]] $files = @(
+        @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'core') -Filter '*.ps1' -File)
+        @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'modules') -Filter '*.ps1' -File -Recurse)
+        @(Get-ChildItem -LiteralPath $repoRoot -Filter '*.ps1' -File)
+    )
     [System.Collections.Generic.List[string]] $hits = [System.Collections.Generic.List[string]]::new()
     [System.Collections.Generic.List[string]] $scanned = [System.Collections.Generic.List[string]]::new()
-    foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'core') -Filter '*.ps1' -File)) {
+    foreach ($f in $files) {
         $tk = $null; $pe = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref] $tk, [ref] $pe)
-        $r = Get-Smoke72ChoiceLiteralHits -Ast $ast -Source $f.Name
+        $r = Get-Smoke72ChoiceLiteralHits -Ast $ast -Source ($f.FullName.Substring($repoRoot.Length).TrimStart('\'))
         foreach ($h in @($r.Hits)) { [void] $hits.Add($h) }
         foreach ($s in @($r.Scanned)) { [void] $scanned.Add($s) }
     }
-    # Anti-vacuidad 2: los tres menus de seleccion unica tienen que estar entre lo
-    # barrido ([T] no llama a Read-PctkMenuChoice: tiene su lector de seleccion multiple).
-    foreach ($must in @('Show-MainMenu', 'Show-IndividualActionsSubmenu', 'Invoke-NamedProfileMenu')) {
+    # Anti-vacuidad 2: los menus de seleccion unica tienen que estar entre lo barrido
+    # ([T] no llama a Read-PctkMenuChoice: tiene su lector de seleccion multiple).
+    # Invoke-FpsMeasurement ([F]) vive en modules\: si el barrido vuelve a ser solo
+    # core\, esto lo caza.
+    foreach ($must in @('Show-MainMenu', 'Show-IndividualActionsSubmenu', 'Invoke-NamedProfileMenu', 'Invoke-FpsMeasurement')) {
         if (-not $scanned.Contains($must)) { throw ('el barrido no vio {0} (vio: {1}): el guard quedaria verde por vacuidad' -f $must, ($scanned -join ', ')) }
     }
     if ($hits.Count -gt 0) {

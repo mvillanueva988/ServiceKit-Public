@@ -668,19 +668,42 @@ function Invoke-FpsCompareMenu {
     return [PSCustomObject]@{ Avg = $rAvg; Low = $rLow; File = $file }
 }
 
+function Get-FpsMenuSpec {
+    <#
+    .SYNOPSIS
+        El submenu [F] (medicion de FPS) como DATOS (#72), misma forma que
+        Get-NamedProfileSpec (utils\ConsoleMenu.ps1): de aca salen las filas
+        (ConvertTo-PctkMenuRows) y el despacho de Invoke-FpsMeasurement. Vive al
+        lado de su handler: el modulo es duenio de su menu.
+    .DESCRIPTION
+        Salida de las opciones = 'Pausa' (pide [Enter] y vuelve al submenu);
+        'Vuelve' = el submenu termina y se vuelve al menu principal, sin Accion.
+        Accion = scriptblock LITERAL que recibe el OutputRootOverride del handler.
+        Nunca .GetNewClosure() (ver Get-MainMenuSpec).
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+    [object[]] $entradas = @(
+        @{ Tipo = 'Seccion'; Texto = 'MEDICION DE FPS (CS2 + PresentMon, A/B base-variante-base)' }
+        @{ Tipo = 'Opcion'; Tecla = '1'; Texto = 'Capturar un lote'; Aclaracion = 'N pasadas con la misma config'; Color = $null; Salida = 'Pausa'
+           Accion = { param($OutputRootOverride) Invoke-FpsCaptureBatch -OutputRootOverride $OutputRootOverride } }
+        @{ Tipo = 'Opcion'; Tecla = '2'; Texto = 'Comparar A/B'; Aclaracion = 'base, variante, base'; Color = $null; Salida = 'Pausa'
+           Accion = { param($OutputRootOverride) Invoke-FpsCompareMenu -OutputRootOverride $OutputRootOverride } }
+        @{ Tipo = 'Opcion'; Tecla = '3'; Texto = 'Guia del benchmark'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($OutputRootOverride) Show-FpsBenchGuide } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Opcion'; Tecla = 'B'; Texto = 'Volver al menu principal'; Aclaracion = $null; Color = 'DarkYellow'; Salida = 'Vuelve'; Accion = $null }
+        @{ Tipo = 'Separador' }
+    )
+    return [PSCustomObject]@{ AnchoTexto = 34; Entradas = $entradas }
+}
+
 function Get-FpsMenuRows {
     [CmdletBinding()]
     [OutputType([object[]])]
     param()
-    [object[]] $rows = @()
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  MEDICION DE FPS (CS2 + PresentMon, A/B base-variante-base)'; Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '1';   Label = '  [1]  Capturar un lote                  (N pasadas con la misma config)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '2';   Label = '  [2]  Comparar A/B                      (base, variante, base)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '3';   Label = '  [3]  Guia del benchmark'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver al menu principal'; Color = 'DarkYellow' }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    return $rows
+    return (ConvertTo-PctkMenuRows -Spec (Get-FpsMenuSpec))
 }
 
 function Invoke-FpsMeasurement {
@@ -694,20 +717,19 @@ function Invoke-FpsMeasurement {
         [string] $OutputRootOverride = ''
     )
     $null = $MachineProfile
-    [object[]] $rows = Get-FpsMenuRows
+    $menuSpec = Get-FpsMenuSpec
+    [object[]] $rows = ConvertTo-PctkMenuRows -Spec $menuSpec
     [scriptblock] $hdr = { Clear-Host; Write-Host '' }
     do {
         [string] $choice = [string](Read-PctkMenuChoice -Rows $rows -RenderHeader $hdr)
         if ([string]::IsNullOrEmpty($choice)) { continue }
-        [string] $up = $choice.ToUpperInvariant()
-        if ($up -eq 'B') { return }
+        # El despacho sale de la tabla (#72): sin entrada = invalida; 'Vuelve' sale
+        # sin pausa; el resto corre su Accion y pausa.
+        $entry = Get-PctkMenuEntry -Spec $menuSpec -Choice $choice
+        if ($null -ne $entry -and [string] $entry.Salida -eq 'Vuelve') { return }
         try {
-            switch ($up) {
-                '1' { $null = Invoke-FpsCaptureBatch -OutputRootOverride $OutputRootOverride }
-                '2' { $null = Invoke-FpsCompareMenu -OutputRootOverride $OutputRootOverride }
-                '3' { Show-FpsBenchGuide }
-                default { Write-PctkErr '  Opcion invalida.' }
-            }
+            if ($null -eq $entry) { Write-PctkErr '  Opcion invalida.' }
+            else { $null = & $entry.Accion $OutputRootOverride }
         }
         catch {
             if (Get-Command -Name 'Write-DispatchCrash' -CommandType Function -ErrorAction SilentlyContinue) {
