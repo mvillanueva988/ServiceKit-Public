@@ -3607,9 +3607,16 @@ function Get-SmokeMenuPhoto {
     function Get-PctkConsoleWindowWidth { return [int] $smkPhotoSim.W }
     function Test-PctkInteractiveConsole { return $true }
     # Sale del loop de teclas enseguida: el lector cae a su fallback plano
-    # (Read-Host) y la 'X' sale por el despacho real del menu.
+    # (Read-Host) y la 'X' sale por el despacho real del menu. Una sola 'X': si el
+    # menu pide otra entrada es que la X no termino, y eso tira en vez de colgar.
     function Test-PctkConsoleResized { throw 'smoke72: salir del loop' }
-    function Read-Host { param([Parameter(Position = 0)] $Prompt) return 'X' }
+    $smkPhotoSim.Reads = 0
+    function Read-Host {
+        param([Parameter(Position = 0)] $Prompt)
+        $smkPhotoSim.Reads++
+        if ($smkPhotoSim.Reads -gt 1) { throw 'smoke72: el menu pidio otra entrada despues de la X (no termino)' }
+        return 'X'
+    }
     function Get-PctkBannerCim { return $smkPhotoSim.Cim }
     function Get-ServiceState { return $null }
 
