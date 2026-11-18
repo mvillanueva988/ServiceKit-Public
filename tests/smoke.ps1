@@ -3548,6 +3548,265 @@ Test-SmokeFunction 'ConsoleMenu' '#99 el flag compacto se apaga al salir del lec
     $null = Invoke-Smoke99MenuRun -WinH 44
     if ($script:PctkBannerCompact) { throw 'el flag quedo prendido tras una salida normal' }
 }
+
+# ─── #72: foto en texto del menu principal + despacho por el handler ─────────
+# La red para migrar el menu a una tabla de datos sin cambiar lo que se ve. La
+# foto corre Show-MainMenu REAL con el Read-PctkMenuChoice real sobre una consola
+# simulada (patron de Invoke-Smoke99MenuRun) y se compara contra los golden de
+# tests\golden\, que escribe SOLO tests\golden\regenerar-menu-principal.ps1 (ese
+# script saca New-SmokeMenuFixture y Get-SmokeMenuPhoto de este archivo por AST:
+# hay una sola definicion). Una foto en rojo es un cambio visible: si fue a
+# proposito se regenera el golden en el mismo commit; si no, se arregla el codigo.
+function New-SmokeMenuFixture {
+    # Perfil y CIM constantes. Sin numeros con decimales: '{0:N2}' depende de la
+    # cultura de la maquina y la foto no puede cambiar entre es-AR y en-US.
+    return [PSCustomObject]@{
+        Profile = [PSCustomObject]@{
+            IsWin11 = $true; IsHome = $false; Build = 26100; RamMB = 0
+            GpuNames = @('NVIDIA GeForce RTX 3060 Laptop GPU'); HasIGpuOnly = $false; HasDGpu = $true; DGpuVramMb = 6144
+            Manufacturer = 'ASUSTeK COMPUTER INC.'; Model = 'TUF Gaming FX506HM'; Family = ''; SystemSku = ''
+            SerialNumber = 'ABC123'; Tier = 'MID'; CpuClass = 'Ryzen'
+        }
+        Cim = [PSCustomObject]@{
+            Os  = [PSCustomObject]@{ OSArchitecture = '64 bits'; FreePhysicalMemory = $null }
+            Cpu = [PSCustomObject]@{ Name = 'AMD Ryzen 7 5800H with Radeon Graphics'; NumberOfCores = 8; NumberOfLogicalProcessors = 16 }
+        }
+    }
+}
+
+function Get-SmokeMenuPhoto {
+    # Foto del menu principal a $Width x $Height: el ultimo frame que tiene la
+    # linea de ayuda (el del menu interactivo), sin ANSI y cada linea rellenada a
+    # $Width, mas la capa de color (por linea, las secuencias SGR en orden; un
+    # -ForegroundColor/-BackgroundColor de Write-Host cuenta como {fg=..}/{bg=..}).
+    # Tira si una linea visible pasa $Width (la consola la partiria) o si el frame
+    # pasa $Height lineas.
+    param([Parameter(Mandatory)] [int] $Width, [Parameter(Mandatory)] [int] $Height)
+    $fx = New-SmokeMenuFixture
+    $smkPhotoSim = @{ Top = 0; Cur = ''; W = $Width; H = $Height; Cim = $fx.Cim; Frames = [System.Collections.Generic.List[object]]::new() }
+    $smkPhotoSim.Frames.Add([System.Collections.Generic.List[string]]::new())
+    function Write-Host {
+        param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline)
+        if ($null -ne $ForegroundColor) { $smkPhotoSim.Cur += ([string][char]1 + 'fg=' + [string]$ForegroundColor + [char]1) }
+        if ($null -ne $BackgroundColor) { $smkPhotoSim.Cur += ([string][char]1 + 'bg=' + [string]$BackgroundColor + [char]1) }
+        $smkPhotoSim.Cur += [string]$Object
+        if (-not $NoNewline) {
+            $smkPhotoSim.Frames[$smkPhotoSim.Frames.Count - 1].Add($smkPhotoSim.Cur)
+            $smkPhotoSim.Cur = ''
+            $smkPhotoSim.Top++
+        }
+    }
+    function Clear-Host { $smkPhotoSim.Top = 0; $smkPhotoSim.Cur = ''; $smkPhotoSim.Frames.Add([System.Collections.Generic.List[string]]::new()) }
+    function Get-PctkConsoleCursorTop { return [int] $smkPhotoSim.Top }
+    function Get-PctkConsoleWindowHeight { return [int] $smkPhotoSim.H }
+    function Get-PctkConsoleWindowWidth { return [int] $smkPhotoSim.W }
+    function Test-PctkInteractiveConsole { return $true }
+    # Sale del loop de teclas enseguida: el lector cae a su fallback plano
+    # (Read-Host) y la 'X' sale por el despacho real del menu.
+    function Test-PctkConsoleResized { throw 'smoke72: salir del loop' }
+    function Read-Host { param([Parameter(Position = 0)] $Prompt) return 'X' }
+    function Get-PctkBannerCim { return $smkPhotoSim.Cim }
+    function Get-ServiceState { return $null }
+
+    [bool] $vtBefore      = $script:PctkVT
+    [bool] $compactBefore = $script:PctkBannerCompact
+    $script:PctkVT = $true
+    try {
+        [string] $r = Show-MainMenu -MachineProfile $fx.Profile
+    } finally { $script:PctkVT = $vtBefore; $script:PctkBannerCompact = $compactBefore }
+    if ($r -ne 'X') { throw ("el menu no salio por la X; devolvio '{0}'" -f $r) }
+
+    [int] $m = -1
+    for ([int] $i = 0; $i -lt $smkPhotoSim.Frames.Count; $i++) {
+        if (@($smkPhotoSim.Frames[$i] | Where-Object { $_ -match 'Usa flechas|Flechas \+ Enter' }).Count -gt 0) { $m = $i }
+    }
+    if ($m -lt 0) { throw 'el menu no llego a dibujar el frame interactivo (sin linea de ayuda)' }
+    [object[]] $raw = @($smkPhotoSim.Frames[$m])
+    if ($raw.Count -gt $Height) { throw ("{0}x{1}: el frame ocupa {2} lineas, pasa el alto" -f $Width, $Height, $raw.Count) }
+
+    [System.Collections.Generic.List[string]] $txt = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $sgr = [System.Collections.Generic.List[string]]::new()
+    for ([int] $i = 0; $i -lt $raw.Count; $i++) {
+        [string] $line  = [string]$raw[$i]
+        [string] $plain = ($line -replace '\x1b\[[0-9;?]*[A-Za-z]', '') -replace '\x01[^\x01]*\x01', ''
+        if ($plain.Length -gt $Width) {
+            throw ("{0}x{1}: la linea {2} mide {3} columnas, pasa el ancho: '{4}'" -f $Width, $Height, ($i + 1), $plain.Length, $plain)
+        }
+        [void] $txt.Add($plain.PadRight($Width))
+        [string[]] $codes = @([regex]::Matches($line, '\x1b\[[0-9;]*m|\x01[^\x01]*\x01') | ForEach-Object {
+            [string] $v = $_.Value
+            if ($v[0] -eq [char]1) { '{' + $v.Trim([char]1) + '}' } else { '\e' + $v.Substring(1) }
+        })
+        [void] $sgr.Add(($codes -join ' '))
+    }
+    return [PSCustomObject]@{ Lines = [string[]] $txt.ToArray(); Sgr = [string[]] $sgr.ToArray() }
+}
+
+function Assert-SmokeMenuGolden {
+    # Compara la foto contra los dos golden del tamanio (texto y color). En rojo
+    # dice la primera linea distinta, esperada y obtenida.
+    param([int] $Width, [int] $Height)
+    $photo = Get-SmokeMenuPhoto -Width $Width -Height $Height
+    [string] $dir = Join-Path $PSScriptRoot 'golden'
+    foreach ($layer in @(@{ Suffix = '.txt'; Name = 'texto'; Got = $photo.Lines }, @{ Suffix = '.sgr.txt'; Name = 'color'; Got = $photo.Sgr })) {
+        [string] $p = Join-Path $dir ('menu-principal-{0}x{1}{2}' -f $Width, $Height, $layer.Suffix)
+        if (-not (Test-Path -LiteralPath $p)) { throw ("falta el golden {0} (lo escribe tests\golden\regenerar-menu-principal.ps1)" -f $p) }
+        [string] $content = [System.IO.File]::ReadAllText($p, [System.Text.UTF8Encoding]::new($false))
+        [System.Collections.Generic.List[string]] $exp = [System.Collections.Generic.List[string]]::new([string[]]($content -split '\r?\n'))
+        if ($exp.Count -gt 0 -and $exp[$exp.Count - 1] -eq '') { $exp.RemoveAt($exp.Count - 1) }
+        [string[]] $got = @($layer.Got)
+        [int] $n = [Math]::Max($exp.Count, $got.Count)
+        for ([int] $i = 0; $i -lt $n; $i++) {
+            [string] $e = if ($i -lt $exp.Count) { $exp[$i] } else { '<sin linea>' }
+            [string] $g = if ($i -lt $got.Count) { $got[$i] } else { '<sin linea>' }
+            if ($e -cne $g) {
+                throw ("{0}x{1} capa {2}, linea {3} de {4} (golden {5}):`n      esperada: '{6}'`n      obtenida: '{7}'" -f $Width, $Height, $layer.Name, ($i + 1), $n, [System.IO.Path]::GetFileName($p), $e.TrimEnd(), $g.TrimEnd())
+            }
+        }
+    }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#72 foto: menu principal a 120x30 identico al golden (texto + color)' {
+    Assert-SmokeMenuGolden -Width 120 -Height 30
+}
+Test-SmokeFunction 'ConsoleMenu' '#72 foto: menu principal a 120x44 identico al golden (texto + color)' {
+    Assert-SmokeMenuGolden -Width 120 -Height 44
+}
+
+function Invoke-Smoke72MainMenuRun {
+    # Corre Show-MainMenu REAL (o, con -Direct, Invoke-MainMenuDispatch) con los
+    # 14 handlers del menu principal sombreados: cada uno anota la llamada. Read-Host
+    # devuelve las opciones en orden y cuenta las pausas ([Enter] para continuar);
+    # si el menu pide otra opcion con la cola vacia, tira (el menu no termino).
+    param([string[]] $Choices, [bool] $CloseResult = $false, [bool] $UninstallResult = $false, [switch] $Direct)
+    $fx = New-SmokeMenuFixture
+    $smk72 = @{
+        Queue = [System.Collections.Generic.Queue[string]]::new(); Calls = [System.Collections.Generic.List[object]]::new()
+        Crashes = [System.Collections.Generic.List[string]]::new(); Out = [System.Text.StringBuilder]::new(); Pauses = 0
+        CloseResult = $CloseResult; UninstallResult = $UninstallResult; Cim = $fx.Cim
+    }
+    foreach ($c in $Choices) { $smk72.Queue.Enqueue($c) }
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) [void] $smk72.Out.AppendLine([string]$Object) }
+    function Clear-Host { }
+    function Read-Host {
+        param([Parameter(Position = 0)] $Prompt)
+        if ([string]$Prompt -match 'Enter\] para continuar') { $smk72.Pauses++; return '' }
+        if ($smk72.Queue.Count -eq 0) { throw 'smoke72: el menu pidio otra opcion con la cola vacia (no termino)' }
+        return $smk72.Queue.Dequeue()
+    }
+    function Test-PctkInteractiveConsole { return $false }
+    function Get-PctkConsoleWindowWidth { return 120 }
+    function Get-PctkBannerCim { return $smk72.Cim }
+    function Get-ServiceState { return $null }
+    function Write-DispatchCrash { param($ErrorRecord, $Choice, $MenuLabel) $smk72.Crashes.Add(('[{0}] {1}' -f $Choice, $ErrorRecord.Exception.Message)) }
+    function Add-Smoke72Call { param([string] $Name, $MachineProfile, [string] $Phase = '') $smk72.Calls.Add([PSCustomObject]@{ Name = $Name; Phase = $Phase; Profile = $MachineProfile }) }
+    function Invoke-ApplyAutoProfile       { param($MachineProfile) Add-Smoke72Call 'Invoke-ApplyAutoProfile' $MachineProfile }
+    function Invoke-NamedProfileMenu       { param($MachineProfile) Add-Smoke72Call 'Invoke-NamedProfileMenu' $MachineProfile }
+    function Invoke-DiagnosticSnapshot     { param($Phase, $MachineProfile) Add-Smoke72Call 'Invoke-DiagnosticSnapshot' $MachineProfile ([string]$Phase) }
+    function Invoke-DiagnosticCompare      { param($MachineProfile) Add-Smoke72Call 'Invoke-DiagnosticCompare' $MachineProfile }
+    function Invoke-DiagnosticBsod         { param($MachineProfile) Add-Smoke72Call 'Invoke-DiagnosticBsod' $MachineProfile }
+    function Invoke-DiagnosticDiskHealth   { param($MachineProfile) Add-Smoke72Call 'Invoke-DiagnosticDiskHealth' $MachineProfile }
+    function Invoke-ClientReport           { param($MachineProfile) Add-Smoke72Call 'Invoke-ClientReport' $MachineProfile }
+    function Invoke-ResearchPrompt         { param($MachineProfile) Add-Smoke72Call 'Invoke-ResearchPrompt' $MachineProfile }
+    function Invoke-FpsMeasurement         { param($MachineProfile) Add-Smoke72Call 'Invoke-FpsMeasurement' $MachineProfile }
+    function Show-IndividualActionsSubmenu { param($MachineProfile) Add-Smoke72Call 'Show-IndividualActionsSubmenu' $MachineProfile }
+    function Show-ToolsMenu                { param($MachineProfile) Add-Smoke72Call 'Show-ToolsMenu' $MachineProfile }
+    function Invoke-RawAuditReport         { param($MachineProfile) Add-Smoke72Call 'Invoke-RawAuditReport' $MachineProfile }
+    function Invoke-ServiceClose           { Add-Smoke72Call 'Invoke-ServiceClose' $null; return [bool] $smk72.CloseResult }
+    function Invoke-UninstallToolkit       { Add-Smoke72Call 'Invoke-UninstallToolkit' $null; return [bool] $smk72.UninstallResult }
+
+    [string] $r = ''
+    [object[]] $directOut = @()
+    if ($Direct) {
+        # Lo que el despacho deja en el pipeline: el caller real no lo captura, asi
+        # que todo lo que salga aca se imprime crudo en la consola del cliente.
+        $directOut = @(Invoke-MainMenuDispatch -Choice $smk72.Queue.Dequeue() -MachineProfile $fx.Profile)
+    } else {
+        $r = Show-MainMenu -MachineProfile $fx.Profile
+    }
+    return [PSCustomObject]@{
+        Result = $r; Calls = [object[]] $smk72.Calls.ToArray(); Crashes = [string[]] $smk72.Crashes.ToArray()
+        Pauses = $smk72.Pauses; Left = $smk72.Queue.Count; Out = $smk72.Out.ToString(); Profile = $fx.Profile
+        DirectOut = $directOut
+    }
+}
+
+function Assert-Smoke72OneCall {
+    # Exactamente una llamada, al handler esperado ('Nombre' o 'Nombre:Fase'), con
+    # el perfil que recibio el menu (misma instancia) si el handler lo toma.
+    param($Run, [string] $Ctx, [string] $Expected)
+    if ($Run.Crashes.Count -gt 0) { throw ("{0}: el handler crasheo: {1}" -f $Ctx, ($Run.Crashes -join ' | ')) }
+    if ($Run.Calls.Count -ne 1) { throw ("{0}: {1} llamadas a handlers ({2}); esperada 1 a {3}" -f $Ctx, $Run.Calls.Count, (($Run.Calls | ForEach-Object { $_.Name }) -join ', '), $Expected) }
+    $c = $Run.Calls[0]
+    [string] $gotName = if ([string]::IsNullOrEmpty([string]$c.Phase)) { [string]$c.Name } else { ('{0}:{1}' -f $c.Name, $c.Phase) }
+    if ($gotName -ne $Expected) { throw ("{0}: llamo a {1}; esperado {2}" -f $Ctx, $gotName, $Expected) }
+    if ($Expected -notin @('Invoke-ServiceClose', 'Invoke-UninstallToolkit') -and -not [object]::ReferenceEquals($c.Profile, $Run.Profile)) {
+        throw ("{0}: {1} no recibio el MachineProfile del menu" -f $Ctx, $Expected)
+    }
+}
+
+Test-SmokeFunction 'Router' '#72 despacho por el handler: cada tecla del menu principal llama a su handler una vez con el perfil recibido' {
+    $expect = @{
+        '1' = 'Invoke-ApplyAutoProfile'; '2' = 'Invoke-NamedProfileMenu'
+        '3' = 'Invoke-DiagnosticSnapshot:Pre'; '4' = 'Invoke-DiagnosticSnapshot:Post'
+        '5' = 'Invoke-DiagnosticCompare'; '6' = 'Invoke-DiagnosticBsod'; '7' = 'Invoke-DiagnosticDiskHealth'
+        '8' = 'Invoke-ClientReport'; 'R' = 'Invoke-ResearchPrompt'; 'F' = 'Invoke-FpsMeasurement'
+        'A' = 'Show-IndividualActionsSubmenu'; 'T' = 'Show-ToolsMenu'; 'I' = 'Invoke-RawAuditReport'
+        'L' = 'Invoke-ServiceClose'; 'U' = 'Invoke-UninstallToolkit'; 'X' = ''
+    }
+    [string[]] $keys = @(Get-MainMenuRows | Where-Object { $_.Kind -eq 'Item' } | ForEach-Object { [string]$_.Key })
+    if ($keys.Count -ne 16) { throw ('el menu principal tiene {0} teclas; el test cubre 16' -f $keys.Count) }
+    foreach ($k in $keys) {
+        if (-not $expect.ContainsKey($k)) { throw ("la tecla [{0}] no tiene handler esperado en este test" -f $k) }
+        if ($k -eq 'X') {
+            $run = Invoke-Smoke72MainMenuRun -Choices @('X')
+            if ($run.Result -ne 'X') { throw ("[X]: el menu devolvio '{0}'; esperado 'X'" -f $run.Result) }
+            if ($run.Calls.Count -ne 0) { throw ('[X] llamo a {0}' -f (($run.Calls | ForEach-Object { $_.Name }) -join ', ')) }
+            if ($run.Pauses -ne 0) { throw ('[X] pauso {0} veces antes de salir' -f $run.Pauses) }
+            if ($run.Out -notmatch 'Saliendo de PCTk') { throw '[X] no dijo Saliendo de PCTk' }
+            continue
+        }
+        $run = Invoke-Smoke72MainMenuRun -Choices @($k, 'X')
+        Assert-Smoke72OneCall -Run $run -Ctx ("[{0}]" -f $k) -Expected $expect[$k]
+        if ($run.Pauses -ne 1) { throw ("[{0}]: {1} pausas despues del handler; esperada 1" -f $k, $run.Pauses) }
+        if ($run.Result -ne 'X' -or $run.Left -ne 0) { throw ("[{0}]: el menu no siguio hasta la X (devolvio '{1}', quedaron {2})" -f $k, $run.Result, $run.Left) }
+    }
+}
+
+Test-SmokeFunction 'Router' '#72 despacho por el handler: [U] y [L] con $true terminan el menu con U; con $false pausan y siguen' {
+    foreach ($k in @('U', 'L')) {
+        [string] $h = if ($k -eq 'U') { 'Invoke-UninstallToolkit' } else { 'Invoke-ServiceClose' }
+        $run = Invoke-Smoke72MainMenuRun -Choices @($k, 'X') -CloseResult $true -UninstallResult $true
+        Assert-Smoke72OneCall -Run $run -Ctx ("[{0}] con `$true" -f $k) -Expected $h
+        if ($run.Result -ne 'U') { throw ("[{0}] con `$true: el menu devolvio '{1}'; esperado 'U'" -f $k, $run.Result) }
+        if ($run.Pauses -ne 0 -or $run.Left -ne 1) { throw ("[{0}] con `$true: el menu no termino al toque ({1} pausas, quedaron {2})" -f $k, $run.Pauses, $run.Left) }
+        $run = Invoke-Smoke72MainMenuRun -Choices @($k, 'X') -CloseResult $false -UninstallResult $false
+        Assert-Smoke72OneCall -Run $run -Ctx ("[{0}] con `$false" -f $k) -Expected $h
+        if ($run.Pauses -ne 1) { throw ("[{0}] con `$false: {1} pausas; esperada 1" -f $k, $run.Pauses) }
+        if ($run.Result -ne 'X' -or $run.Left -ne 0) { throw ("[{0}] con `$false: el menu no siguio (devolvio '{1}', quedaron {2})" -f $k, $run.Result, $run.Left) }
+    }
+}
+
+Test-SmokeFunction 'Router' '#72 despacho por el handler: tecla invalida -> Opcion invalida.; minuscula despacha igual que mayuscula' {
+    $run = Invoke-Smoke72MainMenuRun -Choices @('Z', 'X')
+    if ($run.Out -notmatch 'Opcion invalida\.') { throw 'la tecla invalida no dijo Opcion invalida.' }
+    if ($run.Calls.Count -ne 0) { throw ('la tecla invalida llamo a {0}' -f (($run.Calls | ForEach-Object { $_.Name }) -join ', ')) }
+    if ($run.Pauses -ne 1 -or $run.Result -ne 'X') { throw ("tecla invalida: {0} pausas, devolvio '{1}'" -f $run.Pauses, $run.Result) }
+    # Por el menu (el lector normaliza) y directo al despacho (que tiene que
+    # aceptar minusculas solo: lo llaman tests y callers sin pasar por el lector).
+    $run = Invoke-Smoke72MainMenuRun -Choices @('f', 'X')
+    Assert-Smoke72OneCall -Run $run -Ctx "menu 'f'" -Expected 'Invoke-FpsMeasurement'
+    $run = Invoke-Smoke72MainMenuRun -Choices @('f') -Direct
+    Assert-Smoke72OneCall -Run $run -Ctx "despacho directo 'f'" -Expected 'Invoke-FpsMeasurement'
+    # [U] y [L] directos descartan el resultado de la accion ($null =): si no, el
+    # bool se imprime crudo en la consola del cliente.
+    foreach ($k in @('u', 'l')) {
+        $run = Invoke-Smoke72MainMenuRun -Choices @($k) -Direct -UninstallResult $true -CloseResult $true
+        [string] $h = if ($k -eq 'u') { 'Invoke-UninstallToolkit' } else { 'Invoke-ServiceClose' }
+        Assert-Smoke72OneCall -Run $run -Ctx ("despacho directo '{0}'" -f $k) -Expected $h
+        if ($run.DirectOut.Count -ne 0) { throw ("el despacho directo de [{0}] dejo {1} objeto(s) en el pipeline: '{2}'" -f $k, $run.DirectOut.Count, ($run.DirectOut -join ', ')) }
+    }
+}
 Test-SmokeFunction 'Router' '#46 Get-PctkBannerCim: consulta CIM UNA vez por sesion (1122 ms medidos por consulta)' {
     # Medido 2026-09-09 en la maquina de Mateo: Win32_Processor tarda ~1040 ms y
     # Win32_OperatingSystem ~28 ms. Eso corria en CADA redibujo completo del menu
