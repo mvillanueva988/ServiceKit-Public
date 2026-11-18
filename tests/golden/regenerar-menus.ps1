@@ -2,8 +2,8 @@
 <#
 .SYNOPSIS
     Regenera los golden de los menus (#72): la foto en texto y su capa de color
-    del menu principal (120x30 y 120x44), del submenu [A] (120x30 y 120x44) y del
-    submenu [2] (120x30).
+    del menu principal (120x30 y 120x44), del submenu [A] (120x30 y 120x44), del
+    submenu [2] (120x30) y del submenu [F] (120x30).
 
 .DESCRIPTION
     El smoke NUNCA escribe los golden: los compara. Este script es la unica via
@@ -27,8 +27,8 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Principal', 'Acciones', 'Receta')]
-    [string[]] $Menu = @('Principal', 'Acciones', 'Receta')
+    [ValidateSet('Principal', 'Acciones', 'Receta', 'Fps')]
+    [string[]] $Menu = @('Principal', 'Acciones', 'Receta', 'Fps')
 )
 
 Set-StrictMode -Version Latest
@@ -62,6 +62,7 @@ $sizes = @{
     Principal = @(@(120, 30), @(120, 44))
     Acciones  = @(@(120, 30), @(120, 44))
     Receta    = @(, @(120, 30))
+    Fps       = @(, @(120, 30))
 }
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)

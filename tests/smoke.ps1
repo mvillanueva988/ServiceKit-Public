@@ -3601,11 +3601,13 @@ function New-SmokeMenuFixture {
 function Get-SmokeMenuTarget {
     # Que handler corre la foto de cada menu, con que tecla sale, que devuelve al
     # salir y como se llaman sus golden.
-    param([Parameter(Mandatory)] [ValidateSet('Principal', 'Acciones', 'Receta')] [string] $Menu)
+    param([Parameter(Mandatory)] [ValidateSet('Principal', 'Acciones', 'Receta', 'Fps')] [string] $Menu)
     switch ($Menu) {
         'Principal' { return [PSCustomObject]@{ Handler = 'Show-MainMenu';                 Key = 'X'; Result = 'X'; Golden = 'menu-principal' } }
         'Acciones'  { return [PSCustomObject]@{ Handler = 'Show-IndividualActionsSubmenu'; Key = 'B'; Result = '';  Golden = 'menu-acciones' } }
         'Receta'    { return [PSCustomObject]@{ Handler = 'Invoke-NamedProfileMenu';       Key = 'B'; Result = '';  Golden = 'menu-receta' } }
+        # [F] vive en modules\MedicionFps.ps1; su header no dibuja el banner.
+        'Fps'       { return [PSCustomObject]@{ Handler = 'Invoke-FpsMeasurement';         Key = 'B'; Result = '';  Golden = 'menu-fps' } }
     }
 }
 
@@ -3619,7 +3621,7 @@ function Get-SmokeMenuPhoto {
     # o si el frame pasa $Height lineas.
     param(
         [Parameter(Mandatory)] [int] $Width, [Parameter(Mandatory)] [int] $Height,
-        [ValidateSet('Principal', 'Acciones', 'Receta')] [string] $Menu = 'Principal'
+        [ValidateSet('Principal', 'Acciones', 'Receta', 'Fps')] [string] $Menu = 'Principal'
     )
     $target = Get-SmokeMenuTarget -Menu $Menu
     $fx = New-SmokeMenuFixture
@@ -3733,6 +3735,9 @@ Test-SmokeFunction 'ConsoleMenu' '#72 foto: submenu [A] a 120x44 identico al gol
 }
 Test-SmokeFunction 'ConsoleMenu' '#72 foto: submenu [2] a 120x30 identico al golden (texto + color)' {
     Assert-SmokeMenuGolden -Width 120 -Height 30 -Menu 'Receta'
+}
+Test-SmokeFunction 'ConsoleMenu' '#72 foto: submenu [F] a 120x30 identico al golden (texto + color)' {
+    Assert-SmokeMenuGolden -Width 120 -Height 30 -Menu 'Fps'
 }
 
 function Invoke-Smoke72MainMenuRun {
@@ -4019,6 +4024,101 @@ Test-SmokeFunction 'Router' '#72 despacho por el handler: [2] B y b vuelven sin 
     if ($run.Out -notmatch 'Opcion invalida\.') { throw '[2] la tecla invalida no dijo Opcion invalida.' }
     if ($run.Ev.Count -ne 0) { throw ('[2] la tecla invalida corrio {0}' -f ($run.Ev -join ' || ')) }
     if ($run.Pauses -ne 0 -or $run.Left -ne 0) { throw ("[2] tecla invalida: {0} pausas, quedaron {1}" -f $run.Pauses, $run.Left) }
+}
+
+# Submenu [F] (modules\MedicionFps.ps1): Invoke-FpsMeasurement REAL con el lector
+# real (fallback plano: Read-Host da las opciones en orden) y las tres funciones
+# de las opciones sombreadas: anotan la llamada y el OutputRootOverride recibido.
+# -Throws hace que esa funcion tire (para ver el crash del despacho). Si el
+# submenu pide otra opcion con la cola vacia, tira (no volvio).
+function Invoke-Smoke72FpsRun {
+    param([string[]] $Choices, [string] $Throws = '')
+    $smk72f = @{
+        Queue = [System.Collections.Generic.Queue[string]]::new(); Calls = [System.Collections.Generic.List[object]]::new()
+        Crashes = [System.Collections.Generic.List[string]]::new(); Out = [System.Text.StringBuilder]::new(); Pauses = 0; Reads = 0
+        Throws = $Throws; Root = 'C:\pctk-smoke72-fps-root'
+    }
+    foreach ($c in $Choices) { $smk72f.Queue.Enqueue($c) }
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) [void] $smk72f.Out.AppendLine([string]$Object) }
+    function Clear-Host { }
+    function Read-Host {
+        param([Parameter(Position = 0)] $Prompt)
+        if ([string]$Prompt -match 'Enter\] para continuar') { $smk72f.Pauses++; return '' }
+        if ($smk72f.Queue.Count -eq 0) { throw 'smoke72: el submenu [F] pidio otra opcion con la cola vacia (no volvio)' }
+        $smk72f.Reads++
+        return $smk72f.Queue.Dequeue()
+    }
+    function Test-PctkInteractiveConsole { return $false }
+    function Get-PctkConsoleWindowWidth { return 120 }
+    function Write-DispatchCrash { param($ErrorRecord, $Choice, $MenuLabel) $smk72f.Crashes.Add(('{0} [{1}] {2}' -f $MenuLabel, $Choice, $ErrorRecord.Exception.Message)) }
+    function Invoke-FpsCaptureBatch {
+        param([string] $OutputRootOverride = '<sin pasar>')
+        $smk72f.Calls.Add([PSCustomObject]@{ Name = 'Invoke-FpsCaptureBatch'; Root = $OutputRootOverride })
+        if ($smk72f.Throws -eq 'Invoke-FpsCaptureBatch') { throw 'smoke72: la captura revento' }
+        return [PSCustomObject]@{ Lote = 'no tiene que imprimirse' }
+    }
+    function Invoke-FpsCompareMenu {
+        param([string] $OutputRootOverride = '<sin pasar>')
+        $smk72f.Calls.Add([PSCustomObject]@{ Name = 'Invoke-FpsCompareMenu'; Root = $OutputRootOverride })
+        if ($smk72f.Throws -eq 'Invoke-FpsCompareMenu') { throw 'smoke72: la comparacion revento' }
+        return [PSCustomObject]@{ Cmp = 'no tiene que imprimirse' }
+    }
+    function Show-FpsBenchGuide {
+        $smk72f.Calls.Add([PSCustomObject]@{ Name = 'Show-FpsBenchGuide'; Root = $null })
+        if ($smk72f.Throws -eq 'Show-FpsBenchGuide') { throw 'smoke72: la guia revento' }
+    }
+    $out = @(Invoke-FpsMeasurement -MachineProfile ([PSCustomObject]@{ Dummy = $true }) -OutputRootOverride $smk72f.Root)
+    return [PSCustomObject]@{
+        Calls = [object[]] $smk72f.Calls.ToArray(); Crashes = [string[]] $smk72f.Crashes.ToArray(); Reads = $smk72f.Reads
+        Pauses = $smk72f.Pauses; Left = $smk72f.Queue.Count; Out = $smk72f.Out.ToString(); Root = $smk72f.Root; Returned = $out
+    }
+}
+
+Test-SmokeFunction 'MedicionFps' '#72 despacho por el handler: cada tecla de [F] llama a su funcion una vez (1 y 2 con el OutputRootOverride recibido) y pausa' {
+    $expect = [ordered]@{ '1' = 'Invoke-FpsCaptureBatch'; '2' = 'Invoke-FpsCompareMenu'; '3' = 'Show-FpsBenchGuide' }
+    [string[]] $keys = @(Get-FpsMenuRows | Where-Object { $_.Kind -eq 'Item' -and $_.Key -ne 'B' } | ForEach-Object { [string]$_.Key })
+    if ($keys.Count -ne 3) { throw ('el submenu [F] tiene {0} opciones; el test cubre 3' -f $keys.Count) }
+    foreach ($k in $keys) {
+        if (-not $expect.Contains($k)) { throw ("la tecla [F][{0}] no tiene funcion esperada en este test" -f $k) }
+        $run = Invoke-Smoke72FpsRun -Choices @($k, 'B')
+        [string] $names = (($run.Calls | ForEach-Object { $_.Name }) -join ', ')
+        if ($run.Calls.Count -ne 1 -or $run.Calls[0].Name -cne $expect[$k]) { throw ("[F][{0}]: llamo a '{1}'; esperado {2} una vez" -f $k, $names, $expect[$k]) }
+        if ($k -ne '3' -and $run.Calls[0].Root -cne $run.Root) { throw ("[F][{0}]: {1} recibio OutputRootOverride '{2}'; esperado '{3}'" -f $k, $expect[$k], $run.Calls[0].Root, $run.Root) }
+        if ($run.Pauses -ne 1) { throw ("[F][{0}]: {1} pausas despues de la opcion; esperada 1" -f $k, $run.Pauses) }
+        if ($run.Left -ne 0) { throw ("[F][{0}]: el submenu no siguio hasta la B (quedaron {1})" -f $k, $run.Left) }
+        if ($run.Out -match 'Opcion invalida') { throw ("[F][{0}]: dijo Opcion invalida." -f $k) }
+        if ($run.Out -match 'no tiene que imprimirse') { throw ("[F][{0}]: imprimio lo que devolvio la opcion" -f $k) }
+        if ($run.Returned.Count -ne 0) { throw ("[F][{0}]: el submenu devolvio {1} objeto(s)" -f $k, $run.Returned.Count) }
+    }
+}
+
+Test-SmokeFunction 'MedicionFps' '#72 despacho por el handler: [F] B y b vuelven sin llamar a nada; invalida -> Opcion invalida. y pausa; vacio vuelve a mostrar sin pausa' {
+    foreach ($k in @('B', 'b')) {
+        $run = Invoke-Smoke72FpsRun -Choices @($k)
+        if ($run.Calls.Count -ne 0) { throw ("[F] '{0}' llamo a {1}" -f $k, (($run.Calls | ForEach-Object { $_.Name }) -join ', ')) }
+        if ($run.Pauses -ne 0) { throw ("[F] '{0}' pauso {1} veces antes de volver" -f $k, $run.Pauses) }
+        if ($run.Out -match 'Opcion invalida') { throw ("[F] '{0}' dijo Opcion invalida." -f $k) }
+        if ($run.Returned.Count -ne 0) { throw ("[F] '{0}' devolvio {1} objeto(s) al volver" -f $k, $run.Returned.Count) }
+    }
+    $run = Invoke-Smoke72FpsRun -Choices @('Z', 'B')
+    if ($run.Out -notmatch 'Opcion invalida\.') { throw '[F] la tecla invalida no dijo Opcion invalida.' }
+    if ($run.Calls.Count -ne 0) { throw ('[F] la tecla invalida llamo a {0}' -f (($run.Calls | ForEach-Object { $_.Name }) -join ', ')) }
+    if ($run.Pauses -ne 1 -or $run.Left -ne 0) { throw ("[F] tecla invalida: {0} pausas, quedaron {1}" -f $run.Pauses, $run.Left) }
+    # Vacio: el menu se vuelve a mostrar (otra lectura) sin pausa ni llamada.
+    $run = Invoke-Smoke72FpsRun -Choices @('', 'B')
+    if ($run.Calls.Count -ne 0) { throw ('[F] vacio llamo a {0}' -f (($run.Calls | ForEach-Object { $_.Name }) -join ', ')) }
+    if ($run.Pauses -ne 0) { throw ("[F] vacio pauso {0} veces" -f $run.Pauses) }
+    if ($run.Out -match 'Opcion invalida') { throw '[F] vacio dijo Opcion invalida.' }
+    if ($run.Reads -ne 2 -or $run.Left -ne 0) { throw ("[F] vacio: {0} lecturas (esperadas 2), quedaron {1}" -f $run.Reads, $run.Left) }
+}
+
+Test-SmokeFunction 'MedicionFps' '#72 despacho por el handler: [F] una opcion que tira -> Write-DispatchCrash con submenu [F], pausa, y el loop sigue' {
+    $run = Invoke-Smoke72FpsRun -Choices @('2', 'B') -Throws 'Invoke-FpsCompareMenu'
+    if ($run.Calls.Count -ne 1 -or $run.Calls[0].Name -cne 'Invoke-FpsCompareMenu') { throw ('[F] crash: llamo a {0}' -f (($run.Calls | ForEach-Object { $_.Name }) -join ', ')) }
+    if ($run.Crashes.Count -ne 1) { throw ('[F] crash: Write-DispatchCrash corrio {0} veces' -f $run.Crashes.Count) }
+    if ($run.Crashes[0] -notmatch '^submenu \[F\] \[2\] smoke72: la comparacion revento$') { throw ("[F] crash: Write-DispatchCrash recibio '{0}'" -f $run.Crashes[0]) }
+    if ($run.Pauses -ne 1) { throw ("[F] crash: {0} pausas; esperada 1" -f $run.Pauses) }
+    if ($run.Left -ne 0) { throw ("[F] crash: el loop no siguio hasta la B (quedaron {0})" -f $run.Left) }
 }
 
 function Get-Smoke72MenuKeyLiteralHits {
