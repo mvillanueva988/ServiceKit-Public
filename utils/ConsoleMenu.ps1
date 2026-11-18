@@ -77,19 +77,124 @@ function Get-MainMenuSpec {
     return [PSCustomObject]@{ AnchoTexto = 34; Entradas = $entradas }
 }
 
-function Get-MainMenuEntry {
+function Get-IndividualActionSpec {
     <#
     .SYNOPSIS
-        La entrada Opcion de la tabla del menu principal para una tecla, sin
-        importar mayusculas/minusculas. $null si la tecla no esta en la tabla.
+        El submenu [A] (acciones individuales) como DATOS (#72), misma forma que
+        Get-MainMenuSpec: de aca salen las filas (ConvertTo-PctkMenuRows) y el
+        despacho (Show-IndividualActionsSubmenu / Invoke-IndividualActionDispatch).
+    .DESCRIPTION
+        Sin columna de aclaracion: lo que va entre parentesis es parte del Texto.
+        Salida de las acciones = 'Pausa' (pide [Enter] y vuelve al submenu);
+        'Vuelve' = el submenu termina y se vuelve al menu principal, sin Accion.
+        Oculta = $true: la tecla funciona pero no se dibuja (la X vuelve, como
+        siempre, sin estar en la lista).
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+    [object[]] $entradas = @(
+        @{ Tipo = 'Seccion'; Texto = 'ACCIONES INDIVIDUALES' }
+        @{ Tipo = 'Opcion'; Tecla = '1'; Texto = 'Debloat de Servicios'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionDebloat -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '2'; Texto = 'Limpieza de Disco'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionCleanup -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '3'; Texto = 'Mantenimiento del Sistema (DISM + SFC)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionMaintenance -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '4'; Texto = 'Crear Punto de Restauracion'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionRestorePoint -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '5'; Texto = 'Optimizar Red'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionNetwork -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '6'; Texto = 'Rendimiento (visuales + power plan + tweaks)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionPerformance -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '7'; Texto = 'Backup de Drivers'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionDriverBackup -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '8'; Texto = 'Apps Win32 + UWP'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionApps -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '9'; Texto = 'Privacidad (registry o OOSU10)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionPrivacy -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '10'; Texto = 'Inicio del Sistema'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionStartup -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '11'; Texto = 'Actualizaciones de Windows'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionWindowsUpdate -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Seccion'; Texto = 'GAMING / LATENCIA  (avanzado - reinicio salvo USB)' }
+        @{ Tipo = 'Opcion'; Tecla = '12'; Texto = 'Core Isolation / Memory Integrity (HVCI)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionCoreIsolation -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '13'; Texto = 'HAGS (GPU Scheduling por hardware)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionHags -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '14'; Texto = 'Timer Resolution global (solo Win11)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionTimerResolution -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '15'; Texto = 'Prioridad de proceso por .exe (IFEO)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionProcessPriority -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '16'; Texto = 'USB Selective Suspend'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionUsbPower -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Seccion'; Texto = 'DISCO' }
+        @{ Tipo = 'Opcion'; Tecla = '17'; Texto = 'Mantenimiento de discos (TRIM SSD / defrag HDD)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionDiskMaintenance -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Seccion'; Texto = 'SEGURIDAD' }
+        @{ Tipo = 'Opcion'; Tecla = '18'; Texto = 'Encriptacion de disco (BitLocker)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionEncryption -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Seccion'; Texto = 'RENDIMIENTO' }
+        @{ Tipo = 'Opcion'; Tecla = '19'; Texto = 'Defender: reagendar escaneo + exclusiones (dev / WSL)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionDefenderScan -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '20'; Texto = 'Energia: PERFBOOSTMODE + laptop gaming (por PC)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-ActionEnergyLaptop -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Opcion'; Tecla = 'B'; Texto = 'Volver al menu principal'; Aclaracion = $null; Color = 'DarkYellow'; Salida = 'Vuelve'; Accion = $null }
+        # X tambien vuelve, sin estar dibujada: asi fue siempre (es la tecla de salir del principal).
+        @{ Tipo = 'Opcion'; Tecla = 'X'; Texto = 'Volver al menu principal'; Aclaracion = $null; Color = $null; Salida = 'Vuelve'; Accion = $null; Oculta = $true }
+        @{ Tipo = 'Separador' }
+    )
+    return [PSCustomObject]@{ AnchoTexto = 0; Entradas = $entradas }
+}
+
+function Get-NamedProfileSpec {
+    <#
+    .SYNOPSIS
+        El submenu [2] (receta nombrada) como DATOS (#72), misma forma que
+        Get-MainMenuSpec: de aca salen las filas y el despacho de
+        Invoke-NamedProfileMenu.
+    .DESCRIPTION
+        De un solo disparo: la opcion corre y el submenu termina. La pausa la pone
+        el menu principal ([2] tiene Salida = 'Pausa' alla), por eso las opciones
+        dicen 'Pausa'. 'Vuelve' = termina sin correr nada.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+    [object[]] $entradas = @(
+        @{ Tipo = 'Seccion'; Texto = 'RECETA NOMBRADA (gaming personalizado)' }
+        @{ Tipo = 'Opcion'; Tecla = '1'; Texto = 'Nueva'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-NamedProfileNew -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '2'; Texto = 'Cargar existente'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-NamedProfileLoad -MachineProfile $MachineProfile } }
+        @{ Tipo = 'Opcion'; Tecla = '3'; Texto = 'Reaplicar ultima'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+           Accion = { param($MachineProfile) Invoke-NamedProfileLoad -MachineProfile $MachineProfile -Reapply } }
+        @{ Tipo = 'Separador' }
+        @{ Tipo = 'Opcion'; Tecla = 'B'; Texto = 'Volver'; Aclaracion = $null; Color = 'DarkYellow'; Salida = 'Vuelve'; Accion = $null }
+        @{ Tipo = 'Separador' }
+    )
+    return [PSCustomObject]@{ AnchoTexto = 0; Entradas = $entradas }
+}
+
+function Get-PctkMenuEntry {
+    <#
+    .SYNOPSIS
+        La busqueda de entrada de los menus (#72): la entrada Opcion de una tabla
+        (Get-MainMenuSpec, Get-IndividualActionSpec, Get-NamedProfileSpec) para una
+        tecla, sin importar mayusculas/minusculas. Encuentra tambien las Oculta.
+        $null si la tecla no esta en la tabla.
     #>
     [CmdletBinding()]
     [OutputType([object])]
     param(
-        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Choice,
-        [object] $Spec = $null
+        [Parameter(Mandatory)] [object] $Spec,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Choice
     )
-    if ($null -eq $Spec) { $Spec = Get-MainMenuSpec }
     foreach ($e in @($Spec.Entradas)) {
         if ($e.Tipo -eq 'Opcion' -and [string]::Equals([string]$e.Tecla, $Choice, [System.StringComparison]::OrdinalIgnoreCase)) {
             return $e
@@ -98,20 +203,40 @@ function Get-MainMenuEntry {
     return $null
 }
 
+function Get-MainMenuEntry {
+    <#
+    .SYNOPSIS
+        Get-PctkMenuEntry sobre la tabla del menu principal (o sobre -Spec).
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Choice,
+        [object] $Spec = $null
+    )
+    if ($null -eq $Spec) { $Spec = Get-MainMenuSpec }
+    return (Get-PctkMenuEntry -Spec $Spec -Choice $Choice)
+}
+
 function ConvertTo-PctkMenuRows {
     <#
     .SYNOPSIS
-        Arma desde una tabla de menu (Get-MainMenuSpec) las filas Kind/Key/Label/Color
-        que consume Read-PctkMenuChoice.
+        Arma desde una tabla de menu (Get-MainMenuSpec, Get-IndividualActionSpec,
+        Get-NamedProfileSpec) las filas Kind/Key/Label/Color que consume
+        Read-PctkMenuChoice.
     .DESCRIPTION
-        Alinea la aclaracion sola: '  [Tecla]  ' + Texto rellenado a AnchoTexto, y si
-        el texto llega o pasa el ancho, 2 espacios; la aclaracion va entre
-        parentesis. Sin aclaracion, la fila termina en el texto (sin relleno).
+        La tecla va en un campo de ancho fijo: '[1]' lleva 2 espacios antes del
+        texto y '[10]' uno, asi las teclas de 1 y 2 caracteres quedan alineadas.
+        Alinea la aclaracion sola: Texto rellenado a AnchoTexto, y si el texto
+        llega o pasa el ancho, 2 espacios; la aclaracion va entre parentesis. Sin
+        aclaracion, la fila termina en el texto (sin relleno). Las entradas
+        Oculta no se dibujan (la tecla igual la encuentra Get-PctkMenuEntry).
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
     param([Parameter(Mandatory)] [object] $Spec)
     [int] $ancho = [int] $Spec.AnchoTexto
+    [int] $anchoTecla = 4   # el campo de la tecla ('[10]'), sin el espacio que lo separa del texto
     [object[]] $rows = @()
     foreach ($e in @($Spec.Entradas)) {
         switch ([string] $e.Tipo) {
@@ -122,14 +247,18 @@ function ConvertTo-PctkMenuRows {
                 $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
             }
             'Opcion' {
-                [string] $texto = [string] $e.Texto
-                [string] $label = '  [' + [string]$e.Tecla + ']  ' + $texto
-                if (-not [string]::IsNullOrEmpty([string]$e.Aclaracion)) {
-                    [int] $relleno = 2
-                    if ($texto.Length -lt $ancho) { $relleno = $ancho - $texto.Length }
-                    $label = $label + (' ' * $relleno) + '(' + [string]$e.Aclaracion + ')'
+                # Indexador y no .Oculta: con StrictMode, la clave ausente (la gran
+                # mayoria de las entradas) tira por propiedad; el indexador da $null.
+                if (-not $e['Oculta']) {
+                    [string] $texto = [string] $e.Texto
+                    [string] $label = '  ' + ('[' + [string]$e.Tecla + ']').PadRight($anchoTecla) + ' ' + $texto
+                    if (-not [string]::IsNullOrEmpty([string]$e.Aclaracion)) {
+                        [int] $relleno = 2
+                        if ($texto.Length -lt $ancho) { $relleno = $ancho - $texto.Length }
+                        $label = $label + (' ' * $relleno) + '(' + [string]$e.Aclaracion + ')'
+                    }
+                    $rows += [PSCustomObject]@{ Kind = 'Item'; Key = [string]$e.Tecla; Label = $label; Color = $e.Color }
                 }
-                $rows += [PSCustomObject]@{ Kind = 'Item'; Key = [string]$e.Tecla; Label = $label; Color = $e.Color }
             }
             default { throw ("ConvertTo-PctkMenuRows: tipo de entrada desconocido '{0}'" -f [string]$e.Tipo) }
         }
@@ -148,55 +277,14 @@ function Get-IndividualActionRows {
     [CmdletBinding()]
     [OutputType([object[]])]
     param()
-    [object[]] $rows = @()
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  ACCIONES INDIVIDUALES'; Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '1';   Label = '  [1]  Debloat de Servicios'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '2';   Label = '  [2]  Limpieza de Disco'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '3';   Label = '  [3]  Mantenimiento del Sistema (DISM + SFC)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '4';   Label = '  [4]  Crear Punto de Restauracion'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '5';   Label = '  [5]  Optimizar Red'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '6';   Label = '  [6]  Rendimiento (visuales + power plan + tweaks)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '7';   Label = '  [7]  Backup de Drivers'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '8';   Label = '  [8]  Apps Win32 + UWP'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '9';   Label = '  [9]  Privacidad (registry o OOSU10)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '10';  Label = '  [10] Inicio del Sistema'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '11';  Label = '  [11] Actualizaciones de Windows'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  GAMING / LATENCIA  (avanzado - reinicio salvo USB)'; Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '12';  Label = '  [12] Core Isolation / Memory Integrity (HVCI)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '13';  Label = '  [13] HAGS (GPU Scheduling por hardware)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '14';  Label = '  [14] Timer Resolution global (solo Win11)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '15';  Label = '  [15] Prioridad de proceso por .exe (IFEO)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '16';  Label = '  [16] USB Selective Suspend'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  DISCO'; Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '17';  Label = '  [17] Mantenimiento de discos (TRIM SSD / defrag HDD)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  SEGURIDAD'; Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '18';  Label = '  [18] Encriptacion de disco (BitLocker)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  RENDIMIENTO'; Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '19';  Label = '  [19] Defender: reagendar escaneo + exclusiones (dev / WSL)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '20';  Label = '  [20] Energia: PERFBOOSTMODE + laptop gaming (por PC)'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver al menu principal'; Color = 'DarkYellow' }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    return $rows
+    return (ConvertTo-PctkMenuRows -Spec (Get-IndividualActionSpec))
 }
 
 function Get-NamedProfileRows {
     [CmdletBinding()]
     [OutputType([object[]])]
     param()
-    [object[]] $rows = @()
-    $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = '  RECETA NOMBRADA (gaming personalizado)'; Color = 'DarkCyan' }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '1';   Label = '  [1]  Nueva'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '2';   Label = '  [2]  Cargar existente'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = '3';   Label = '  [3]  Reaplicar ultima'; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    $rows += [PSCustomObject]@{ Kind = 'Item';   Key = 'B';   Label = '  [B]  Volver'; Color = 'DarkYellow' }
-    $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
-    return $rows
+    return (ConvertTo-PctkMenuRows -Spec (Get-NamedProfileSpec))
 }
 
 function Test-PctkConsoleResized {

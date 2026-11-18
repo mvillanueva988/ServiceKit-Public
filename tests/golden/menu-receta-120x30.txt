@@ -1,0 +1,29 @@
+  ██████   ██████ ████████ ██  ██                                                                                       
+  ██   ██ ██         ██    ██ ██                                                                                        
+  ██████  ██         ██    ████                                                                                         
+  ██      ██         ██    ██ ██                                                                                        
+  ██       ██████    ██    ██  ██                                                                                       
+  PC Toolkit  v2  -  acelerador del operador                                                                            
+  Mateo Villanueva ~ mvillanueva988                                                                                     
+                                                                                                                        
+  ╔════════════════════════════════════════════════════════════════════════════╗                                        
+  ║ PCTk v2                                                               MID  ║                                        
+  ╠════════════════════════════════════════════════════════════════════════════╣                                        
+  ║ OS   Win11 Build 26100 64 bits                                             ║                                        
+  ║ CPU  AMD Ryzen 7 5800H with Radeon Graphics  8 nucleos / 16 hilos  [Ryzen] ║                                        
+  ║ RAM  N/A total  |  N/A disponible                                          ║                                        
+  ║ GPU  NVIDIA GeForce RTX 3060 Laptop GPU  [dGPU 6 GB VRAM]                  ║                                        
+  ║ OEM  ASUSTeK COMPUTER INC. TUF Gaming FX506HM  [sin catalogo OEM]          ║                                        
+  ║ S/N  ABC123                                                                ║                                        
+  ║ PRE  sin PRE                                                               ║                                        
+  ╚════════════════════════════════════════════════════════════════════════════╝                                        
+                                                                                                                        
+  ── RECETA NOMBRADA (gaming personalizado) ────────────                                                                
+> [1]  Nueva                                                                                                            
+  [2]  Cargar existente                                                                                                 
+  [3]  Reaplicar ultima                                                                                                 
+                                                                                                                        
+  [B]  Volver                                                                                                           
+                                                                                                                        
+                                                                                                                        
+  Usa flechas arriba/abajo + Enter, o la tecla del atajo:                                                               
