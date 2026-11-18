@@ -13,7 +13,8 @@
 # Forma del reporte (-Raw), leida del modulo de Windows (ConfigDefenderPerformance,
 # MSFT_MpPerformanceRecording.psm1: ConvertTo-DefenderScanStats / ConvertTo-DefenderScannedPathsStats):
 # duraciones en ticks de 100 ns (uint64); TopPaths = lista de { Path; Count; TotalDuration; ...;
-# Folder[] opcional con los hijos }. Se aplana a las hojas. El parser es TOLERANTE (un solo elemento,
+# Folder[] opcional con los hijos }. Se aplana a las hojas y despues las hojas que no son carpeta
+# (archivos, temporales ya borrados) se suben a su carpeta (Merge-DefenderPathRowsToFolders). El parser es TOLERANTE (un solo elemento,
 # TimeSpan ya convertido): lo que arma MpCmdRun en cada nivel se confirma en el gate HW elevado.
 #
 # ASCII puro a proposito (sin BOM): no mezclar non-ASCII aca sin re-aplicar el BOM.
@@ -231,6 +232,49 @@ function ConvertFrom-DefenderPerfReport {
     return [PSCustomObject]@{ Rows = $sorted; Extensions = $extSorted; TotalMs = $total }
 }
 
+function Merge-DefenderPathRowsToFolders {
+    <#
+    .SYNOPSIS
+        Una fila ofrecible es una CARPETA existente (#54, gate HW 20-10: la hoja mas cara era un
+        archivo suelto). Si la ruta de una fila no es carpeta (archivo existente, o temporal ya
+        borrado) y su padre SI lo es, la fila se suma al padre; filas que caen en la misma carpeta
+        (o un padre que ya era fila) se combinan por clave normalizada. Sin ruta ni padre carpeta
+        queda como esta. Count y TotalMs se suman, AvgMs y Percent se recalculan; sale ordenado por
+        TotalMs desc. Pura: "es carpeta" entra como predicado ({ param($p) ... } -> bool).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [object[]] $Rows = @(),
+        [Parameter(Mandatory)] [scriptblock] $IsFolder
+    )
+    $groups = [ordered]@{}
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        [string] $target = [string]$r.Path
+        if (-not [bool](& $IsFolder $target)) {
+            [string] $parent = ''
+            try { $parent = [string][System.IO.Path]::GetDirectoryName($target.TrimEnd('\')) } catch { $parent = '' }
+            if ($parent -ne '' -and [bool](& $IsFolder $parent)) { $target = $parent }
+        }
+        [string] $key = ConvertTo-DefenderPathKey -Path $target
+        if ($groups.Contains($key)) {
+            $g = $groups[$key]
+            $g.Count += [int64]$r.Count
+            $g.TotalMs += [double]$r.TotalMs
+        } else {
+            $groups[$key] = [PSCustomObject]@{ Path = $target; Count = [int64]$r.Count; TotalMs = [double]$r.TotalMs; AvgMs = 0.0; Percent = 0.0 }
+        }
+    }
+    [double] $total = 0
+    foreach ($g in $groups.Values) { $total += $g.TotalMs }
+    foreach ($g in $groups.Values) {
+        if ($g.Count -gt 0) { $g.AvgMs = $g.TotalMs / $g.Count }
+        if ($total -gt 0) { $g.Percent = ($g.TotalMs / $total) * 100 }
+    }
+    [object[]] $sorted = @($groups.Values | Sort-Object -Property TotalMs -Descending)
+    return $sorted
+}
+
 function Format-DefenderPathsExtLine {
     <#
     .SYNOPSIS
@@ -371,9 +415,11 @@ function Show-DefenderPaths {
         return
     }
     $parsed = ConvertFrom-DefenderPerfReport -Report $cap.Report
+    # Las hojas pueden ser archivos: se suben a su carpeta ANTES del top-N, para que el top sea de carpetas.
+    [object[]] $folderRows = @(Merge-DefenderPathRowsToFolders -Rows @($parsed.Rows) -IsFolder { param($p) Test-Path -LiteralPath $p -PathType Container })
     # Aplanado el arbol puede haber mas hojas que $TopPaths: la tabla muestra las $TopPaths mas caras.
-    [int] $measured = @($parsed.Rows).Count
-    [object[]] $rows0 = @($parsed.Rows | Select-Object -First $TopPaths)
+    [int] $measured = $folderRows.Count
+    [object[]] $rows0 = @($folderRows | Select-Object -First $TopPaths)
     if ($rows0.Count -eq 0) {
         Write-PctkWarn '  [!] La grabacion no registro escaneos por carpeta. Reproduci actividad real y repeti.'
         Write-ActionAudit -Action 'Defender.Paths' -Status 'Info' -Summary 'grabacion sin filas de TopPaths'
