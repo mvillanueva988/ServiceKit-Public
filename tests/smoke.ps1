@@ -2219,8 +2219,13 @@ Test-SmokeFunction 'DiskHealth' 'shape disco: SmartTimedOut presente por disco' 
 }
 Test-SmokeFunction 'DiskHealth' 'cableado: menu principal [7] -> Invoke-DiagnosticDiskHealth' {
     if (-not (Get-Command Invoke-DiagnosticDiskHealth -CommandType Function -ErrorAction SilentlyContinue)) { throw 'handler Invoke-DiagnosticDiskHealth ausente' }
-    $disp = (Get-Command Invoke-MainMenuDispatch -CommandType Function).Definition
-    if ($disp -notmatch "'7'\s*\{\s*Invoke-DiagnosticDiskHealth") { throw 'dispatch principal no rutea [7]' }
+    # #72: el despacho sale de la tabla; se corre la Accion de [7] con el handler sombreado.
+    $script:SmokeRuteo = ''
+    function Invoke-DiagnosticDiskHealth { param($MachineProfile) $script:SmokeRuteo = 'Invoke-DiagnosticDiskHealth' }
+    $e = Get-MainMenuEntry -Choice '7'
+    if ($null -eq $e) { throw 'la tabla del menu principal no tiene [7]' }
+    & $e.Accion ([PSCustomObject]@{ Dummy = $true })
+    if ($script:SmokeRuteo -ne 'Invoke-DiagnosticDiskHealth') { throw 'dispatch principal no rutea [7]' }
 }
 
 # ─── Uninstall: New-PctkUninstallScript (read-only, no ejecuta nada) ─────────
@@ -3807,6 +3812,65 @@ Test-SmokeFunction 'Router' '#72 despacho por el handler: tecla invalida -> Opci
         if ($run.DirectOut.Count -ne 0) { throw ("el despacho directo de [{0}] dejo {1} objeto(s) en el pipeline: '{2}'" -f $k, $run.DirectOut.Count, ($run.DirectOut -join ', ')) }
     }
 }
+function Get-Smoke72MenuKeyLiteralHits {
+    # Funciones del menu principal (las que leen su tabla o lo despachan) que
+    # comparan algo contra una tecla literal del menu: la intercepcion por tecla
+    # hardcodeada que #72 saco de Show-MainMenu. El despacho de la tabla queda
+    # afuera. Por AST: un comentario que nombra 'L' no cuenta.
+    param([System.Management.Automation.Language.Ast] $Ast, [string[]] $Keys, [string] $Source)
+    [string[]] $menuFns = @('Get-MainMenuSpec', 'Get-MainMenuRows', 'Get-MainMenuEntry', 'Invoke-MainMenuDispatch')
+    [System.Collections.Generic.List[string]] $hits = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $scanned = [System.Collections.Generic.List[string]]::new()
+    foreach ($fn in @($Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+        if ($fn.Name -eq 'Invoke-MainMenuDispatch') { continue }
+        [string[]] $called = @($fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { [string] $_.GetCommandName() })
+        if (@($called | Where-Object { $menuFns -contains $_ }).Count -eq 0) { continue }
+        [void] $scanned.Add($fn.Name)
+        foreach ($b in @($fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.BinaryExpressionAst] }, $true))) {
+            if ($b.Operator.ToString() -notmatch '^[IC](eq|ne|like|notlike|match|notmatch|in|notin|contains|notcontains)$') { continue }
+            foreach ($side in @($b.Left, $b.Right)) {
+                if ($side -is [System.Management.Automation.Language.StringConstantExpressionAst] -and @($Keys | Where-Object { $_ -eq $side.Value }).Count -gt 0) {
+                    [void] $hits.Add(('{0}:{1} {2}: {3}' -f $Source, $b.Extent.StartLineNumber, $fn.Name, $b.Extent.Text))
+                }
+            }
+        }
+        foreach ($sw in @($fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.SwitchStatementAst] }, $true))) {
+            foreach ($clause in @($sw.Clauses)) {
+                $cond = $clause.Item1
+                if ($cond -is [System.Management.Automation.Language.StringConstantExpressionAst] -and @($Keys | Where-Object { $_ -eq $cond.Value }).Count -gt 0) {
+                    [void] $hits.Add(('{0}:{1} {2}: switch {3}' -f $Source, $cond.Extent.StartLineNumber, $fn.Name, $cond.Extent.Text))
+                }
+            }
+        }
+    }
+    return [PSCustomObject]@{ Hits = [string[]] $hits.ToArray(); Scanned = [string[]] $scanned.ToArray() }
+}
+
+Test-SmokeFunction 'Router' '#72 guard: ninguna funcion de core\ compara la eleccion del menu principal contra una tecla literal (AST)' {
+    [string[]] $keys = @(@((Get-MainMenuSpec).Entradas) | Where-Object { $_.Tipo -eq 'Opcion' } | ForEach-Object { [string] $_.Tecla })
+    if (@($keys | Where-Object { $_ -in @('X', 'U', 'L') }).Count -ne 3) { throw ('la tabla perdio X/U/L: {0}' -f ($keys -join ',')) }
+    # Anti-vacuidad 1: el detector caza la forma vieja (if y switch) en un AST de muestra.
+    $tk = $null; $pe = $null
+    $muestra = [System.Management.Automation.Language.Parser]::ParseInput(
+        "function Show-Muestra { `$r = Get-MainMenuRows; `$choice = Read-Host; if (`$choice -eq 'L') { }; switch (`$choice) { 'X' { } } }", [ref] $tk, [ref] $pe)
+    [int] $nMuestra = @((Get-Smoke72MenuKeyLiteralHits -Ast $muestra -Keys $keys -Source 'muestra').Hits).Count
+    if ($nMuestra -ne 2) { throw ("el detector no caza la intercepcion hardcodeada en la muestra ({0} de 2)" -f $nMuestra) }
+    # El barrido: toda la carpeta core\, no un archivo (si el codigo se muda, sigue guardando).
+    [System.Collections.Generic.List[string]] $hits = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $scanned = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'core') -Filter '*.ps1' -File)) {
+        $tk = $null; $pe = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref] $tk, [ref] $pe)
+        $r = Get-Smoke72MenuKeyLiteralHits -Ast $ast -Keys $keys -Source $f.Name
+        foreach ($h in @($r.Hits)) { [void] $hits.Add($h) }
+        foreach ($s in @($r.Scanned)) { [void] $scanned.Add($s) }
+    }
+    # Anti-vacuidad 2: el loop del menu principal tiene que estar entre lo barrido.
+    if (-not $scanned.Contains('Show-MainMenu')) { throw ('el barrido no vio Show-MainMenu (vio: {0}): el guard quedaria verde por vacuidad' -f ($scanned -join ', ')) }
+    if ($hits.Count -gt 0) {
+        throw ('intercepcion por tecla literal fuera de la tabla ({0}); la decide Salida en Get-MainMenuSpec -> {1}' -f $hits.Count, ($hits -join ' | '))
+    }
+}
 Test-SmokeFunction 'Router' '#46 Get-PctkBannerCim: consulta CIM UNA vez por sesion (1122 ms medidos por consulta)' {
     # Medido 2026-09-09 en la maquina de Mateo: Win32_Processor tarda ~1040 ms y
     # Win32_OperatingSystem ~28 ms. Eso corria en CADA redibujo completo del menu
@@ -5000,8 +5064,13 @@ Test-SmokeFunction 'ClientReport' 'New-ClientReport: laptop con bateria no crash
 
 Test-SmokeFunction 'ClientReport' 'Router [8] rutea a Invoke-ClientReport' {
     $ErrorActionPreference = 'Stop'
-    [string] $dispDef = (Get-Command Invoke-MainMenuDispatch -CommandType Function).Definition
-    if ($dispDef -notmatch "'8'\s*\{\s*Invoke-ClientReport") {
+    # #72: el despacho sale de la tabla; se corre la Accion de [8] con el handler sombreado.
+    $script:SmokeRuteo = ''
+    function Invoke-ClientReport { param($MachineProfile) $script:SmokeRuteo = 'Invoke-ClientReport' }
+    $e = Get-MainMenuEntry -Choice '8'
+    if ($null -eq $e) { throw 'la tabla del menu principal no tiene [8]' }
+    & $e.Accion ([PSCustomObject]@{ Dummy = $true })
+    if ($script:SmokeRuteo -ne 'Invoke-ClientReport') {
         throw 'dispatch [8] no rutea a Invoke-ClientReport'
     }
 }
@@ -5149,11 +5218,18 @@ Test-SmokeFunction 'ServiceState' 'Router [L] rutea a Invoke-ServiceClose -> Inv
     $ErrorActionPreference = 'Stop'
     # La cadena cambio al unificar [L]/[U]: el dispatch va a Invoke-ServiceClose,
     # y ES ESE el que llama a Invoke-CloseService (recolector pieza C).
-    [string] $dispDef = (Get-Command Invoke-MainMenuDispatch -CommandType Function).Definition
-    if ($dispDef -notmatch "'L'\s*\{[\s\S]*?Invoke-ServiceClose") {
+    # La definicion REAL se lee antes de sombrear el handler (despues, Get-Command
+    # devuelve la sombra).
+    [string] $closeDef = (Get-Command Invoke-ServiceClose -CommandType Function).Definition
+    # #72: el despacho sale de la tabla; se corre la Accion de [L] con el handler sombreado.
+    $script:SmokeRuteo = ''
+    function Invoke-ServiceClose { $script:SmokeRuteo = 'Invoke-ServiceClose'; return $false }
+    $e = Get-MainMenuEntry -Choice 'L'
+    if ($null -eq $e) { throw 'la tabla del menu principal no tiene [L]' }
+    $null = & $e.Accion ([PSCustomObject]@{ Dummy = $true })
+    if ($script:SmokeRuteo -ne 'Invoke-ServiceClose') {
         throw 'dispatch [L] no rutea a Invoke-ServiceClose'
     }
-    [string] $closeDef = (Get-Command Invoke-ServiceClose -CommandType Function).Definition
     if ($closeDef -notmatch 'Invoke-CloseService') {
         throw 'Invoke-ServiceClose no llama a Invoke-CloseService (recolector pieza C)'
     }
@@ -6402,10 +6478,12 @@ Test-SmokeFunction 'ServiceState' 'Invoke-CloseService no pregunta por desinstal
     if ($def -match 'Invoke-UninstallToolkit') {
         throw 'Invoke-CloseService llama al [U]: recursion con Save-PreUninstallArtifacts'
     }
-    [string] $router = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'core\Router.ps1') -Raw -Encoding UTF8
     # El [L] tiene que poder SALIR de PCTk: si desinstala sin cerrarse, el deleter
-    # espera al PID 30s y despues intenta borrar una instalacion en uso.
-    if ($router -notmatch "\`$choice -eq 'L'") {
+    # espera al PID 30s y despues intenta borrar una instalacion en uso. #72: eso lo
+    # dice la tabla (Salida = TerminaSiTrue); que Show-MainMenu lo cumpla lo prueba
+    # el test del despacho por el handler.
+    $e = Get-MainMenuEntry -Choice 'L'
+    if ($null -eq $e -or [string]$e.Salida -ne 'TerminaSiTrue') {
         throw 'Show-MainMenu no intercepta la [L]: el [L] no puede cerrar PCTk al desinstalar'
     }
 }
