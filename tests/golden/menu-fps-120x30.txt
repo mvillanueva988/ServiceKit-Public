@@ -1,0 +1,10 @@
+                                                                                                                        
+  ── MEDICION DE FPS (CS2 + PresentMon, A/B base-variante-base) ───                                                     
+> [1]  Capturar un lote                  (N pasadas con la misma config)                                                
+  [2]  Comparar A/B                      (base, variante, base)                                                         
+  [3]  Guia del benchmark                                                                                               
+                                                                                                                        
+  [B]  Volver al menu principal                                                                                         
+                                                                                                                        
+                                                                                                                        
+  Usa flechas arriba/abajo + Enter, o la tecla del atajo:                                                               
