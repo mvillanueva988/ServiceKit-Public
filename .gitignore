@@ -6,6 +6,8 @@
 *.log
 *.csv
 *.txt
+# Fotos en texto del smoke (#72): son fixtures versionados, no salidas
+!tests/golden/*.txt
 
 # Datos serializados de powershell
 *.clixml
