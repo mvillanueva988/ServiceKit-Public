@@ -2,6 +2,20 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.13.0] - 2026-11-18
+
+Release: **Defender: medir qué rutas le cuestan y excluir sólo esas**. En `[A][19]`, la opción `[G]` graba la actividad de Defender, muestra las carpetas que más tiempo de escaneo consumen y ofrece excluir las que elijas, con confirmación y undo.
+
+### Added
+
+- **`[A][19] [G]` graba las rutas caras de Defender y ofrece exclusiones medidas (`modules/DefenderPaths.ps1`)**: lee el reporte de rendimiento de Defender, ordena las rutas por costo de escaneo y ofrece excluir las elegidas, con confirmación y undo. Nunca ofrece carpetas de Windows, raíces de disco, el perfil del usuario, TEMP, Descargas (también si está redirigida), ancestros de esas rutas ni lo que ya está excluido. Todo queda en el audit.
+
+### Fixed
+
+- **Las filas que se ofrecen son siempre carpetas (`modules/DefenderPaths.ps1`)**: un archivo suelto suma su costo a la carpeta que lo contiene; antes se podía ofrecer excluir un temporal.
+- **El reporte de Defender se lee entero (`modules/DefenderPaths.ps1`)**: se recorre el árbol de carpetas completo, no sólo el primer nivel, y una ruta que no es absoluta nunca se ofrece.
+- **La grabación ya no se rompe con la salida de `wpr.exe` (`modules/DefenderPaths.ps1`)**: el texto que imprimía la herramienta de grabación de Windows se mezclaba con el resultado y cortaba la opción.
+
 ## [2.12.1] - 2026-10-19
 
 Release: **el banner entra en la ventana**. Con una placa de video de nombre largo, o varias, la caja del banner salía más ancha que una consola de 120 columnas, cada línea ocupaba dos filas y el menú principal paginaba aunque hubiera lugar.
