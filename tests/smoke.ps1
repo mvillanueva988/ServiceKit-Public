@@ -1121,6 +1121,33 @@ Test-SmokeFunction 'DefenderPaths' 'reporte -Raw -> filas: 1 solo elemento, vari
     } finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $prev }
 }
 
+# (b2) #54 gate HW 20-10: la fila ofrecible es una CARPETA; un archivo (o un temporal ya borrado) sube a su padre.
+Test-SmokeFunction 'DefenderPaths' 'filas -> carpetas: archivo sube al padre, mismo padre se suma, padre-fila se combina, sin padre queda, 1 sola fila' {
+    Set-StrictMode -Version Latest
+    $folders = @('c:\data', 'c:\data\proj', 'c:\data\otra')
+    $isFolder = { param($p) $folders -contains ([string]$p).TrimEnd('\').ToLowerInvariant() }
+    function New-Row { param($p, $c, $ms) [PSCustomObject]@{ Path = $p; Count = [int64]$c; TotalMs = [double]$ms; AvgMs = 0.0; Percent = 0.0 } }
+    $in = @(
+        (New-Row 'C:\Data\proj\a.txt' 10 100),
+        (New-Row 'C:\Data\proj\b.txt' 20 300),
+        (New-Row 'C:\Data\otra' 5 100),
+        (New-Row 'C:\Data\otra\gone.tmp' 5 100),
+        (New-Row 'Z:\nada\x.bin' 1 150))
+    [object[]] $out = @(Merge-DefenderPathRowsToFolders -Rows $in -IsFolder $isFolder)
+    if ($out.Count -ne 3) { throw ('esperaba 3 filas, hay {0}: {1}' -f $out.Count, (@($out | ForEach-Object { $_.Path }) -join ';')) }
+    [string] $order = (@($out | ForEach-Object { $_.Path }) -join ';')
+    if ($order -ne 'C:\Data\proj;C:\Data\otra;Z:\nada\x.bin') { throw ('orden/rutas: {0}' -f $order) }
+    if ($out[0].Count -ne 30 -or [math]::Abs($out[0].TotalMs - 400) -gt 0.001 -or [math]::Abs($out[0].AvgMs - (400 / 30)) -gt 0.001) { throw 'proj: suma de Count/TotalMs/AvgMs mal' }
+    if ($out[1].Count -ne 10 -or [math]::Abs($out[1].TotalMs - 200) -gt 0.001) { throw 'otra: la fila-padre y el hijo no se combinaron' }
+    [double] $sum = 0
+    foreach ($r in $out) { $sum += $r.Percent }
+    if ([math]::Abs($sum - 100) -gt 0.001 -or [math]::Abs($out[0].Percent - (400 / 750 * 100)) -gt 0.001) { throw ('Percent: suma {0}, fila 1 {1}' -f $sum, $out[0].Percent) }
+    [object[]] $one = @(Merge-DefenderPathRowsToFolders -Rows @((New-Row 'C:\Data\proj\a.txt' 3 30)) -IsFolder $isFolder)
+    if ($one.Count -ne 1 -or $one[0].Path -ne 'C:\Data\proj' -or [math]::Abs($one[0].Percent - 100) -gt 0.001) { throw 'una sola fila: debe subir al padre con 100 %' }
+    [object[]] $none = @(Merge-DefenderPathRowsToFolders -Rows @() -IsFolder $isFolder)
+    if ($none.Count -ne 0) { throw 'sin filas debe dar 0' }
+}
+
 # Fixture compartida de los tests del handler: se dot-sourcea dentro de cada test.
 $script:DpSetup = {
     $script:DpAnswers = [System.Collections.Generic.Queue[string]]::new()
@@ -1204,6 +1231,47 @@ Test-SmokeFunction 'DefenderPaths' 'handler "G": fila no ofrecible + inexistente
         if ($script:DpAdded.Count -ne 0) { throw 'aplico con confirmacion N' }
         if (@($script:DpAudit | Where-Object { $_ -like 'Defender.Exclusions.Measured|Cancelled|*' }).Count -ne 1) { throw ('audit tras N: {0}' -f ($script:DpAudit -join ' // ')) }
     } finally { Remove-Item -LiteralPath $script:DpRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# (d2) #54 gate HW 20-10: la hoja mas cara del arbol es un ARCHIVO real; la fila 1, el .txt y la exclusion son la CARPETA.
+Test-SmokeFunction 'DefenderPaths' 'handler "G": la hoja es un archivo real -> la fila 1, el .txt y la exclusion son la carpeta' {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    . $script:DpSetup
+    [string] $realTemp = $env:TEMP
+    [string] $work = Join-Path $script:DpRoot 'proyecto'
+    $null = New-Item -ItemType Directory -Path $work
+    [string] $file = Join-Path $work 'g00967.txt'
+    [System.IO.File]::WriteAllText($file, 'x')
+    $script:DpFile = $file
+    $script:DpWork = $work
+    function Get-MpPerformanceReport {
+        [CmdletBinding()] param($Path, $TopPaths, $TopPathsDepth, $TopExtensions, [switch] $Raw)
+        [PSCustomObject]@{
+            TopPaths = @(
+                [PSCustomObject]@{ Path = (Split-Path -Parent $script:DpWork); Count = 900; TotalDuration = [int64]300000000; Folder = @(
+                    [PSCustomObject]@{ Path = $script:DpFile; Count = 800; TotalDuration = [int64]250000000 }) },
+                [PSCustomObject]@{ Path = 'C:\Windows\System32'; Count = 100; TotalDuration = [int64]50000000 })
+            TopExtensions = @([PSCustomObject]@{ Extension = '.txt'; Count = 800; TotalDuration = [int64]250000000 })
+        }
+    }
+    foreach ($a in @('G', '', '', '1', 'S')) { $script:DpAnswers.Enqueue($a) }
+    try {
+        # TEMP no se ofrece: la carpeta del test vive bajo el TEMP real, asi que el del entorno se corre un rato.
+        $env:TEMP = 'C:\pctk-smoke-temp-falso'
+        Invoke-ActionDefenderScan -MachineProfile ([PSCustomObject]@{}) -OutputRootOverride $script:DpRoot -TempRootOverride $script:DpRoot *>&1 | Out-Null
+        $env:TEMP = $realTemp
+        if ($script:DpAdded.Count -ne 1 -or $script:DpAdded[0] -ne $work) { throw ('Add-MpPreference recibio: [{0}] y se esperaba la carpeta {1}' -f ($script:DpAdded -join ';'), $work) }
+        [object[]] $txts = @(Get-ChildItem -LiteralPath (Join-Path $script:DpRoot 'defender') -Filter 'rutas_*.txt' -File)
+        if ($txts.Count -ne 1) { throw ('esperaba 1 rutas_*.txt, hay {0}' -f $txts.Count) }
+        [string[]] $lines = [System.IO.File]::ReadAllLines($txts[0].FullName)
+        [string[]] $l1 = @($lines | Where-Object { $_ -match '^\[1\]\s' })
+        if ($l1.Count -ne 1 -or -not $l1[0].Contains($work) -or $l1[0].Contains('g00967.txt') -or $l1[0] -match 'NO se ofrece') { throw ('fila [1] del .txt: {0}' -f ($l1 -join ' // ')) }
+        if (@($lines | Where-Object { $_.Contains('g00967.txt') }).Count -ne 0) { throw 'el archivo suelto aparece en el .txt' }
+    } finally {
+        $env:TEMP = $realTemp
+        Remove-Item -LiteralPath $script:DpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # (e) sin admin / Defender no disponible -> Skipped sin crash y sin grabar.

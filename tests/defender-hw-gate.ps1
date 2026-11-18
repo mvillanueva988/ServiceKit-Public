@@ -136,8 +136,9 @@ try {
         if ($pr -match 'Numeros a excluir') {
             [object[]] $f = @(Get-ChildItem -LiteralPath $script:GateOut -Filter 'rutas_*.txt' -File | Sort-Object LastWriteTime -Descending)
             if ($f.Count -eq 0) { return '' }
+            # La fila cuya ruta ES la carpeta del gate (no "la fila 1", ni un archivo de adentro).
             foreach ($l in [System.IO.File]::ReadAllLines($f[0].FullName)) {
-                if ($l -match '^\[(\d+)\]\s' -and $l.IndexOf('pctk-defgate-' + $script:GateStamp, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $l -notmatch 'NO se ofrece') { return $Matches[1] }
+                if ($l -match '^\[(\d+)\]\s+(.+?)\s+\|\s' -and $Matches[2].TrimEnd('\') -ieq $script:GateDir -and $l -notmatch 'NO se ofrece') { return $Matches[1] }
             }
             return ''
         }
@@ -168,8 +169,8 @@ try {
         $fails.Add('B+C: no quedo rutas_*.txt')
     } else {
         [string[]] $rl = [System.IO.File]::ReadAllLines($rutas[0].FullName)
-        [string[]] $mine = @($rl | Where-Object { $_.IndexOf('pctk-defgate-' + $stamp, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
-        if ($mine.Count -eq 0) { $fails.Add('B+C: la carpeta del gate no aparece como fila en rutas_*.txt') }
+        [string[]] $mine = @($rl | Where-Object { $_ -match '^\[\d+\]\s+(.+?)\s+\|\s' -and $Matches[1].TrimEnd('\') -ieq $gateDir })
+        if ($mine.Count -eq 0) { $fails.Add('B+C: la carpeta del gate no aparece como fila en rutas_*.txt (la fila debe ser la carpeta, no un archivo de adentro)') }
         elseif ($mine[0] -match 'NO se ofrece') { $fails.Add('B+C: la fila de la carpeta del gate figura como NO ofrecible') }
         $log.Add('--- rutas_*.txt: filas no ofrecibles (informativo)')
         foreach ($l in @($rl | Where-Object { $_ -match 'NO se ofrece' })) { $log.Add('  ' + $l) }
@@ -178,6 +179,9 @@ try {
     [string[]] $exNow = @($pref.ExclusionPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     $excluded = @($exNow | Where-Object { $_.TrimEnd('\') -ieq $gateDir }).Count -gt 0
     if (-not $excluded) { $fails.Add('B+C: la exclusion NO aparece en Get-MpPreference') }
+    # Bug viejo: una exclusion de un ARCHIVO de adentro. Cualquier cosa bajo la carpeta que no sea la carpeta es FAIL.
+    [string[]] $below = @($exNow | Where-Object { $_.TrimEnd('\').StartsWith($gateDir + '\', [StringComparison]::OrdinalIgnoreCase) })
+    if ($below.Count -gt 0) { $fails.Add('B+C: se excluyo algo DENTRO de la carpeta del gate (no la carpeta): ' + ($below -join '; ')) }
     [string] $auditFile = Join-Path $repoRoot ('output\audit\{0}.jsonl' -f (Get-Date).ToString('yyyy-MM-dd'))
     [bool] $auditOk = $false
     if (Test-Path -LiteralPath $auditFile) {
@@ -194,10 +198,18 @@ try {
     $log.Add('--- excepcion: ' + $_.Exception.ToString())
 } finally {
     # Siempre: sacar la exclusion, parar el job, borrar SOLO la carpeta propia (ruta guardada).
-    try { Remove-MpPreference -ExclusionPath $gateDir -ErrorAction Stop } catch { $log.Add('(Remove-MpPreference: ' + $_.Exception.Message + ')') }
+    # Por prefijo: la carpeta y todo lo que cuelga de ella (un archivo suelto excluido por error tambien).
+    try {
+        [string[]] $mineEx = @((Get-MpPreference).ExclusionPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and ($_.TrimEnd('\') -ieq $gateDir -or $_.TrimEnd('\').StartsWith($gateDir + '\', [StringComparison]::OrdinalIgnoreCase)) })
+        foreach ($m in $mineEx) {
+            try { Remove-MpPreference -ExclusionPath $m -ErrorAction Stop } catch { $log.Add('(Remove-MpPreference ' + $m + ': ' + $_.Exception.Message + ')') }
+        }
+        if ($mineEx.Count -eq 0) { try { Remove-MpPreference -ExclusionPath $gateDir -ErrorAction Stop } catch { $log.Add('(Remove-MpPreference: ' + $_.Exception.Message + ')') } }
+    } catch { $log.Add('(no se pudo leer Get-MpPreference para limpiar: ' + $_.Exception.Message + ')') }
     try {
         [string[]] $after = @((Get-MpPreference).ExclusionPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if (@($after | Where-Object { $_.TrimEnd('\') -ieq $gateDir }).Count -gt 0) { $fails.Add('B+C: la exclusion del gate NO se pudo sacar (sacala a mano: Remove-MpPreference -ExclusionPath ''' + $gateDir + ''')') }
+        [string[]] $stuck = @($after | Where-Object { $_.TrimEnd('\') -ieq $gateDir -or $_.TrimEnd('\').StartsWith($gateDir + '\', [StringComparison]::OrdinalIgnoreCase) })
+        foreach ($s in $stuck) { $fails.Add('B+C: la exclusion del gate NO se pudo sacar (sacala a mano: Remove-MpPreference -ExclusionPath ''' + $s + ''')') }
     } catch { $fails.Add('B+C: no se pudo verificar la limpieza de la exclusion: ' + $_.Exception.Message) }
     if ($null -ne $job) { Stop-Job -Job $job -ErrorAction SilentlyContinue; Remove-Job -Job $job -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 1
