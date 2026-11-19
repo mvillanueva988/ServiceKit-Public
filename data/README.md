@@ -17,7 +17,8 @@ data/
 
 ## Cuándo se popula cada carpeta
 
-- `profiles/auto/` — Stage 2/3. 12 recetas (4 use-cases × 3 tiers).
+- `profiles/auto/` — Stage 2/3. 3 recetas, una por use-case (`generic`, `work`, `multimedia`); el tier no elige archivo (ver `profiles/auto/README.md`).
+- `paquete-campo.json` — las tools que el paso 4 del service guiado (`[1]`) premarca en `[T]`; ids de `tools/manifest.json`.
 - `profiles/named/` — el operador vía `[N] Receta nombrada` en Stage 4. Gitignored.
 - `oosu10-profiles/` — Stage 2. El operador arma los `.cfg` una vez con OOSU10 GUI y los commitea.
 - `oem-bloat/` — Stage 2+. Catálogos opcionales referenciados por `core/MachineProfile.ps1::OemCatalogPath`.

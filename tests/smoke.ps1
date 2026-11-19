@@ -4118,9 +4118,12 @@ function Invoke-Smoke136Run {
         [string[]] $ThrowOn = @(),
         [bool] $CloseResult = $false,
         [switch] $KeepMemory,
+        # La primera entrada de PCTk: la variable de memoria todavia no existe (StrictMode).
+        [switch] $UnsetMemory,
         [switch] $Vt
     )
-    if (-not $KeepMemory) { $script:PctkGuiadoMem = $null }
+    if ($UnsetMemory) { Remove-Variable -Name 'PctkGuiadoMem' -Scope Script -ErrorAction SilentlyContinue }
+    elseif (-not $KeepMemory) { $script:PctkGuiadoMem = $null }
     if ([string]::IsNullOrEmpty($StateDir)) {
         $StateDir = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk136-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     }
@@ -4298,7 +4301,7 @@ Test-SmokeFunction 'Guiado136' '#136 (f) un paso que revienta queda auditado y p
 }
 
 Test-SmokeFunction 'Guiado136' '#136 (g) sin service abierto no revienta: cabecera sin service, estado en memoria, sin archivo' {
-    $r = Invoke-Smoke136Run -Keys @('3', 'B')
+    $r = Invoke-Smoke136Run -Keys @('3', 'B') -UnsetMemory
     try {
         if ($r.Crashes.Count -gt 0) { throw ('crash: {0}' -f ($r.Crashes -join ' | ')) }
         if (($r.Screen -join "`n") -notmatch 'sin service abierto') { throw 'la cabecera no dice sin service abierto' }

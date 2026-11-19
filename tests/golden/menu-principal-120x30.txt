@@ -11,7 +11,7 @@
   ╚════════════════════════════════════════════════════════════════════════════╝                                        
                                                                                                                         
   ── PERFILES ──────────────────────────────────────────      ── ACCIONES MANUALES ─────────────────────────────────    
-> [1]  Aplicar perfil automatico                              [A]  Submenu: acciones individuales                       
+> [1]  Service guiado                                         [A]  Submenu: acciones individuales                       
   [2]  Receta nombrada                                        ── HERRAMIENTAS ──────────────────────────────────────    
   ── DIAGNOSTICO ───────────────────────────────────────      [T]  Herramientas externas                                
   [3]  Snapshot PRE-service                                   [I]  Informe tecnico del equipo                           
@@ -23,5 +23,5 @@
   [R]  Generar prompt de research                                                                                       
   [F]  Medir FPS en CS2                                                                                                 
                                                                                                                         
-  (Generic/Work/Multimedia)                                                                                             
+  (paso a paso, en el orden de campo)                                                                                   
   Flechas + Enter, o el atajo del margen.                                                                               

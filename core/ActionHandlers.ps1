@@ -642,6 +642,34 @@ function Invoke-ActionApps {
         -Summary ('OK={0} Failed={1} Manual={2} OkReinicio={3}' -f $okCount, $failCount, $manualApps.Count, $rebootCount)
 }
 
+function Invoke-ActionOosuGui {
+    <#
+    .SYNOPSIS
+        Abre OOSU10 en su GUI para configurarlo a mano. Si no esta descargado,
+        primero lo baja con el mismo mecanismo que [T] (Invoke-OOSUDownload ->
+        Bootstrap-Tools.ps1 -ToolName shutup10). Lo usan el [A][9] O y el paso 5
+        del service guiado (#136).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    $null = $MachineProfile
+
+    Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Started'
+    if (-not (Test-ShutUp10Available)) {
+        Write-PctkWork '  OOSU10 no esta descargado: bajandolo...'
+        $dl = Invoke-OOSUDownload
+        if (-not $dl.Success) {
+            Write-PctkWarn ('  [!] No se pudo bajar OOSU10: {0}' -f $dl.Error)
+            Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary ('download_failed: {0}' -f $dl.Error)
+            return
+        }
+        Write-ActionAudit -Action 'Privacy.OOSU.Download' -Status 'OK' -Summary $dl.ExePath
+    }
+    $r = Open-ShutUp10
+    if ($r.Success) { Write-PctkOk ('  [OK] OOSU10 abierto: {0}' -f $r.Path); Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Success' -Summary $r.Path }
+    else            { Write-PctkWarn ('  [!] {0}' -f $r.Error); Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary $r.Error }
+}
+
 function Invoke-ActionPrivacy {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
@@ -650,15 +678,8 @@ function Invoke-ActionPrivacy {
     Write-Host '  Modo: [B]asic  [M]edium  [A]ggressive  [O]OSU10 GUI  [V]olver'
     [string] $sub = (Read-Host '  Opcion').Trim().ToUpperInvariant()
     if ($sub -eq 'O') {
-        Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Started'
-        if (Test-ShutUp10Available) {
-            $r = Open-ShutUp10
-            if ($r.Success) { Write-PctkOk ('  [OK] OOSU10 abierto: {0}' -f $r.Path); Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Success' -Summary $r.Path }
-            else            { Write-PctkWarn ('  [!] {0}' -f $r.Error); Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary $r.Error }
-        } else {
-            Write-PctkWarn '  [!] OOSU10.exe no esta descargado. Usa [T] Herramientas para bajarlo.'
-            Write-ActionAudit -Action 'Privacy.OOSU10' -Status 'Failed' -Summary 'OOSU10 not installed'
-        }
+        # #136: el mismo helper que el paso 5 del service guiado (si falta, lo baja).
+        Invoke-ActionOosuGui -MachineProfile $MachineProfile
         return
     }
     [string] $profile = switch ($sub) {
@@ -705,7 +726,7 @@ function Invoke-ActionPrivacy {
     Write-Host ''
     Write-PctkWarn '  [!] DEPRECATED: esta accion aplica tweaks privacy NATIVOS'
     Write-PctkWarn '       (registry hardcoded por el toolkit, NO mantenido upstream).'
-    Write-PctkWarn '       Recomendado: usar [1] perfil automatico, que aplica'
+    Write-PctkWarn '       Recomendado: [1] service guiado, paso 8 (receta rapida), que aplica'
     Write-PctkWarn '       OOSU10 con .cfg curadas (mantenido por el proyecto OOSU).'
     Write-Host ''
     [string] $depConfirm = (Read-Host '  Continuar con tweaks nativos igual? [s/N]').Trim().ToUpperInvariant()
