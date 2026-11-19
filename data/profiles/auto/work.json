@@ -25,7 +25,6 @@
   "cleanup": { "clear_temp": true },
 
   "startup": {
-    "auto_disable_known_bloat": false,
     "report_only": true,
     "_note": "Solo lista startup en el preview/snapshot. Auto-disable diferido (backlog #11)."
   }
