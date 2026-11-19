@@ -15,29 +15,21 @@
   ║ GPU  NVIDIA GeForce RTX 3060 Laptop GPU  [dGPU 6 GB VRAM]                  ║                                        
   ║ OEM  ASUSTeK COMPUTER INC. TUF Gaming FX506HM  [sin catalogo OEM]          ║                                        
   ║ S/N  ABC123                                                                ║                                        
-  ║ PRE  sin PRE                                                               ║                                        
+  ║ PRE  sin PRE  -> tomar PRE [3] antes de trabajar                           ║                                        
   ╚════════════════════════════════════════════════════════════════════════════╝                                        
                                                                                                                         
-  Sin PRE para esta PC. Recomendado: tomar PRE [3] antes de trabajar.                                                   
-  ── PERFILES ──────────────────────────────────────────                                                                
-> [1]  Aplicar perfil automatico         (Generic/Work/Multimedia)                                                      
-  [2]  Receta nombrada                   (cliente especifico)                                                           
-  ── DIAGNOSTICO ───────────────────────────────────────                                                                
-  [3]  Snapshot PRE-service                                                                                             
-  [4]  Snapshot POST-service                                                                                            
-  [5]  Comparar PRE vs POST                                                                                             
-  [6]  Historial de BSOD / Crashes                                                                                      
+  ── PERFILES ──────────────────────────────────────────      ── ACCIONES MANUALES ─────────────────────────────────    
+> [1]  Aplicar perfil automatico                              [A]  Submenu: acciones individuales                       
+  [2]  Receta nombrada                                        ── HERRAMIENTAS ──────────────────────────────────────    
+  ── DIAGNOSTICO ───────────────────────────────────────      [T]  Herramientas externas                                
+  [3]  Snapshot PRE-service                                   [I]  Informe tecnico del equipo                           
+  [4]  Snapshot POST-service                                  [L]  Cerrar service y llevarse el paquete                 
+  [5]  Comparar PRE vs POST                                   [X]  Salir                                                
+  [6]  Historial de BSOD / Crashes                            [U]  Desinstalar PCTk de esta PC (borra todo)             
   [7]  Salud de discos (SMART / wear)                                                                                   
-  [8]  Reporte para el cliente           (HTML para mostrar/imprimir)                                                   
-  [R]  Generar prompt de research        (para LLM con web search)                                                      
-  [F]  Medir FPS en CS2                  (PresentMon, A/B base-variante-base)                                           
-  ── ACCIONES MANUALES ─────────────────────────────────                                                                
-  [A]  Submenu: acciones individuales    (debloat, limpieza, rendimiento, privacidad, etc.)                             
-  ── HERRAMIENTAS ──────────────────────────────────────                                                                
-  [T]  Herramientas externas                                                                                            
-  [I]  Informe tecnico del equipo        (.txt legible para leer/mandar)                                                
-  [L]  Cerrar service y llevarse el paquete  (POST + ZIP)                                                               
-  [X]  Salir                                                                                                            
-  [U]  Desinstalar PCTk de esta PC (borra todo)                                                                         
+  [8]  Reporte para el cliente                                                                                          
+  [R]  Generar prompt de research                                                                                       
+  [F]  Medir FPS en CS2                                                                                                 
                                                                                                                         
-  Usa flechas arriba/abajo + Enter, o la tecla del atajo:                                                               
+  (Generic/Work/Multimedia)                                                                                             
+  Flechas + Enter, o el atajo del margen.                                                                               

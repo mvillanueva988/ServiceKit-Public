@@ -416,6 +416,21 @@ Test-SmokeFunction 'ConsoleMenu' 'los dos menús sondean el teclado, no se bloqu
         }, $true) | Where-Object {
             $_.Member.Extent.Text -eq 'KeyAvailable'
         })
+        # #72 paso 4: Read-PctkMenuChoice sondea por el seam Test-PctkConsoleKeyAvailable
+        # (para que el smoke le pase teclas). Cuenta si lo llama Y el seam sondea KeyAvailable.
+        [object[]] $seamCalls = @($fn[0].FindAll({
+            param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Test-PctkConsoleKeyAvailable'
+        }, $true))
+        if ($polls.Count -eq 0 -and $seamCalls.Count -gt 0) {
+            [object[]] $seam = @($ast.FindAll({
+                param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]
+            }, $true) | Where-Object { $_.Name -eq 'Test-PctkConsoleKeyAvailable' })
+            if ($seam.Count -eq 1) {
+                $polls = @($seam[0].FindAll({
+                    param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst]
+                }, $true) | Where-Object { $_.Member.Extent.Text -eq 'KeyAvailable' })
+            }
+        }
         if ($polls.Count -eq 0) {
             throw ("{0} no sondea KeyAvailable: volvió al ReadKey bloqueante y el resize se vuelve a notar tarde" -f $nombre)
         }
@@ -3462,13 +3477,21 @@ function Invoke-Smoke99MenuRun {
     # Corre Read-PctkMenuChoice con las filas reales de [A] en una consola
     # simulada de $WinH filas. Devuelve los frames (uno por Clear-Host), el
     # estado del flag en cada render del header y el resultado.
-    param([int] $WinH, [switch] $ThrowOnCompactHeader)
-    $sim = @{ Top = 0; H = $WinH; Frames = [System.Collections.Generic.List[object]]::new(); Headers = [System.Collections.Generic.List[bool]]::new() }
+    # #72 paso 4: el ancho se simula (-WinW): con >= 100 el [A] va en dos columnas.
+    # Los Write-Host -NoNewline se juntan en la misma linea, como en la consola.
+    # -SinEstado: el header es solo el banner, como el del handler real de [A].
+    param([int] $WinH, [int] $WinW = 90, [switch] $ThrowOnCompactHeader, [switch] $SinEstado)
+    $sim = @{ Top = 0; H = $WinH; W = $WinW; Cur = ''; Frames = [System.Collections.Generic.List[object]]::new(); Headers = [System.Collections.Generic.List[bool]]::new() }
     $sim.Frames.Add([System.Collections.Generic.List[string]]::new())
-    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) $sim.Frames[$sim.Frames.Count - 1].Add([string]$Object); if (-not $NoNewline) { $sim.Top++ } }
-    function Clear-Host { $sim.Top = 0; $sim.Frames.Add([System.Collections.Generic.List[string]]::new()) }
+    function Write-Host {
+        param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline)
+        $sim.Cur += [string]$Object
+        if (-not $NoNewline) { $sim.Frames[$sim.Frames.Count - 1].Add($sim.Cur); $sim.Cur = ''; $sim.Top++ }
+    }
+    function Clear-Host { $sim.Top = 0; $sim.Cur = ''; $sim.Frames.Add([System.Collections.Generic.List[string]]::new()) }
     function Get-PctkConsoleCursorTop { return [int] $sim.Top }
     function Get-PctkConsoleWindowHeight { return [int] $sim.H }
+    function Get-PctkConsoleWindowWidth { return [int] $sim.W }
     function Test-PctkInteractiveConsole { return $true }
     # Sale enseguida: el primer sondeo de tecla revienta -> el lector cae a su
     # fallback plano (Read-Host). Funciona igual con o sin consola real.
@@ -3479,7 +3502,7 @@ function Invoke-Smoke99MenuRun {
         $sim.Headers.Add([bool] $script:PctkBannerCompact)
         if ($ThrowOnCompactHeader -and $script:PctkBannerCompact) { throw 'smoke99: header revento con el flag prendido' }
         Write-PctkMachineBanner -Rows $script:Smoke99BannerRows -Tier 'MID'
-        Write-Host '  estado'
+        if (-not $SinEstado) { Write-Host '  estado' }
     }
     [bool] $vtBefore = $script:PctkVT
     $script:PctkVT = $true
@@ -3504,6 +3527,30 @@ function Assert-Smoke99AllItems {
         if (-not $txt.Contains($lbl)) { throw ("{0}: el menu no dibujo '{1}' (cayo a Paged?)" -f $Ctx, $lbl) }
     }
     if ($txt -match 'mostrando') { throw ("{0}: el menu quedo paginado" -f $Ctx) }
+}
+
+function Get-Smoke72MenuRegion {
+    # Las lineas del menu de una foto sin ANSI: lo que viene despues del cierre de
+    # la caja del banner (asi el '[3]' de la fila PRE no cuenta como tecla dibujada).
+    param([string[]] $Lines)
+    [int] $last = -1
+    for ([int] $i = 0; $i -lt $Lines.Count; $i++) { if ($Lines[$i].Contains([string][char]0x255A)) { $last = $i } }
+    if ($last -lt 0) { throw 'la foto no tiene el cierre de la caja del banner' }
+    return [string[]] @($Lines | Select-Object -Skip ($last + 1))
+}
+
+function Assert-Smoke72MenuKeys {
+    # #72 paso 4: cada tecla visible de la tabla esta dibujada como celda ('  [k] ' o
+    # '> [k] ') en la zona del menu, y ninguna linea pasa de 118 columnas.
+    param([string[]] $Lines, [object] $Spec, [string] $Ctx)
+    [string[]] $menu = Get-Smoke72MenuRegion -Lines $Lines
+    [string] $txt = $menu -join "`n"
+    foreach ($e in @($Spec.Entradas | Where-Object { $_.Tipo -eq 'Opcion' -and -not $_['Oculta'] })) {
+        if ($txt -notmatch ('[ >] \[' + [regex]::Escape([string]$e.Tecla) + '\] ')) { throw ("{0}: la tecla [{1}] no esta dibujada" -f $Ctx, [string]$e.Tecla) }
+    }
+    foreach ($l in $Lines) {
+        if ($l.TrimEnd().Length -gt 118) { throw ("{0}: una linea mide {1} columnas (max 118): '{2}'" -f $Ctx, $l.TrimEnd().Length, $l.TrimEnd()) }
+    }
 }
 
 Test-SmokeFunction 'ConsoleMenu' '#99 Write-PctkMachineBanner compacto: -8 lineas, sin logo ni autor, la caja con TIER queda' {
@@ -3536,7 +3583,8 @@ Test-SmokeFunction 'ConsoleMenu' '#99 Write-PctkMachineBanner compacto: -8 linea
 }
 
 Test-SmokeFunction 'ConsoleMenu' '#99 handler: [A] a 44 filas entra entero con el banner compacto (no Paged)' {
-    $run = Invoke-Smoke99MenuRun -WinH 44
+    # Ancho 90: una columna, el caso que #99 arreglo (con >= 100 van dos columnas, #72).
+    $run = Invoke-Smoke99MenuRun -WinH 44 -WinW 90
     if ($run.MenuFrame -lt 0) { throw 'el lector no llego a dibujar el menu interactivo' }
     if ($run.Renders -ne 2) { throw ("esperado 2 renders del header (completo -> compacto); hubo {0}" -f $run.Renders) }
     if ($run.Headers[0] -or -not $run.Headers[1]) { throw ("flags por render: {0}; esperado False,True" -f ($run.Headers -join ',')) }
@@ -3546,18 +3594,23 @@ Test-SmokeFunction 'ConsoleMenu' '#99 handler: [A] a 44 filas entra entero con e
 }
 
 Test-SmokeFunction 'ConsoleMenu' '#99 handler: con alto 60 banner completo y sin redibujo extra' {
-    $run = Invoke-Smoke99MenuRun -WinH 60
+    $run = Invoke-Smoke99MenuRun -WinH 60 -WinW 90
     if ($run.Renders -ne 1) { throw ("esperado 1 render del header; hubo {0}" -f $run.Renders) }
     if ($run.Headers[0]) { throw 'el header se dibujo compacto con lugar de sobra' }
     if ((($run.Frames[$run.MenuFrame]) -join "`n") -notmatch 'Mateo Villanueva') { throw 'falta el banner completo' }
     Assert-Smoke99AllItems -Run $run -Ctx 'alto 60'
 }
 
-Test-SmokeFunction 'ConsoleMenu' '#99 handler: con alto 30 se queda compacto y pagina' {
-    $run = Invoke-Smoke99MenuRun -WinH 30
+Test-SmokeFunction 'ConsoleMenu' '#99 handler: con alto 30 y ancho 120 el [A] se queda compacto y ya no pagina (dos columnas, #72)' {
+    # Antes (#99) a 30 filas paginaba. Desde #72 paso 4, con ancho >= 100 el [A] va
+    # en dos columnas y entra sin paginar con el banner compacto.
+    $run = Invoke-Smoke99MenuRun -WinH 30 -WinW 120 -SinEstado
+    if ($run.MenuFrame -lt 0) { throw 'el lector no llego a dibujar el menu interactivo' }
     if ($run.Renders -ne 2) { throw ("esperado 2 renders del header; hubo {0}" -f $run.Renders) }
     if (-not $run.Headers[1]) { throw 'el ultimo header no fue compacto' }
-    if ((($run.Frames[$run.MenuFrame]) -join "`n") -notmatch 'mostrando') { throw 'a 30 filas tendria que paginar' }
+    [string[]] $plain = @($run.Frames[$run.MenuFrame] | ForEach-Object { ([string]$_) -replace '\x1b\[[0-9;?]*[A-Za-z]', '' })
+    if (($plain -join "`n") -match 'mostrando') { throw 'a 120x30 el [A] no tendria que paginar' }
+    Assert-Smoke72MenuKeys -Lines $plain -Spec (Get-IndividualActionSpec) -Ctx '[A] 120x30'
     if ($script:PctkBannerCompact) { throw 'el flag quedo prendido al volver del lector' }
 }
 
@@ -3738,6 +3791,174 @@ Test-SmokeFunction 'ConsoleMenu' '#72 foto: submenu [2] a 120x30 identico al gol
 }
 Test-SmokeFunction 'ConsoleMenu' '#72 foto: submenu [F] a 120x30 identico al golden (texto + color)' {
     Assert-SmokeMenuGolden -Width 120 -Height 30 -Menu 'Fps'
+}
+
+# ─── #72 paso 4: menus en dos columnas (layout de #99) ───────────────────────
+# Con ancho >= 100 y un corte de columna en la tabla (entrada Tipo = 'Columna'),
+# Read-PctkMenuChoice reparte el menu en dos columnas (la derecha en x = 60) y
+# decide el alto con la columna mas alta: a 120x30 el principal y el [A] entran
+# sin paginar. Las fotos corren el handler (Get-SmokeMenuPhoto); las teclas, el
+# lector real con una pantalla simulada de caracteres (Write-Host escribe en
+# (X, Y), Set-PctkConsoleCursor mueve el cursor: el redibujo surgical se ve).
+function Invoke-Smoke72ColumnKeys {
+    # Corre Read-PctkMenuChoice en modo interactivo simulado sobre la tabla $Spec,
+    # con la cola de teclas $Keys. Cuando la cola se vacia guarda la pantalla
+    # (Snap) y sale por el fallback plano: Read-Host devuelve '<fallback>', asi
+    # un Result '<FALLBACK>' dice que ninguna tecla eligio.
+    param([Parameter(Mandatory)] [object] $Spec, [object[]] $Keys = @(), [int] $WinW = 120, [int] $WinH = 30)
+    $scr = @{ X = 0; Y = 0; W = $WinW; H = $WinH; Lines = [System.Collections.Generic.List[string]]::new()
+              Keys = [System.Collections.Generic.Queue[object]]::new(); Snap = $null }
+    foreach ($k in $Keys) { $scr.Keys.Enqueue($k) }
+    function Write-Host {
+        param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline)
+        [string] $plain = ([string]$Object) -replace '\x1b\[[0-9;?]*[A-Za-z]', ''
+        while ($scr.Lines.Count -le $scr.Y) { $scr.Lines.Add('') }
+        [string] $ln = $scr.Lines[$scr.Y].PadRight($scr.X + $plain.Length)
+        $scr.Lines[$scr.Y] = $ln.Substring(0, $scr.X) + $plain + $ln.Substring($scr.X + $plain.Length)
+        $scr.X += $plain.Length
+        if (-not $NoNewline) { $scr.Y++; $scr.X = 0 }
+    }
+    function Clear-Host { $scr.Lines.Clear(); $scr.X = 0; $scr.Y = 0 }
+    function Get-PctkConsoleCursorTop { return [int] $scr.Y }
+    function Get-PctkConsoleWindowHeight { return [int] $scr.H }
+    function Get-PctkConsoleWindowWidth { return [int] $scr.W }
+    function Set-PctkConsoleCursor { param([int] $X, [int] $Y) $scr.X = $X; $scr.Y = $Y }
+    function Test-PctkInteractiveConsole { return $true }
+    function Test-PctkConsoleResized { return $false }
+    function Test-PctkConsoleKeyAvailable {
+        if ($scr.Keys.Count -gt 0) { return $true }
+        $scr.Snap = [string[]] $scr.Lines.ToArray()
+        throw 'smoke72c: sin mas teclas'
+    }
+    function Read-PctkConsoleKey { return $scr.Keys.Dequeue() }
+    function Read-Host { param([Parameter(Position = 0)] $Prompt) return '<fallback>' }
+    [scriptblock] $rh = { Clear-Host; Write-PctkMachineBanner -Rows $script:Smoke99BannerRows -Tier 'MID' }
+    [bool] $vtBefore = $script:PctkVT
+    $script:PctkVT = $true
+    try {
+        [string] $r = Read-PctkMenuChoice -Rows (ConvertTo-PctkMenuRows -Spec $Spec) -RenderHeader $rh
+    } finally { $script:PctkVT = $vtBefore; $script:PctkBannerCompact = $false }
+    if ($null -eq $scr.Snap) { $scr.Snap = [string[]] $scr.Lines.ToArray() }
+    return [PSCustomObject]@{ Result = $r; Snap = [string[]] $scr.Snap }
+}
+
+function New-Smoke72Key {
+    # Una tecla para la cola: 'Right'/'Left'/'Up'/'Down'/'Enter' o un caracter.
+    param([Parameter(Mandatory)] [string] $Name)
+    switch ($Name) {
+        'Right' { return [ConsoleKeyInfo]::new([char]0, [ConsoleKey]::RightArrow, $false, $false, $false) }
+        'Left'  { return [ConsoleKeyInfo]::new([char]0, [ConsoleKey]::LeftArrow, $false, $false, $false) }
+        'Up'    { return [ConsoleKeyInfo]::new([char]0, [ConsoleKey]::UpArrow, $false, $false, $false) }
+        'Down'  { return [ConsoleKeyInfo]::new([char]0, [ConsoleKey]::DownArrow, $false, $false, $false) }
+        'Enter' { return [ConsoleKeyInfo]::new([char]13, [ConsoleKey]::Enter, $false, $false, $false) }
+        default { return [ConsoleKeyInfo]::new([char]$Name, [ConsoleKey]::NoName, $false, $false, $false) }
+    }
+}
+
+function Get-Smoke72HiKey {
+    # La tecla resaltada en la pantalla ('> [k]'); tira si no hay exactamente una.
+    param([string[]] $Lines)
+    [object[]] $m = @([regex]::Matches(((Get-Smoke72MenuRegion -Lines $Lines) -join "`n"), '> \[([^\]]+)\]'))
+    if ($m.Count -ne 1) { throw ("se esperaba 1 opcion resaltada en pantalla; hay {0}" -f $m.Count) }
+    return [string] $m[0].Groups[1].Value
+}
+
+function Get-Smoke72AclLine {
+    # La linea de aclaracion: la que esta justo arriba de la linea de ayuda.
+    param([string[]] $Lines)
+    for ([int] $i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match 'Flechas \+ Enter|Usa flechas') { return $Lines[$i - 1] }
+    }
+    throw 'no hay linea de ayuda en pantalla'
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: menu principal a 120x30 en dos columnas, sin paginar, [1] y [A] en la misma fila, <= 118 columnas' {
+    $p = Get-SmokeMenuPhoto -Width 120 -Height 30
+    [string[]] $lines = @($p.Lines)
+    if (($lines -join "`n") -match 'mostrando') { throw 'a 120x30 el principal sigue paginado' }
+    Assert-Smoke72MenuKeys -Lines $lines -Spec (Get-MainMenuSpec) -Ctx 'principal 120x30'
+    [string[]] $menu = Get-Smoke72MenuRegion -Lines $lines
+    [object[]] $fila = @($menu | Where-Object { $_ -match '[ >] \[1\] ' })
+    if ($fila.Count -ne 1) { throw ("[1] aparece en {0} filas" -f $fila.Count) }
+    if ($fila[0] -notmatch '[ >] \[A\] ') { throw ("[A] no esta en la fila de [1]: '{0}'" -f $fila[0].TrimEnd()) }
+    if ($fila[0].IndexOf('[A]') -ne 62) { throw ("la columna derecha no arranca en x=60: [A] en la columna {0}" -f ($fila[0].IndexOf('[A]') - 2)) }
+    if ($fila[0] -match 'Generic/Work') { throw 'en dos columnas la fila no lleva la aclaracion entre parentesis' }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: submenu [A] a 120x30 en dos columnas, sin paginar, todas sus teclas' {
+    $p = Get-SmokeMenuPhoto -Width 120 -Height 30 -Menu 'Acciones'
+    [string[]] $lines = @($p.Lines)
+    if (($lines -join "`n") -match 'mostrando') { throw 'a 120x30 el [A] sigue paginado' }
+    Assert-Smoke72MenuKeys -Lines $lines -Spec (Get-IndividualActionSpec) -Ctx '[A] 120x30'
+    [object[]] $fila = @((Get-Smoke72MenuRegion -Lines $lines) | Where-Object { $_ -match '[ >] \[1\] ' })
+    if ($fila.Count -ne 1 -or $fila[0].Length -le 60 -or $fila[0].Substring(60).Trim() -eq '') { throw 'el [A] no tiene columna derecha en la fila de [1]' }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: a ancho 99 el principal queda en una columna (sin regresion)' {
+    # 99 y no 90: en una columna la fila de [A] con su aclaracion mide 91 (ya era
+    # asi antes de #72) y la foto a 90 tira por ancho. 99 es el borde del umbral.
+    $p = Get-SmokeMenuPhoto -Width 99 -Height 30
+    [string[]] $menu = Get-Smoke72MenuRegion -Lines @($p.Lines)
+    [object[]] $fila = @($menu | Where-Object { $_ -match '[ >] \[1\] ' })
+    if ($fila.Count -ne 1) { throw ("[1] aparece en {0} filas" -f $fila.Count) }
+    if ($fila[0] -match '\[A\]') { throw 'a ancho 90 [A] quedo en la fila de [1] (dos columnas)' }
+    if ($fila[0] -notmatch '\(Generic/Work/Multimedia\)') { throw 'en una columna la fila de [1] perdio la aclaracion' }
+    if (($menu -join "`n") -notmatch 'Usa flechas|mostrando') { throw 'la linea de ayuda no es la de una columna' }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: teclas en dos columnas (-> salta y no elige, abajo pasa de [F] a [A], Enter elige, atajo 5)' {
+    $spec = Get-MainMenuSpec
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys @(New-Smoke72Key 'Right')
+    if ($r.Result -ne '<FALLBACK>') { throw ("-> eligio '{0}': en dos columnas tiene que saltar de columna, no elegir" -f $r.Result) }
+    if ((Get-Smoke72HiKey -Lines $r.Snap) -ne 'A') { throw ("despues de -> desde [1] el resaltado esta en [{0}]; esperado [A]" -f (Get-Smoke72HiKey -Lines $r.Snap)) }
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys @((New-Smoke72Key 'Right'), (New-Smoke72Key 'Left'))
+    if ((Get-Smoke72HiKey -Lines $r.Snap) -ne '1') { throw ("-> y <- desde [1] deja el resaltado en [{0}]; esperado [1]" -f (Get-Smoke72HiKey -Lines $r.Snap)) }
+    [object[]] $downs = @(1..10 | ForEach-Object { New-Smoke72Key 'Down' })
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys ($downs[0..8])
+    if ((Get-Smoke72HiKey -Lines $r.Snap) -ne 'F') { throw ("9 veces abajo desde [1] resalta [{0}]; esperado [F]" -f (Get-Smoke72HiKey -Lines $r.Snap)) }
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys $downs
+    if ((Get-Smoke72HiKey -Lines $r.Snap) -ne 'A') { throw ("abajo desde [F] resalta [{0}]; esperado [A]" -f (Get-Smoke72HiKey -Lines $r.Snap)) }
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys @((New-Smoke72Key 'Right'), (New-Smoke72Key 'Enter'))
+    if ($r.Result -ne 'A') { throw ("-> y Enter devolvio '{0}'; esperado A" -f $r.Result) }
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys @(New-Smoke72Key '5')
+    if ($r.Result -ne '5') { throw ("el atajo 5 devolvio '{0}'" -f $r.Result) }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: la linea de aclaracion sigue al resaltado y queda vacia sin aclaracion' {
+    $spec = Get-MainMenuSpec
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec
+    [string] $acl = (Get-Smoke72AclLine -Lines $r.Snap).TrimEnd()
+    if ($acl -ne '  (Generic/Work/Multimedia)') { throw ("con [1] resaltado la aclaracion dice '{0}'" -f $acl) }
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys @(New-Smoke72Key 'Down')
+    $acl = (Get-Smoke72AclLine -Lines $r.Snap).TrimEnd()
+    if ($acl -ne '  (cliente especifico)') { throw ("con [2] resaltado la aclaracion dice '{0}'" -f $acl) }
+    $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys @((New-Smoke72Key 'Down'), (New-Smoke72Key 'Down'))
+    $acl = (Get-Smoke72AclLine -Lines $r.Snap).TrimEnd()
+    if ($acl -ne '') { throw ("con [3] (sin aclaracion) la linea dice '{0}'; esperada vacia" -f $acl) }
+}
+
+Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: sin PRE el aviso va en la fila PRE del banner y no hay linea suelta' {
+    $p = Get-SmokeMenuPhoto -Width 120 -Height 30
+    [string] $txt = @($p.Lines) -join "`n"
+    if ($txt -match 'Sin PRE para esta PC') { throw 'sigue la linea suelta Sin PRE para esta PC' }
+    [object[]] $pre = @($p.Lines | Where-Object { $_ -match ([string][char]0x2551 + ' PRE ') })
+    if ($pre.Count -ne 1) { throw ("filas PRE en el banner: {0}" -f $pre.Count) }
+    if ($pre[0] -notmatch 'sin PRE  -> tomar PRE \[3\] antes de trabajar') { throw ("la fila PRE no trae el aviso: '{0}'" -f $pre[0].TrimEnd()) }
+    # Con PRE la fila queda como antes: fecha y hora, sin aviso.
+    $fx = New-SmokeMenuFixture
+    # Nombre unico: Write-PctkMachineBanner tiene sus propias variables y el Write-Host
+    # sombreado resuelve por la pila.
+    $smk72PreOut = [System.Collections.Generic.List[string]]::new()
+    $smk72PreFx = $fx
+    function Write-Host { param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline) $smk72PreOut.Add([string]$Object) }
+    function Get-PctkBannerCim { return $smk72PreFx.Cim }
+    function Get-ServiceState { return [PSCustomObject]@{ pre_taken_at = '2026-11-19T10:05:00-03:00' } }
+    function Get-PctkConsoleWindowWidth { return 120 }
+    [bool] $vtBefore = $script:PctkVT
+    $script:PctkVT = $true
+    try { Show-MachineBanner -MachineProfile $fx.Profile -PreAviso } finally { $script:PctkVT = $vtBefore }
+    [string] $row = @($smk72PreOut | ForEach-Object { ([string]$_) -replace '\x1b\[[0-9;?]*[A-Za-z]', '' } | Where-Object { $_ -match ' PRE ' }) -join ''
+    if ($row -notmatch '2026-11-19 10:05' -or $row -match 'tomar PRE') { throw ("con PRE la fila cambio: '{0}'" -f $row) }
 }
 
 function Invoke-Smoke72MainMenuRun {

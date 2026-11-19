@@ -1,3 +1,11 @@
+  ██████   ██████ ████████ ██  ██                                                                                       
+  ██   ██ ██         ██    ██ ██                                                                                        
+  ██████  ██         ██    ████                                                                                         
+  ██      ██         ██    ██ ██                                                                                        
+  ██       ██████    ██    ██  ██                                                                                       
+  PC Toolkit  v2  -  acelerador del operador                                                                            
+  Mateo Villanueva ~ mvillanueva988                                                                                     
+                                                                                                                        
   ╔════════════════════════════════════════════════════════════════════════════╗                                        
   ║ PCTk v2                                                               MID  ║                                        
   ╠════════════════════════════════════════════════════════════════════════════╣                                        
@@ -10,31 +18,20 @@
   ║ PRE  sin PRE                                                               ║                                        
   ╚════════════════════════════════════════════════════════════════════════════╝                                        
                                                                                                                         
-  ── ACCIONES INDIVIDUALES ─────────────────────────────                                                                
-> [1]  Debloat de Servicios                                                                                             
-  [2]  Limpieza de Disco                                                                                                
-  [3]  Mantenimiento del Sistema (DISM + SFC)                                                                           
-  [4]  Crear Punto de Restauracion                                                                                      
-  [5]  Optimizar Red                                                                                                    
-  [6]  Rendimiento (visuales + power plan + tweaks)                                                                     
-  [7]  Backup de Drivers                                                                                                
-  [8]  Apps Win32 + UWP                                                                                                 
-  [9]  Privacidad (registry o OOSU10)                                                                                   
-  [10] Inicio del Sistema                                                                                               
-  [11] Actualizaciones de Windows                                                                                       
-  ── GAMING / LATENCIA  (avanzado - reinicio salvo USB) ───                                                             
-  [12] Core Isolation / Memory Integrity (HVCI)                                                                         
-  [13] HAGS (GPU Scheduling por hardware)                                                                               
-  [14] Timer Resolution global (solo Win11)                                                                             
-  [15] Prioridad de proceso por .exe (IFEO)                                                                             
-  [16] USB Selective Suspend                                                                                            
-  ── DISCO ─────────────────────────────────────────────                                                                
-  [17] Mantenimiento de discos (TRIM SSD / defrag HDD)                                                                  
-  ── SEGURIDAD ─────────────────────────────────────────                                                                
-  [18] Encriptacion de disco (BitLocker)                                                                                
-  ── RENDIMIENTO ───────────────────────────────────────                                                                
-  [19] Defender: reagendar escaneo + exclusiones (dev / WSL)                                                            
-  [20] Energia: PERFBOOSTMODE + laptop gaming (por PC)                                                                  
-  [B]  Volver al menu principal                                                                                         
+  ── ACCIONES INDIVIDUALES ─────────────────────────────      ── GAMING / LATENCIA  (avanzado - reinicio salvo USB) ──  
+> [1]  Debloat de Servicios                                   [12] Core Isolation / Memory Integrity (HVCI)             
+  [2]  Limpieza de Disco                                      [13] HAGS (GPU Scheduling por hardware)                   
+  [3]  Mantenimiento del Sistema (DISM + SFC)                 [14] Timer Resolution global (solo Win11)                 
+  [4]  Crear Punto de Restauracion                            [15] Prioridad de proceso por .exe (IFEO)                 
+  [5]  Optimizar Red                                          [16] USB Selective Suspend                                
+  [6]  Rendimiento (visuales + power plan + tweaks)           ── DISCO ─────────────────────────────────────────────    
+  [7]  Backup de Drivers                                      [17] Mantenimiento de discos (TRIM SSD / defrag HDD)      
+  [8]  Apps Win32 + UWP                                       ── SEGURIDAD ─────────────────────────────────────────    
+  [9]  Privacidad (registry o OOSU10)                         [18] Encriptacion de disco (BitLocker)                    
+  [10] Inicio del Sistema                                     ── RENDIMIENTO ───────────────────────────────────────    
+  [11] Actualizaciones de Windows                             [19] Defender: reagendar escaneo + exclusiones (dev/WSL)  
+                                                              [20] Energia: PERFBOOSTMODE + laptop gaming (por PC)      
+                                                              [B]  Volver al menu principal                             
                                                                                                                         
-  Usa flechas arriba/abajo + Enter, o la tecla del atajo:                                                               
+                                                                                                                        
+  Flechas + Enter, o el atajo del margen.                                                                               

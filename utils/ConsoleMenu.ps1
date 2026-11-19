@@ -11,6 +11,9 @@ function Get-MainMenuSpec {
         Entradas, en el orden en que se ven:
         - Seccion   : @{ Tipo = 'Seccion'; Texto } (la sangria la pone el formateador).
         - Separador : @{ Tipo = 'Separador' }.
+        - Columna   : @{ Tipo = 'Columna' } (#72 paso 4): lo que sigue va en la
+                      columna derecha cuando la ventana tiene ancho >= 100. Con
+                      menos ancho (o sin esta entrada) el menu va en una columna.
         - Opcion    : @{ Tipo = 'Opcion'; Tecla; Texto; Aclaracion; Color; Salida; Accion }
             Aclaracion : va entre parentesis, alineada sola a AnchoTexto. $null = sin.
             Color      : nombre 16-color de la fila ($null = el de siempre).
@@ -55,6 +58,8 @@ function Get-MainMenuSpec {
         @{ Tipo = 'Opcion'; Tecla = 'F'; Texto = 'Medir FPS en CS2'; Aclaracion = 'PresentMon, A/B base-variante-base'; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Invoke-FpsMeasurement -MachineProfile $MachineProfile } }
         @{ Tipo = 'Separador' }
+        # #72 paso 4: en dos columnas, ACCIONES MANUALES y HERRAMIENTAS van a la derecha.
+        @{ Tipo = 'Columna' }
         @{ Tipo = 'Seccion'; Texto = 'ACCIONES MANUALES' }
         @{ Tipo = 'Opcion'; Tecla = 'A'; Texto = 'Submenu: acciones individuales'; Aclaracion = 'debloat, limpieza, rendimiento, privacidad, etc.'; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Show-IndividualActionsSubmenu -MachineProfile $MachineProfile } }
@@ -118,6 +123,9 @@ function Get-IndividualActionSpec {
         @{ Tipo = 'Opcion'; Tecla = '11'; Texto = 'Actualizaciones de Windows'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Invoke-ActionWindowsUpdate -MachineProfile $MachineProfile } }
         @{ Tipo = 'Separador' }
+        # #72 paso 4: el corte que mas parejas deja las columnas (12 filas a la
+        # izquierda y 14 a la derecha, sin separadores).
+        @{ Tipo = 'Columna' }
         @{ Tipo = 'Seccion'; Texto = 'GAMING / LATENCIA  (avanzado - reinicio salvo USB)' }
         @{ Tipo = 'Opcion'; Tecla = '12'; Texto = 'Core Isolation / Memory Integrity (HVCI)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Invoke-ActionCoreIsolation -MachineProfile $MachineProfile } }
@@ -139,7 +147,7 @@ function Get-IndividualActionSpec {
            Accion = { param($MachineProfile) Invoke-ActionEncryption -MachineProfile $MachineProfile } }
         @{ Tipo = 'Separador' }
         @{ Tipo = 'Seccion'; Texto = 'RENDIMIENTO' }
-        @{ Tipo = 'Opcion'; Tecla = '19'; Texto = 'Defender: reagendar escaneo + exclusiones (dev / WSL)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+        @{ Tipo = 'Opcion'; Tecla = '19'; Texto = 'Defender: reagendar escaneo + exclusiones (dev/WSL)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Invoke-ActionDefenderScan -MachineProfile $MachineProfile } }
         @{ Tipo = 'Opcion'; Tecla = '20'; Texto = 'Energia: PERFBOOSTMODE + laptop gaming (por PC)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Invoke-ActionEnergyLaptop -MachineProfile $MachineProfile } }
@@ -231,6 +239,12 @@ function ConvertTo-PctkMenuRows {
         llega o pasa el ancho, 2 espacios; la aclaracion va entre parentesis. Sin
         aclaracion, la fila termina en el texto (sin relleno). Las entradas
         Oculta no se dibujan (la tecla igual la encuentra Get-PctkMenuEntry).
+
+        #72 paso 4 (dos columnas): cada fila lleva tambien LabelCorto (la fila sin
+        la aclaracion), Aclaracion (el texto solo, $null = sin) y Columna ($true en
+        la primera fila despues de una entrada Tipo = 'Columna': ahi arranca la
+        columna derecha). Label queda como siempre: es el de una columna y el del
+        render plano.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -238,29 +252,45 @@ function ConvertTo-PctkMenuRows {
     [int] $ancho = [int] $Spec.AnchoTexto
     [int] $anchoTecla = 4   # el campo de la tecla ('[10]'), sin el espacio que lo separa del texto
     [object[]] $rows = @()
+    [bool] $corte = $false        # hubo una entrada Columna y todavia no salio la fila que la lleva
+    [bool] $huboCorte = $false
     foreach ($e in @($Spec.Entradas)) {
+        [object] $row = $null
         switch ([string] $e.Tipo) {
             'Seccion' {
-                $rows += [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = ('  ' + [string]$e.Texto); Color = 'DarkCyan' }
+                [string] $hl = '  ' + [string]$e.Texto
+                $row = [PSCustomObject]@{ Kind = 'Header'; Key = $null; Label = $hl; Color = 'DarkCyan'; LabelCorto = $hl; Aclaracion = $null; Columna = $false }
             }
             'Separador' {
-                $rows += [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null }
+                $row = [PSCustomObject]@{ Kind = 'Spacer'; Key = $null; Label = ''; Color = $null; LabelCorto = ''; Aclaracion = $null; Columna = $false }
+            }
+            'Columna' {
+                if ($huboCorte) { throw 'ConvertTo-PctkMenuRows: la tabla tiene mas de un corte de columna' }
+                $corte = $true
+                $huboCorte = $true
             }
             'Opcion' {
                 # Indexador y no .Oculta: con StrictMode, la clave ausente (la gran
                 # mayoria de las entradas) tira por propiedad; el indexador da $null.
                 if (-not $e['Oculta']) {
                     [string] $texto = [string] $e.Texto
-                    [string] $label = '  ' + ('[' + [string]$e.Tecla + ']').PadRight($anchoTecla) + ' ' + $texto
+                    [string] $corto = '  ' + ('[' + [string]$e.Tecla + ']').PadRight($anchoTecla) + ' ' + $texto
+                    [string] $label = $corto
+                    [object] $acl = $null
                     if (-not [string]::IsNullOrEmpty([string]$e.Aclaracion)) {
+                        $acl = [string] $e.Aclaracion
                         [int] $relleno = 2
                         if ($texto.Length -lt $ancho) { $relleno = $ancho - $texto.Length }
                         $label = $label + (' ' * $relleno) + '(' + [string]$e.Aclaracion + ')'
                     }
-                    $rows += [PSCustomObject]@{ Kind = 'Item'; Key = [string]$e.Tecla; Label = $label; Color = $e.Color }
+                    $row = [PSCustomObject]@{ Kind = 'Item'; Key = [string]$e.Tecla; Label = $label; Color = $e.Color; LabelCorto = $corto; Aclaracion = $acl; Columna = $false }
                 }
             }
             default { throw ("ConvertTo-PctkMenuRows: tipo de entrada desconocido '{0}'" -f [string]$e.Tipo) }
+        }
+        if ($null -ne $row) {
+            if ($corte) { $row.Columna = $true; $corte = $false }
+            $rows += $row
         }
     }
     return $rows
@@ -335,6 +365,28 @@ function Get-PctkConsoleWindowHeight {
     param()
     try { return [int] [Console]::WindowHeight }
     catch { return [int] $Host.UI.RawUI.WindowSize.Height }
+}
+
+# #72 paso 4: seams del teclado y del cursor de Read-PctkMenuChoice, mismo
+# criterio que los de arriba: el smoke corre el lector REAL con teclas y una
+# pantalla simulada. Mismo comportamiento que las llamadas directas: si la
+# consola no tiene teclado real, tiran, y el lector cae al render plano.
+function Test-PctkConsoleKeyAvailable {
+    [OutputType([bool])]
+    param()
+    return [bool] [Console]::KeyAvailable
+}
+
+function Read-PctkConsoleKey {
+    [OutputType([System.ConsoleKeyInfo])]
+    param()
+    return [Console]::ReadKey($true)
+}
+
+function Set-PctkConsoleCursor {
+    [OutputType([void])]
+    param([Parameter(Mandatory)] [int] $X, [Parameter(Mandatory)] [int] $Y)
+    [Console]::SetCursorPosition($X, $Y)
 }
 
 function Get-PctkMenuLayout {
@@ -481,6 +533,17 @@ function Read-PctkMenuChoice {
         mantener la fila resaltada a la vista; moverse DENTRO de la ventana sigue
         siendo el mismo redibujo surgical de 2 filas, moverse afuera fuerza un
         redibujo completo (la ventana visible cambio, las Y guardadas ya no valen).
+
+        #72 paso 4: si las filas traen un corte de columna (Columna = $true, ver
+        ConvertTo-PctkMenuRows) y la ventana tiene ancho >= 100, el menu va en DOS
+        columnas: la izquierda en x = 0, la derecha en x = 60, nada pasa de 118
+        columnas (una celda que no entra se corta). El alto (Full/Compact/Paged/
+        TooSmall y el banner compacto de #99) se decide con la columna mas alta.
+        Las filas van sin la aclaracion: la de la opcion resaltada va en una linea
+        propia arriba de la de ayuda y se reescribe al mover. Flechas arriba/abajo
+        recorren la lista entera en el orden de la tabla; izquierda/derecha saltan
+        a la columna de enfrente (a la opcion de la fila mas cercana); en dos
+        columnas la flecha derecha NO elige, Enter si.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -493,39 +556,109 @@ function Read-PctkMenuChoice {
 
     [object[]] $items = @($Rows | Where-Object { $_.Kind -eq 'Item' })
 
+    # #72 paso 4: geometria de las dos columnas.
+    [int] $twoColMinWidth = 100   # ancho de ventana desde el que se usan dos columnas
+    [int] $colRightX      = 60    # x de la columna derecha: celda de 56 + 4 de separacion
+    [int] $maxLineWidth   = 118   # ninguna linea pasa de aca
+
+    # helper local: el texto VISIBLE de una fila (sin color), el mismo que escribe
+    # Write-RowLine. $Max > 0 = tope de ancho (dos columnas): un rotulo de seccion
+    # acorta su raya, una opcion se corta con '...'. $Short = la fila sin aclaracion.
+    function Get-RowCellText {
+        param($Row, [bool] $Hi, [int] $Max = 0, [bool] $Short = $false)
+        if ($Row.Kind -eq 'Spacer') { return '' }
+        if ($Row.Kind -eq 'Header') {
+            if (Test-PctkVT) {
+                [string] $nm = ([string]$Row.Label).Trim()
+                [int] $dashes = [Math]::Max(3, 50 - $nm.Length)
+                if ($Max -gt 0 -and (6 + $nm.Length + $dashes) -gt $Max) {
+                    $dashes = $Max - 6 - $nm.Length
+                    if ($dashes -lt 1) { $nm = Limit-PctkText $nm ($Max - 7); $dashes = 1 }
+                }
+                return ('  ── ' + $nm + ' ' + ('─' * $dashes))
+            }
+            return (Limit-PctkText ([string]$Row.Label) $Max)
+        }
+        [string] $src = [string]$Row.Label
+        if ($Short) { $src = [string]$Row.LabelCorto }
+        [string] $mark = '  '
+        if ($Hi) { $mark = '> ' }
+        return (Limit-PctkText ($mark + $src.TrimStart()) $Max)
+    }
+
     # helper local: escribe una fila (con o sin highlight). Mismo largo de texto
     # en highlight ('> ') y normal ('  ') -> reescribir una fila sobre otra no deja
     # restos, sin necesidad de padding.
     function Write-RowLine {
-        param($Row, [bool] $Hi)
-        if ($Row.Kind -eq 'Spacer') { Write-Host ''; return }
+        param($Row, [bool] $Hi, [int] $Max = 0, [switch] $Short, [switch] $NoNewline)
+        if ($Row.Kind -eq 'Spacer') { Write-Host '' -NoNewline:$NoNewline; return }
         [bool] $vt = Test-PctkVT
+        [string] $t = Get-RowCellText -Row $Row -Hi $Hi -Max $Max -Short ([bool]$Short)
         if ($Row.Kind -eq 'Header') {
-            if ($vt) {
-                [string] $nm = ([string]$Row.Label).Trim()
-                Write-Host ('  ' + (Pf 255 170 40) + '── ' + $nm + ' ' + ('─' * [Math]::Max(3, 50 - $nm.Length)) + (Pe))
-            } else {
-                Write-Host $Row.Label -ForegroundColor DarkCyan
-            }
+            if ($vt) { Write-Host ('  ' + (Pf 255 170 40) + $t.Substring(2) + (Pe)) -NoNewline:$NoNewline }
+            else     { Write-Host $t -ForegroundColor DarkCyan -NoNewline:$NoNewline }
             return
         }
-        [string] $label = ([string]$Row.Label).TrimStart()
         if ($Hi) {
-            if ($vt) { Write-Host ((Pb 150 95 0) + (Pf 245 240 230) + '> ' + $label + (Pe)) }
-            else     { Write-Host ('> ' + $label) -BackgroundColor DarkGray -ForegroundColor White }
+            if ($vt) { Write-Host ((Pb 150 95 0) + (Pf 245 240 230) + $t + (Pe)) -NoNewline:$NoNewline }
+            else     { Write-Host $t -BackgroundColor DarkGray -ForegroundColor White -NoNewline:$NoNewline }
         } elseif (-not [string]::IsNullOrEmpty([string]$Row.Color)) {
             if ($vt) {
                 [string] $fg = ConvertTo-PctkAnsiFg ([string]$Row.Color)
                 if ([string]::IsNullOrEmpty($fg)) { $fg = Pf 140 152 166 }
-                Write-Host ($fg + '  ' + $label + (Pe))
+                Write-Host ($fg + $t + (Pe)) -NoNewline:$NoNewline
             } else {
-                Write-Host ('  ' + $label) -ForegroundColor ([string]$Row.Color)
+                Write-Host $t -ForegroundColor ([string]$Row.Color) -NoNewline:$NoNewline
             }
         } elseif ($vt) {
-            Write-Host ((Pf 140 152 166) + '  ' + $label + (Pe))
+            Write-Host ((Pf 140 152 166) + $t + (Pe)) -NoNewline:$NoNewline
         } else {
-            Write-Host ('  ' + $label)
+            Write-Host $t -NoNewline:$NoNewline
         }
+    }
+
+    # helper local (#72 paso 4): la linea de aclaracion de la opcion $Idx. -Pad la
+    # rellena al ancho de la mas larga: reescrita encima de otra no deja restos.
+    function Write-AclLine {
+        param([int] $Idx, [switch] $Pad, [switch] $NoNewline)
+        [string] $t = ''
+        if (-not [string]::IsNullOrEmpty([string]$items[$Idx].Aclaracion)) { $t = '  (' + [string]$items[$Idx].Aclaracion + ')' }
+        $t = Limit-PctkText $t $lineMax
+        if ($Pad) { $t = $t.PadRight($aclWidth) }
+        if (Test-PctkVT) { Write-Host ((Pf 140 152 166) + $t + (Pe)) -NoNewline:$NoNewline }
+        else             { Write-Host $t -ForegroundColor DarkGray -NoNewline:$NoNewline }
+    }
+
+    # helper local: redibujo SURGICAL al mover el resaltado de $Old a $New: solo
+    # las celdas que cambian (y en dos columnas la linea de aclaracion), en su
+    # (x, y). Si la consola no deja mover el cursor tira, y el caller hace un
+    # redibujo completo el proximo frame.
+    function Update-Highlight {
+        param([int] $Old, [int] $New)
+        if ($twoCol) {
+            Set-PctkConsoleCursor -X $itemX[$Old] -Y $itemY[$Old]; Write-RowLine -Row $items[$Old] -Hi $false -Max $itemMax[$Old] -Short -NoNewline
+            Set-PctkConsoleCursor -X $itemX[$New] -Y $itemY[$New]; Write-RowLine -Row $items[$New] -Hi $true  -Max $itemMax[$New] -Short -NoNewline
+            Set-PctkConsoleCursor -X 0 -Y $aclY; Write-AclLine -Idx $New -Pad -NoNewline
+        } else {
+            Set-PctkConsoleCursor -X 0 -Y $itemY[$Old]; Write-RowLine -Row $items[$Old] -Hi $false
+            Set-PctkConsoleCursor -X 0 -Y $itemY[$New]; Write-RowLine -Row $items[$New] -Hi $true
+        }
+        Set-PctkConsoleCursor -X 0 -Y $bottomY
+    }
+
+    # helper local (#72 paso 4): dos listas de filas -> lineas de pantalla con su
+    # celda izquierda (L) y derecha (R); $null = celda vacia.
+    function ConvertTo-MenuGrid {
+        param([object[]] $L, [object[]] $R)
+        [int] $n = [Math]::Max($L.Count, $R.Count)
+        [object[]] $g = @()
+        for ([int] $i = 0; $i -lt $n; $i++) {
+            [object] $cl = $null; [object] $cr = $null
+            if ($i -lt $L.Count) { $cl = $L[$i] }
+            if ($i -lt $R.Count) { $cr = $R[$i] }
+            $g += [PSCustomObject]@{ L = $cl; R = $cr }
+        }
+        return ,$g
     }
 
     # helper local: render plano sin highlight + Read-Host. Sin coordenadas
@@ -571,12 +704,39 @@ function Read-PctkMenuChoice {
     [object[]] $compactRows = @($Rows | Where-Object { $_.Kind -ne 'Spacer' })
     [hashtable] $itemIndexOf = @{}
     for ([int] $k = 0; $k -lt $items.Count; $k++) { $itemIndexOf[$items[$k]] = $k }
-    [int[]] $itemRowPos = [int[]]::new($items.Count)   # indice del item DENTRO de $compactRows
+    [int[]] $oneColRowPos = [int[]]::new($items.Count)   # indice del item DENTRO de $compactRows
     [int] $cIdx = 0
     foreach ($cRow in $compactRows) {
-        if ($cRow.Kind -eq 'Item') { $itemRowPos[$itemIndexOf[$cRow]] = $cIdx }
+        if ($cRow.Kind -eq 'Item') { $oneColRowPos[$itemIndexOf[$cRow]] = $cIdx }
         $cIdx++
     }
+
+    # #72 paso 4: las dos columnas, precalculadas UNA vez. La derecha arranca en
+    # la fila con Columna = $true. Lineas de pantalla sin separadores ($gridCompact),
+    # y por item: columna (0/1) y linea en la grilla.
+    [object[]] $leftRows = @()
+    [object[]] $rightRows = @()
+    foreach ($r in $Rows) {
+        if ($rightRows.Count -gt 0 -or ($null -ne $r.PSObject.Properties['Columna'] -and [bool] $r.Columna)) { $rightRows += $r }
+        else { $leftRows += $r }
+    }
+    [bool] $hasBreak = $leftRows.Count -gt 0 -and $rightRows.Count -gt 0
+    [object[]] $gridCompact = ConvertTo-MenuGrid -L @($leftRows | Where-Object { $_.Kind -ne 'Spacer' }) -R @($rightRows | Where-Object { $_.Kind -ne 'Spacer' })
+    [int[]] $itemCol     = [int[]]::new($items.Count)
+    [int[]] $lineCompact = [int[]]::new($items.Count)
+    foreach ($r in $rightRows) { if ($r.Kind -eq 'Item') { $itemCol[$itemIndexOf[$r]] = 1 } }
+    for ([int] $g = 0; $g -lt $gridCompact.Count; $g++) {
+        foreach ($cell in @($gridCompact[$g].L, $gridCompact[$g].R)) { if ($null -ne $cell -and $cell.Kind -eq 'Item') { $lineCompact[$itemIndexOf[$cell]] = $g } }
+    }
+    [bool]  $twoCol   = $false                          # el ultimo redibujo completo fue en dos columnas
+    [int[]] $itemX    = [int[]]::new($items.Count)       # X de consola de cada Item (dos columnas)
+    [int[]] $itemMax  = [int[]]::new($items.Count)       # tope de ancho de la celda de cada Item
+    [int]   $aclY     = 0                                # Y de la linea de aclaracion
+    [int]   $aclWidth = 0                                # ancho de la aclaracion mas larga
+    [int]   $lineMax  = $maxLineWidth
+
+    [int[]] $itemRowPos   = $oneColRowPos   # posicion de cada item en la lista paginable del modo actual
+    [int]   $compactCount = $compactRows.Count
     [string] $layoutMode = 'Full'
     [int]    $viewTop    = 0   # solo relevante en modo Paged: primer indice visible de $compactRows
     [int]    $viewEnd    = $compactRows.Count - 1
@@ -587,6 +747,28 @@ function Read-PctkMenuChoice {
                 # #99: cada redibujo completo re-decide desde el banner completo.
                 $script:PctkBannerCompact = $false
                 & $RenderHeader
+
+                # #72 paso 4: dos columnas si la tabla tiene corte y la ventana el ancho.
+                # El alto se decide con la columna mas alta (las lineas de la grilla), y
+                # el pie suma la linea de aclaracion.
+                [int] $winW = 0
+                try { $winW = [int] (Get-PctkConsoleWindowWidth) } catch { $winW = 0 }
+                $twoCol = $hasBreak -and $winW -ge $twoColMinWidth
+                [int] $layTotal   = $Rows.Count
+                [int] $layCompact = $compactRows.Count
+                [int] $layFooter  = 2
+                $itemRowPos   = $oneColRowPos
+                $compactCount = $compactRows.Count
+                if ($twoCol) {
+                    # En dos columnas no van los separadores: caen a alturas distintas
+                    # en cada columna y desalinean las filas (y el rotulo de cada
+                    # seccion ya la separa). Full y Compact dibujan lo mismo.
+                    $layTotal     = $gridCompact.Count
+                    $layCompact   = $gridCompact.Count
+                    $layFooter    = 3
+                    $itemRowPos   = $lineCompact
+                    $compactCount = $gridCompact.Count
+                }
 
                 # #46: medir el alto REAL antes de decidir como dibujar. Si algo
                 # no se puede medir, degradar directo al render plano (mismo
@@ -603,7 +785,7 @@ function Read-PctkMenuChoice {
                 if (-not $measureOk -or $winH -le 0) {
                     $layoutMode = 'TooSmall'
                 } else {
-                    $layoutInfo = Get-PctkMenuLayout -TotalRows $Rows.Count -CompactRows $compactRows.Count -HeaderLines $headerLines -WindowHeight $winH
+                    $layoutInfo = Get-PctkMenuLayout -TotalRows $layTotal -CompactRows $layCompact -HeaderLines $headerLines -WindowHeight $winH -FooterLines $layFooter
                     $layoutMode = [string] $layoutInfo.Mode
                     # #99: si no entra ni compacto, antes de paginar probar con el
                     # banner compacto (sin logo ni titulo/autor). Se RE-MIDE el
@@ -614,7 +796,7 @@ function Read-PctkMenuChoice {
                         & $RenderHeader
                         try { $headerLines = Get-PctkConsoleCursorTop } catch { $measureOk = $false }
                         if ($measureOk) {
-                            $layoutInfo = Get-PctkMenuLayout -TotalRows $Rows.Count -CompactRows $compactRows.Count -HeaderLines $headerLines -WindowHeight $winH
+                            $layoutInfo = Get-PctkMenuLayout -TotalRows $layTotal -CompactRows $layCompact -HeaderLines $headerLines -WindowHeight $winH -FooterLines $layFooter
                             $layoutMode = [string] $layoutInfo.Mode
                         } else {
                             $layoutMode = 'TooSmall'
@@ -627,30 +809,75 @@ function Read-PctkMenuChoice {
                     return (Invoke-FlatFallback)
                 }
 
-                [object[]] $rowsToDraw = $Rows
-                if ($layoutMode -eq 'Compact') { $rowsToDraw = $compactRows }
                 if ($layoutMode -eq 'Paged') {
-                    $viewTop = Get-PctkMenuViewport -TargetPos $itemRowPos[$hiIdx] -CurrentViewTop $viewTop -Budget $layoutInfo.Budget -TotalCompactRows $compactRows.Count
-                    $viewEnd = [Math]::Min($compactRows.Count, $viewTop + $layoutInfo.Budget) - 1
-                    $rowsToDraw = $compactRows[$viewTop..$viewEnd]
+                    $viewTop = Get-PctkMenuViewport -TargetPos $itemRowPos[$hiIdx] -CurrentViewTop $viewTop -Budget $layoutInfo.Budget -TotalCompactRows $compactCount
+                    $viewEnd = [Math]::Min($compactCount, $viewTop + $layoutInfo.Budget) - 1
                 } else {
                     $viewTop = 0
-                    $viewEnd = $compactRows.Count - 1
+                    $viewEnd = $compactCount - 1
                 }
 
-                foreach ($row in $rowsToDraw) {
-                    if ($row.Kind -eq 'Item') {
-                        [int] $ii = $itemIndexOf[$row]
-                        $itemY[$ii] = Get-PctkConsoleCursorTop
-                        Write-RowLine -Row $row -Hi ($ii -eq $hiIdx)
-                    } else {
-                        Write-RowLine -Row $row -Hi $false
+                if (-not $twoCol) {
+                    [object[]] $rowsToDraw = $Rows
+                    if ($layoutMode -eq 'Compact') { $rowsToDraw = $compactRows }
+                    if ($layoutMode -eq 'Paged')   { $rowsToDraw = $compactRows[$viewTop..$viewEnd] }
+
+                    foreach ($row in $rowsToDraw) {
+                        if ($row.Kind -eq 'Item') {
+                            [int] $ii = $itemIndexOf[$row]
+                            $itemY[$ii] = Get-PctkConsoleCursorTop
+                            Write-RowLine -Row $row -Hi ($ii -eq $hiIdx)
+                        } else {
+                            Write-RowLine -Row $row -Hi $false
+                        }
                     }
+                    Write-Host ''
+                } else {
+                    # #72 paso 4: una linea de pantalla = celda izquierda + relleno
+                    # hasta x = 60 + celda derecha. Las celdas van sin aclaracion.
+                    [object[]] $grid = $gridCompact
+                    if ($layoutMode -eq 'Paged') { $grid = $gridCompact[$viewTop..$viewEnd] }
+                    $lineMax = [Math]::Min($maxLineWidth, $winW - 1)
+                    [int] $leftMax  = $colRightX - 4
+                    [int] $rightMax = $lineMax - $colRightX
+                    foreach ($gl in $grid) {
+                        [int] $used = 0
+                        if ($null -ne $gl.L) {
+                            [bool] $lhi = $false
+                            if ($gl.L.Kind -eq 'Item') {
+                                [int] $li = $itemIndexOf[$gl.L]
+                                $itemY[$li] = Get-PctkConsoleCursorTop; $itemX[$li] = 0; $itemMax[$li] = $leftMax
+                                $lhi = ($li -eq $hiIdx)
+                            }
+                            Write-RowLine -Row $gl.L -Hi $lhi -Max $leftMax -Short -NoNewline
+                            $used = (Get-RowCellText -Row $gl.L -Hi $lhi -Max $leftMax -Short $true).Length
+                        }
+                        if ($null -ne $gl.R -and $gl.R.Kind -ne 'Spacer') {
+                            if ($colRightX -gt $used) { Write-Host (' ' * ($colRightX - $used)) -NoNewline }
+                            [bool] $rhi = $false
+                            if ($gl.R.Kind -eq 'Item') {
+                                [int] $ri = $itemIndexOf[$gl.R]
+                                $itemY[$ri] = Get-PctkConsoleCursorTop; $itemX[$ri] = $colRightX; $itemMax[$ri] = $rightMax
+                                $rhi = ($ri -eq $hiIdx)
+                            }
+                            Write-RowLine -Row $gl.R -Hi $rhi -Max $rightMax -Short -NoNewline
+                        }
+                        Write-Host ''
+                    }
+                    Write-Host ''
+                    $aclWidth = 0
+                    foreach ($it in $items) {
+                        if (-not [string]::IsNullOrEmpty([string]$it.Aclaracion)) {
+                            $aclWidth = [Math]::Max($aclWidth, (Limit-PctkText ('  (' + [string]$it.Aclaracion + ')') $lineMax).Length)
+                        }
+                    }
+                    $aclY = Get-PctkConsoleCursorTop
+                    Write-AclLine -Idx $hiIdx
                 }
-                Write-Host ''
                 [string] $hintLine = '  Usa flechas arriba/abajo + Enter, o la tecla del atajo:'
+                if ($twoCol) { $hintLine = '  Flechas + Enter, o el atajo del margen.' }
                 if ($layoutMode -eq 'Paged') {
-                    $hintLine = ('  Flechas + Enter, o el atajo del margen.  (mostrando {0}-{1} de {2})' -f ($viewTop + 1), ($viewEnd + 1), $compactRows.Count)
+                    $hintLine = ('  Flechas + Enter, o el atajo del margen.  (mostrando {0}-{1} de {2})' -f ($viewTop + 1), ($viewEnd + 1), $compactCount)
                 }
                 if (Test-PctkVT) { Write-Host ((Pf 95 108 124) + $hintLine + (Pe)) }
                 else             { Write-Host $hintLine -ForegroundColor DarkGray }
@@ -674,14 +901,16 @@ function Read-PctkMenuChoice {
             $key = $null
             [bool] $resized = $false
             try {
-                while (-not [Console]::KeyAvailable) {
+                # #72 paso 4: por los seams (Test-PctkConsoleKeyAvailable sondea
+                # [Console]::KeyAvailable, Read-PctkConsoleKey hace el ReadKey).
+                while (-not (Test-PctkConsoleKeyAvailable)) {
                     if (Test-PctkConsoleResized -LastWidth $lastW -LastHeight $lastH -LastBufferWidth $lastBW) {
                         $resized = $true
                         break
                     }
                     Start-Sleep -Milliseconds 80
                 }
-                if (-not $resized) { $key = [Console]::ReadKey($true) }
+                if (-not $resized) { $key = Read-PctkConsoleKey }
             } catch {
                 # KeyAvailable/ReadKey fallaron (host sin consola real) -> fallback a
                 # Read-Host, igual que antes.
@@ -720,21 +949,41 @@ function Read-PctkMenuChoice {
                     if ($needsScroll) {
                         $full = $true
                     } else {
-                        try {
-                            # solo las 2 filas que cambian -> cero flash
-                            [Console]::SetCursorPosition(0, $itemY[$old])
-                            Write-RowLine -Row $items[$old]   -Hi $false
-                            [Console]::SetCursorPosition(0, $itemY[$hiIdx])
-                            Write-RowLine -Row $items[$hiIdx] -Hi $true
-                            [Console]::SetCursorPosition(0, $bottomY)
-                        } catch {
-                            $full = $true   # consola rara -> redibujo completo el proximo frame
-                        }
+                        # solo las celdas que cambian -> cero flash
+                        try { Update-Highlight -Old $old -New $hiIdx }
+                        catch { $full = $true }   # consola rara -> redibujo completo el proximo frame
                     }
                 }
                 continue
             }
-            # Enter o flecha derecha = elegir la opcion resaltada
+            # #72 paso 4: en dos columnas, izquierda/derecha saltan a la columna de
+            # enfrente, a la opcion de la linea mas cercana (empate: la de arriba).
+            if ($twoCol -and ($key.Key -eq [ConsoleKey]::LeftArrow -or $key.Key -eq [ConsoleKey]::RightArrow)) {
+                $buffer = ''
+                [int] $targetCol = 1 - $itemCol[$hiIdx]
+                [int] $best = -1
+                [int] $bestDist = [int]::MaxValue
+                for ([int] $j = 0; $j -lt $items.Count; $j++) {
+                    if ($itemCol[$j] -ne $targetCol) { continue }
+                    [int] $dist = [Math]::Abs($lineCompact[$j] - $lineCompact[$hiIdx])
+                    if ($dist -lt $bestDist) { $best = $j; $bestDist = $dist }
+                }
+                if ($best -ge 0 -and $best -ne $hiIdx) {
+                    [int] $old = $hiIdx
+                    $hiIdx = $best
+                    [bool] $needsScroll = ($layoutMode -eq 'Paged') -and
+                        ($itemRowPos[$hiIdx] -lt $viewTop -or $itemRowPos[$hiIdx] -gt $viewEnd)
+                    if ($needsScroll) {
+                        $full = $true
+                    } else {
+                        try { Update-Highlight -Old $old -New $hiIdx }
+                        catch { $full = $true }
+                    }
+                }
+                continue
+            }
+            # Enter o flecha derecha = elegir la opcion resaltada. En dos columnas la
+            # flecha derecha no llega aca: la consume el salto de columna de arriba.
             if ($key.Key -eq [ConsoleKey]::Enter -or $key.Key -eq [ConsoleKey]::RightArrow) {
                 return [string]$items[$hiIdx].Key
             }
@@ -770,11 +1019,7 @@ function Read-PctkMenuChoice {
                             if ($needsScroll) {
                                 $full = $true
                             } else {
-                                try {
-                                    [Console]::SetCursorPosition(0, $itemY[$old]);   Write-RowLine -Row $items[$old]   -Hi $false
-                                    [Console]::SetCursorPosition(0, $itemY[$hiIdx]); Write-RowLine -Row $items[$hiIdx] -Hi $true
-                                    [Console]::SetCursorPosition(0, $bottomY)
-                                } catch { $full = $true }
+                                try { Update-Highlight -Old $old -New $hiIdx } catch { $full = $true }
                             }
                         }
                         $accepted = $true
