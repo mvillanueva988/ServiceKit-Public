@@ -11,6 +11,7 @@ data/
 │   └── named/   ← recetas del operador (gitignored)
 ├── oosu10-profiles/
 │   └── *.cfg    ← perfiles XML de O&O ShutUp10++ por nivel de privacidad
+├── paquete-campo.json  ← tools que el service guiado premarca en [T]
 └── oem-bloat/
     └── *.json   ← catálogos de bloat por fabricante (HP/Lenovo/Dell/etc.)
 ```
