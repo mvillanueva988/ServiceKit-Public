@@ -34,7 +34,7 @@ Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mvillanueva988/Service
 
 ## Qué hace
 
-Optimizador por perfiles: el técnico elige el use-case del cliente desde el menú y el toolkit aplica una receta pre-fabricada con snapshot PRE/POST automatizado. La diferenciación por hardware (laptop vs desktop, RAM ≤ 8 GB, etc.) la aplica el módulo `Performance` al ejecutarse — no hay que elegir tier.
+El `[1]` del menú es el **service guiado**: una lista paso a paso, en el orden de campo (foto PRE, diagnóstico, paquete de herramientas, OOSU10, apps, inicio, receta rápida opcional, FPS, cierre), donde cada paso corre sólo cuando el técnico lo pide y se puede saltear. La receta rápida (paso 8) elige el use-case del cliente y aplica una receta pre-fabricada con snapshot PRE/POST automatizado. La diferenciación por hardware (laptop vs desktop, RAM ≤ 8 GB, etc.) la aplica el módulo `Performance` al ejecutarse — no hay que elegir tier.
 
 **Use-cases disponibles:**
 - **Generic** — PC sin contexto claro de uso (receta neutra y segura)

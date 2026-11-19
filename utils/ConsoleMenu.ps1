@@ -33,8 +33,10 @@ function Get-MainMenuSpec {
     param()
     [object[]] $entradas = @(
         @{ Tipo = 'Seccion'; Texto = 'PERFILES' }
-        @{ Tipo = 'Opcion'; Tecla = '1'; Texto = 'Aplicar perfil automatico'; Aclaracion = 'Generic/Work/Multimedia'; Color = $null; Salida = 'Pausa'
-           Accion = { param($MachineProfile) Invoke-ApplyAutoProfile -MachineProfile $MachineProfile } }
+        # #136: el [1] es el service guiado. El paso 10 cierra el service y puede
+        # terminar en desinstalacion, como el [L]: por eso TerminaSiTrue.
+        @{ Tipo = 'Opcion'; Tecla = '1'; Texto = 'Service guiado'; Aclaracion = 'paso a paso, en el orden de campo'; Color = $null; Salida = 'TerminaSiTrue'
+           Accion = { param($MachineProfile) Invoke-ServiceGuiado -MachineProfile $MachineProfile } }
         @{ Tipo = 'Opcion'; Tecla = '2'; Texto = 'Receta nombrada'; Aclaracion = 'cliente especifico'; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Invoke-NamedProfileMenu -MachineProfile $MachineProfile } }
         @{ Tipo = 'Separador' }
@@ -187,6 +189,57 @@ function Get-NamedProfileSpec {
         @{ Tipo = 'Separador' }
     )
     return [PSCustomObject]@{ AnchoTexto = 0; Entradas = $entradas }
+}
+
+function Get-ServiceGuiadoSpec {
+    <#
+    .SYNOPSIS
+        Los pasos del service guiado ([1], #136) como DATOS, en el orden de campo.
+        Cambiar un paso es cambiar una entrada aca; Invoke-ServiceGuiado
+        (modules\ServiceGuiado.ps1) dibuja la lista y despacha desde esta tabla.
+    .DESCRIPTION
+        Cada paso: @{ Paso; Texto; Aclaracion; Salida; Accion }
+            Aclaracion : va entre parentesis, alineada a AnchoTexto. $null = sin.
+            Salida     : 'Vuelve'        -> al terminar se vuelve a la lista.
+                         'TerminaSiTrue' -> si la accion devuelve $true el guiado
+                                            termina y devuelve $true (el menu
+                                            principal cierra PCTk, como con [L]).
+            Accion     : scriptblock LITERAL que recibe el MachineProfile, que llama
+                         al handler que ya existe. Nunca .GetNewClosure() (ver
+                         Get-MainMenuSpec).
+        La aclaracion del paso 4 sale de data\paquete-campo.json (Get-PaqueteCampo).
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param()
+    [string] $paquete = 'paquete de campo'
+    if (Get-Command -Name 'Get-PaqueteCampo' -CommandType Function -ErrorAction SilentlyContinue) {
+        [object[]] $paq = @(Get-PaqueteCampo)
+        if ($paq.Count -gt 0) { $paquete = (@($paq | ForEach-Object { [string]$_.Nombre }) -join ', ') }
+    }
+    [object[]] $pasos = @(
+        @{ Paso = 1; Texto = 'Foto PRE'; Aclaracion = 'abre el service'; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Invoke-DiagnosticSnapshot -Phase Pre -MachineProfile $MachineProfile } }
+        @{ Paso = 2; Texto = 'Historial de BSOD / crashes'; Aclaracion = $null; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Invoke-DiagnosticBsod -MachineProfile $MachineProfile } }
+        @{ Paso = 3; Texto = 'Salud de discos'; Aclaracion = $null; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Invoke-DiagnosticDiskHealth -MachineProfile $MachineProfile } }
+        @{ Paso = 4; Texto = 'Bajar paquete de campo'; Aclaracion = $paquete; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Show-ToolsMenu -MachineProfile $MachineProfile -Preselect @(Get-PaqueteCampo | ForEach-Object { [string]$_.Id }) } }
+        @{ Paso = 5; Texto = 'OOSU10'; Aclaracion = 'abre la GUI, lo configuras vos'; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Invoke-ActionOosuGui -MachineProfile $MachineProfile } }
+        @{ Paso = 6; Texto = 'Desinstalar apps'; Aclaracion = 'lista de PCTk o BCUninstaller'; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Invoke-ServiceGuiadoApps -MachineProfile $MachineProfile } }
+        @{ Paso = 7; Texto = 'Inicio de Windows'; Aclaracion = $null; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Invoke-ActionStartup -MachineProfile $MachineProfile } }
+        @{ Paso = 8; Texto = 'Receta rapida'; Aclaracion = 'opcional: lo que hacia el [1] viejo'; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Invoke-ApplyAutoProfile -MachineProfile $MachineProfile } }
+        @{ Paso = 9; Texto = 'Medir FPS en CS2'; Aclaracion = 'si es gamer'; Salida = 'Vuelve'
+           Accion = { param($MachineProfile) Invoke-FpsMeasurement -MachineProfile $MachineProfile } }
+        @{ Paso = 10; Texto = 'Cerrar service y llevarse el paquete'; Aclaracion = $null; Salida = 'TerminaSiTrue'
+           Accion = { param($MachineProfile) Invoke-ServiceClose } }
+    )
+    return [PSCustomObject]@{ AnchoTexto = 33; Pasos = $pasos }
 }
 
 function Get-PctkMenuEntry {

@@ -1036,6 +1036,55 @@ function Invoke-ToolLaunch {
     return 'opened'
 }
 
+function Invoke-ToolFetchAndLaunch {
+    <#
+    .SYNOPSIS
+        #136: baja una tool del manifest si falta (el mismo Bootstrap-Tools.ps1
+        -ToolName que usa [T]) y la abre (Invoke-ToolLaunch). Lo usa el paso 6 del
+        service guiado para BCUninstaller. Devuelve 'opened' | 'blocked' | 'missing'.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [string] $Name)
+
+    [string] $toolkitRoot  = Split-Path -Parent $PSScriptRoot
+    [string] $binDir       = Join-Path $toolkitRoot 'tools\bin'
+    [string] $bootstrap    = Join-Path $toolkitRoot 'Bootstrap-Tools.ps1'
+    [string] $manifestPath = Join-Path $toolkitRoot 'tools\manifest.json'
+
+    $tool = $null
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        if ($null -ne $manifest -and $null -ne $manifest.PSObject.Properties['tools']) {
+            $tool = @($manifest.tools | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties['name'] -and [string]$_.name -eq $Name })[0]
+        }
+    } catch {
+        Write-PctkErr ('  [!] Error leyendo manifest.json: {0}' -f $_.Exception.Message)
+        return 'missing'
+    }
+    if ($null -eq $tool) {
+        Write-PctkErr ('  [!] {0} no esta en tools\manifest.json.' -f $Name)
+        return 'missing'
+    }
+
+    if (-not (Get-ToolStatus -Tool $tool -BinDir $binDir)) {
+        if (-not (Test-Path -LiteralPath $bootstrap)) {
+            Write-PctkErr ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap)
+            return 'missing'
+        }
+        Write-PctkWork ('  {0} no esta descargado: bajandolo...' -f $Name)
+        & $bootstrap -ToolName $Name
+    }
+    [string] $r = Invoke-ToolLaunch -Tool $tool -BinDir $binDir
+    if ($r -eq 'opened') {
+        Write-PctkOk ('  [OK] {0} abierto.' -f $Name)
+    } elseif ($r -eq 'missing') {
+        Write-PctkWarn ('  [!] {0} sigue sin estar descargado; probar desde [T].' -f $Name)
+    }
+    Write-ActionAudit -Action 'Tools.FetchAndLaunch' -Status $(if ($r -eq 'opened') { 'Success' } else { 'Failed' }) -Summary ('{0}: {1}' -f $Name, $r)
+    return $r
+}
+
 # ─── Tools menu (selector interactivo D-TS1) ──────────────────────────────────
 function Invoke-ToolsMenuInteractive {
     <#
@@ -1049,10 +1098,13 @@ function Invoke-ToolsMenuInteractive {
     param(
         [Parameter(Mandatory)] [object[]] $Tools,
         [Parameter(Mandatory)] [string]   $BinDir,
-        [Parameter(Mandatory)] [string]   $Bootstrap
+        [Parameter(Mandatory)] [string]   $Bootstrap,
+        # #136: names del manifest que arrancan marcados (paquete de campo del guiado).
+        [string[]] $Preselect = @()
     )
 
     [bool[]] $checked = [bool[]]::new($Tools.Count)
+    for ([int] $i = 0; $i -lt $Tools.Count; $i++) { $checked[$i] = ($Preselect -contains [string]$Tools[$i].name) }
     [bool]   $force   = $false
     [int]    $hi      = 0
 
@@ -1125,8 +1177,16 @@ function Invoke-ToolsMenuInteractive {
 }
 
 function Show-ToolsMenu {
+    <#
+    .SYNOPSIS
+        Handler del [T]. -Preselect (#136, paso 4 del service guiado): names del
+        manifest que arrancan marcados y se pueden desmarcar. Sin el, igual que siempre.
+    #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [PSCustomObject] $MachineProfile)
+    param(
+        [Parameter(Mandatory)] [PSCustomObject] $MachineProfile,
+        [string[]] $Preselect = @()
+    )
     $null = $MachineProfile
 
     [string] $toolkitRoot  = Split-Path -Parent $PSScriptRoot
@@ -1176,9 +1236,13 @@ function Show-ToolsMenu {
     # Consola interactiva -> multi-seleccion con flechas. Si no (headless/smoke/
     # redirigido) -> cae al loop tipeado original de abajo (cero regresion).
     if (Test-PctkInteractiveConsole) {
-        Invoke-ToolsMenuInteractive -Tools $tools -BinDir $binDir -Bootstrap $bootstrap
+        Invoke-ToolsMenuInteractive -Tools $tools -BinDir $binDir -Bootstrap $bootstrap -Preselect $Preselect
         return
     }
+
+    # #136: en el modo tipeado el paquete premarcado se baja con [P].
+    [int[]] $preIdx = @()
+    for ([int] $i = 0; $i -lt $tools.Count; $i++) { if ($Preselect -contains [string]$tools[$i].name) { $preIdx += $i } }
 
     do {
         Write-PctkActionTitle 'HERRAMIENTAS EXTERNAS'
@@ -1188,11 +1252,13 @@ function Show-ToolsMenu {
             $ok    = Get-ToolStatus -Tool $t -BinDir $binDir
             $label = if ($ok) { 'OK   ' } else { 'falta' }
             $clr   = if ($ok) { 'ok' } else { 'warn' }
-            Write-PctkLine ('  [{0,2}]  {1,-26}  [{2,-12}]  {3}' -f ($i + 1), $t.name, $t.category, $label) $clr
+            [string] $pm = if ($preIdx -contains $i) { '*' } else { ' ' }
+            Write-PctkLine ('  [{0,2}]{4} {1,-26}  [{2,-12}]  {3}' -f ($i + 1), $t.name, $t.category, $label, $pm) $clr
         }
 
         Write-Host ''
         [string] $fLabel = if ($forceToggle) { 'ON ' } else { 'off' }
+        if ($preIdx.Count -gt 0) { Write-Host '  [P] Bajar el paquete de campo (las marcadas con *)' }
         Write-Host ('  [T] Todas  [F] -Force: {0}  [O] Abrir carpeta  [B] Volver' -f $fLabel)
         Write-PctkHint ('  Binarios: {0}' -f $binDir)
         Write-Host ''
@@ -1202,6 +1268,20 @@ function Show-ToolsMenu {
         [string] $up = $raw.ToUpperInvariant()
 
         if ($up -eq 'B') { return }
+
+        if ($up -eq 'P' -and $preIdx.Count -gt 0) {
+            if (-not (Test-Path $bootstrap)) {
+                Write-PctkErr ('  [!] Bootstrap-Tools.ps1 no encontrado en {0}' -f $bootstrap)
+                continue
+            }
+            foreach ($idx in $preIdx) {
+                $t = $tools[$idx]
+                Write-PctkWork ('  Procesando: {0}...' -f $t.name)
+                if ($forceToggle) { & $bootstrap -ToolName $t.name -Force }
+                else              { & $bootstrap -ToolName $t.name }
+            }
+            continue
+        }
 
         if ($up -eq 'F') {
             $forceToggle = -not $forceToggle
@@ -1324,7 +1404,8 @@ function Invoke-IndividualActionDispatch {
 function Invoke-ApplyAutoProfile {
     <#
     .SYNOPSIS
-        Handler del menu principal [1]. Muestra selector de use-case, carga la receta
+        Receta rapida: paso 8 del service guiado (#136; hasta ahi era el [1] del
+        menu principal). Muestra selector de use-case, carga la receta
         segun el tier detectado, pide confirmacion y ejecuta Invoke-AutoProfile.
         Separacion UI/orquestacion: este handler NO hace las mutaciones — se las delega
         al engine (ProfileEngine.ps1).

@@ -1,0 +1,11 @@
+{
+  "_note": "Paquete de campo del service guiado (#136, paso 4): las tools que se premarcan en [T]. Cada id es el name de tools/manifest.json; nombre es lo que se ve en la lista del guiado.",
+  "tools": [
+    { "id": "shutup10",        "nombre": "OOSU10" },
+    { "id": "bcu",             "nombre": "BCUninstaller" },
+    { "id": "crystaldiskinfo", "nombre": "CrystalDiskInfo" },
+    { "id": "hwinfo64",        "nombre": "HWiNFO64" },
+    { "id": "wiztree",         "nombre": "WizTree" },
+    { "id": "winutil",         "nombre": "WinUtil" }
+  ]
+}
