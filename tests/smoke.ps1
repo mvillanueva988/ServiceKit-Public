@@ -3981,7 +3981,8 @@ function Invoke-Smoke72MainMenuRun {
     function Read-Host {
         param([Parameter(Position = 0)] $Prompt)
         # #136: la pausa del guiado despues de un paso cuenta tambien como pausa.
-        if ([string]$Prompt -match 'Enter\] para (continuar|volver a la lista)') { $smk72.Pauses++; return '' }
+        # #139: la pregunta de como quedo el paso tambien; '' = no lo hice (queda pendiente).
+        if ([string]$Prompt -match 'Enter\] para (continuar|volver a la lista)|\[H\] hecho') { $smk72.Pauses++; return '' }
         if ($smk72.Queue.Count -eq 0) { throw 'smoke72: el menu pidio otra opcion con la cola vacia (no termino)' }
         return $smk72.Queue.Dequeue()
     }
@@ -4120,7 +4121,10 @@ function Invoke-Smoke136Run {
         [switch] $KeepMemory,
         # La primera entrada de PCTk: la variable de memoria todavia no existe (StrictMode).
         [switch] $UnsetMemory,
-        [switch] $Vt
+        [switch] $Vt,
+        # #139: respuestas a la pregunta de como quedo el paso ([H]/[S]/[N]), en orden.
+        # Cola vacia -> 'H' (los tests de #136 corren pasos y esperan que queden hechos).
+        [string[]] $Answers = @()
     )
     if ($UnsetMemory) { Remove-Variable -Name 'PctkGuiadoMem' -Scope Script -ErrorAction SilentlyContinue }
     elseif (-not $KeepMemory) { $script:PctkGuiadoMem = $null }
@@ -4131,7 +4135,9 @@ function Invoke-Smoke136Run {
         Queue = [System.Collections.Generic.Queue[string]]::new(); Calls = [System.Collections.Generic.List[string]]::new()
         Crashes = [System.Collections.Generic.List[string]]::new(); Frames = [System.Collections.Generic.List[object]]::new()
         Cur = ''; Pauses = 0; State = $State; Dir = $StateDir; ThrowOn = $ThrowOn; CloseResult = $CloseResult; Preselect = $null
+        Answers = [System.Collections.Generic.Queue[string]]::new(); Asks = 0
     }
+    foreach ($a in $Answers) { $smk136.Answers.Enqueue($a) }
     $smk136.Frames.Add([System.Collections.Generic.List[string]]::new())
     foreach ($k in $Keys) { $smk136.Queue.Enqueue($k) }
     function Write-Host {
@@ -4143,6 +4149,11 @@ function Invoke-Smoke136Run {
     function Read-Host {
         param([Parameter(Position = 0)] $Prompt)
         if ([string]$Prompt -match 'volver a la lista') { $smk136.Pauses++; return '' }
+        if ([string]$Prompt -match '\[H\] hecho') {
+            $smk136.Pauses++; $smk136.Asks++
+            if ($smk136.Answers.Count -eq 0) { return 'H' }
+            return $smk136.Answers.Dequeue()
+        }
         if ($smk136.Queue.Count -eq 0) { throw 'smoke136: el guiado pidio otra tecla con la cola vacia (no termino)' }
         return $smk136.Queue.Dequeue()
     }
@@ -4182,6 +4193,7 @@ function Invoke-Smoke136Run {
     return [PSCustomObject]@{
         Result = $out; Calls = [string[]] $smk136.Calls.ToArray(); Crashes = [string[]] $smk136.Crashes.ToArray()
         Pauses = $smk136.Pauses; Left = $smk136.Queue.Count; Screen = $last; Preselect = $smk136.Preselect; StateDir = $StateDir
+        Asks = $smk136.Asks; AnswersLeft = $smk136.Answers.Count
     }
 }
 
@@ -4348,6 +4360,64 @@ Test-SmokeFunction 'Guiado136' '#136 (i) la pantalla del guiado entra en 120x30 
         if (($s -join "`n") -notmatch '\[Enter\] hacer el marcado') { throw 'falta la linea de ayuda' }
         if (($s -join "`n") -match 'mostrando') { throw 'la pantalla quedo paginada' }
     } finally { Remove-Item -LiteralPath $r.StateDir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# ─── #139: el guiado marca el estado REAL de cada paso ────────────────────────
+# Despues de correr un paso (sin crash) el guiado pregunta como quedo:
+# [H] hecho / [S] salteado / [N] o Enter = no lo hice (queda pendiente, y si
+# tenia marca se borra). Por el HANDLER, con Read-Host guionado.
+Test-SmokeFunction 'Guiado139' '#139 (a) correr un paso y contestar N o Enter -> NO queda hecho, sigue pendiente' {
+    $r = Invoke-Smoke136Run -Keys @('', 'B') -Answers @('N')
+    if ($r.Crashes.Count -gt 0) { throw ('crash: {0}' -f ($r.Crashes -join ' | ')) }
+    if (($r.Calls -join ',') -ne 'Invoke-DiagnosticSnapshot:Pre') { throw ("Enter llamo a [{0}]" -f ($r.Calls -join ',')) }
+    if ($r.Asks -ne 1 -or $r.AnswersLeft -ne 0) { throw ("el guiado pregunto {0} vez/veces como quedo el paso (quedaron {1} respuestas); esperada 1" -f $r.Asks, $r.AnswersLeft) }
+    $rows = Get-Smoke136Rows -Screen $r.Screen
+    if ($rows[1].Mark -ne ' ') { throw ("contestando N el paso 1 quedo '{0}'" -f $rows[1].Line) }
+    if ((Get-Smoke136Marked -Screen $r.Screen) -ne 1) { throw ("la marca quedo en el paso {0}; esperado 1 (sigue pendiente)" -f (Get-Smoke136Marked -Screen $r.Screen)) }
+    $r = Invoke-Smoke136Run -Keys @('3', 'B') -Answers @('')
+    if ($r.Asks -ne 1 -or $r.AnswersLeft -ne 0) { throw ("Enter: pregunto {0} vez/veces; esperada 1" -f $r.Asks) }
+    if ((Get-Smoke136Rows -Screen $r.Screen)[3].Mark -ne ' ') { throw 'contestando Enter el paso 3 no quedo pendiente' }
+}
+
+Test-SmokeFunction 'Guiado139' '#139 (b) H -> hecho; (c) S -> salteado; opcion invalida repregunta' {
+    $r = Invoke-Smoke136Run -Keys @('2', 'B') -Answers @('h')
+    if ($r.Asks -ne 1 -or $r.AnswersLeft -ne 0) { throw ("H: pregunto {0} vez/veces; esperada 1" -f $r.Asks) }
+    if ((Get-Smoke136Rows -Screen $r.Screen)[2].Mark -ne 'x') { throw 'contestando H el paso 2 no quedo hecho' }
+    $r = Invoke-Smoke136Run -Keys @('2', 'B') -Answers @('s')
+    if ($r.Asks -ne 1 -or $r.AnswersLeft -ne 0) { throw ("S: pregunto {0} vez/veces; esperada 1" -f $r.Asks) }
+    $rows = Get-Smoke136Rows -Screen $r.Screen
+    if ($rows[2].Mark -ne '-' -or $rows[2].Line -notmatch 'salteado') { throw ("contestando S el paso 2 quedo '{0}'" -f $rows[2].Line) }
+    $r = Invoke-Smoke136Run -Keys @('2', 'B') -Answers @('Q', 'H')
+    if ($r.Asks -ne 2 -or $r.AnswersLeft -ne 0) { throw ("invalida: pregunto {0} vez/veces; esperadas 2" -f $r.Asks) }
+    if ((Get-Smoke136Rows -Screen $r.Screen)[2].Mark -ne 'x') { throw 'despues de la invalida, H no dejo el paso hecho' }
+}
+
+Test-SmokeFunction 'Guiado139' '#139 (d) paso ya hecho, re-correrlo y contestar N -> queda pendiente (en memoria y en disco)' {
+    $r = Invoke-Smoke136Run -Keys @('3', '3', 'B') -Answers @('H', 'N')
+    if ($r.Asks -ne 2 -or $r.AnswersLeft -ne 0) { throw ("sin service: pregunto {0} vez/veces; esperadas 2" -f $r.Asks) }
+    if ((Get-Smoke136Rows -Screen $r.Screen)[3].Mark -ne ' ') { throw 'sin service: el paso 3 re-corrido con N siguio marcado' }
+    Remove-Item -LiteralPath $r.StateDir -Recurse -Force -ErrorAction SilentlyContinue
+    $st = New-Smoke136State
+    $r1 = Invoke-Smoke136Run -State $st -Keys @('2', 'B') -Answers @('H')
+    try {
+        if ((Get-Smoke136Rows -Screen $r1.Screen)[2].Mark -ne 'x') { throw 'con service: el paso 2 no quedo hecho' }
+        # Relanzar sin la memoria del proceso: el hecho sale del disco; re-correr y N lo borra.
+        $r2 = Invoke-Smoke136Run -State $st -StateDir $r1.StateDir -Keys @('2', 'B') -Answers @('N')
+        if ($r2.Asks -ne 1) { throw ("con service: pregunto {0} vez/veces; esperada 1" -f $r2.Asks) }
+        if ((Get-Smoke136Rows -Screen $r2.Screen)[2].Mark -ne ' ') { throw 'con service: el paso 2 re-corrido con N siguio marcado' }
+        $r3 = Invoke-Smoke136Run -State $st -StateDir $r1.StateDir -Keys @('B')
+        $rows = Get-Smoke136Rows -Screen $r3.Screen
+        if ($rows[2].Mark -ne ' ') { throw ("relanzado: el borrado no persistio, el paso 2 sale '{0}'" -f $rows[2].Line) }
+        if ((Get-Smoke136Marked -Screen $r3.Screen) -ne 1) { throw ("relanzado: la marca esta en {0}; esperado 1" -f (Get-Smoke136Marked -Screen $r3.Screen)) }
+    } finally { Remove-Item -LiteralPath $r1.StateDir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Guiado139' '#139 (e) un paso que revienta no pregunta: queda pendiente y pausa como antes' {
+    $r = Invoke-Smoke136Run -Keys @('2', 'B') -ThrowOn @('Invoke-DiagnosticBsod') -Answers @('H')
+    if ($r.Crashes.Count -ne 1) { throw ("crashes: [{0}]" -f ($r.Crashes -join ' | ')) }
+    if ($r.Asks -ne 0) { throw ("con crash pregunto {0} vez/veces como quedo; esperado 0" -f $r.Asks) }
+    if ($r.Pauses -ne 1) { throw ("con crash {0} pausas; esperada 1" -f $r.Pauses) }
+    if ((Get-Smoke136Rows -Screen $r.Screen)[2].Mark -ne ' ') { throw 'el paso que revento no quedo pendiente' }
 }
 
 Test-SmokeFunction 'Guiado136' '#136 guard: ningun .ps1 de core/modules/utils/raiz lee auto_disable_known_bloat (AST) y ninguna receta auto la tiene' {
