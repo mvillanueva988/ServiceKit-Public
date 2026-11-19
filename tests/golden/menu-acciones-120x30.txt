@@ -21,7 +21,7 @@
   [8]  Apps Win32 + UWP                                       ── SEGURIDAD ─────────────────────────────────────────    
   [9]  Privacidad (registry o OOSU10)                         [18] Encriptacion de disco (BitLocker)                    
   [10] Inicio del Sistema                                     ── RENDIMIENTO ───────────────────────────────────────    
-  [11] Actualizaciones de Windows                             [19] Defender: reagendar escaneo + exclusiones (dev /...  
+  [11] Actualizaciones de Windows                             [19] Defender: reagendar escaneo + exclusiones (dev/WSL)  
                                                               [20] Energia: PERFBOOSTMODE + laptop gaming (por PC)      
                                                               [B]  Volver al menu principal                             
                                                                                                                         

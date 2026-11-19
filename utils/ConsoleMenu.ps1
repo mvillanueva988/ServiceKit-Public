@@ -147,7 +147,7 @@ function Get-IndividualActionSpec {
            Accion = { param($MachineProfile) Invoke-ActionEncryption -MachineProfile $MachineProfile } }
         @{ Tipo = 'Separador' }
         @{ Tipo = 'Seccion'; Texto = 'RENDIMIENTO' }
-        @{ Tipo = 'Opcion'; Tecla = '19'; Texto = 'Defender: reagendar escaneo + exclusiones (dev / WSL)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
+        @{ Tipo = 'Opcion'; Tecla = '19'; Texto = 'Defender: reagendar escaneo + exclusiones (dev/WSL)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Invoke-ActionDefenderScan -MachineProfile $MachineProfile } }
         @{ Tipo = 'Opcion'; Tecla = '20'; Texto = 'Energia: PERFBOOSTMODE + laptop gaming (por PC)'; Aclaracion = $null; Color = $null; Salida = 'Pausa'
            Accion = { param($MachineProfile) Invoke-ActionEnergyLaptop -MachineProfile $MachineProfile } }
