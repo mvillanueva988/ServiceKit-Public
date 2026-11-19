@@ -3882,7 +3882,7 @@ Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: menu principal a 120x30 en
     if ($fila.Count -ne 1) { throw ("[1] aparece en {0} filas" -f $fila.Count) }
     if ($fila[0] -notmatch '[ >] \[A\] ') { throw ("[A] no esta en la fila de [1]: '{0}'" -f $fila[0].TrimEnd()) }
     if ($fila[0].IndexOf('[A]') -ne 62) { throw ("la columna derecha no arranca en x=60: [A] en la columna {0}" -f ($fila[0].IndexOf('[A]') - 2)) }
-    if ($fila[0] -match 'Generic/Work') { throw 'en dos columnas la fila no lleva la aclaracion entre parentesis' }
+    if ($fila[0] -match 'orden de campo') { throw 'en dos columnas la fila no lleva la aclaracion entre parentesis' }
 }
 
 Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: submenu [A] a 120x30 en dos columnas, sin paginar, todas sus teclas' {
@@ -3902,7 +3902,7 @@ Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: a ancho 99 el principal qu
     [object[]] $fila = @($menu | Where-Object { $_ -match '[ >] \[1\] ' })
     if ($fila.Count -ne 1) { throw ("[1] aparece en {0} filas" -f $fila.Count) }
     if ($fila[0] -match '\[A\]') { throw 'a ancho 90 [A] quedo en la fila de [1] (dos columnas)' }
-    if ($fila[0] -notmatch '\(Generic/Work/Multimedia\)') { throw 'en una columna la fila de [1] perdio la aclaracion' }
+    if ($fila[0] -notmatch '\(paso a paso, en el orden de campo\)') { throw 'en una columna la fila de [1] perdio la aclaracion' }
     if (($menu -join "`n") -notmatch 'Usa flechas|mostrando') { throw 'la linea de ayuda no es la de una columna' }
 }
 
@@ -3928,7 +3928,7 @@ Test-SmokeFunction 'ConsoleMenu' '#72 paso 4 handler: la linea de aclaracion sig
     $spec = Get-MainMenuSpec
     $r = Invoke-Smoke72ColumnKeys -Spec $spec
     [string] $acl = (Get-Smoke72AclLine -Lines $r.Snap).TrimEnd()
-    if ($acl -ne '  (Generic/Work/Multimedia)') { throw ("con [1] resaltado la aclaracion dice '{0}'" -f $acl) }
+    if ($acl -ne '  (paso a paso, en el orden de campo)') { throw ("con [1] resaltado la aclaracion dice '{0}'" -f $acl) }
     $r = Invoke-Smoke72ColumnKeys -Spec $spec -Keys @(New-Smoke72Key 'Down')
     $acl = (Get-Smoke72AclLine -Lines $r.Snap).TrimEnd()
     if ($acl -ne '  (cliente especifico)') { throw ("con [2] resaltado la aclaracion dice '{0}'" -f $acl) }
@@ -3966,7 +3966,9 @@ function Invoke-Smoke72MainMenuRun {
     # 14 handlers del menu principal sombreados: cada uno anota la llamada. Read-Host
     # devuelve las opciones en orden y cuenta las pausas ([Enter] para continuar);
     # si el menu pide otra opcion con la cola vacia, tira (el menu no termino).
-    param([string[]] $Choices, [bool] $CloseResult = $false, [bool] $UninstallResult = $false, [switch] $Direct)
+    # -RealGuiado (#136): el [1] corre el service guiado REAL (sus pasos llaman a los
+    # handlers sombreados de aca); sin el, Invoke-ServiceGuiado tambien se sombrea.
+    param([string[]] $Choices, [bool] $CloseResult = $false, [bool] $UninstallResult = $false, [switch] $Direct, [switch] $RealGuiado)
     $fx = New-SmokeMenuFixture
     $smk72 = @{
         Queue = [System.Collections.Generic.Queue[string]]::new(); Calls = [System.Collections.Generic.List[object]]::new()
@@ -3978,7 +3980,8 @@ function Invoke-Smoke72MainMenuRun {
     function Clear-Host { }
     function Read-Host {
         param([Parameter(Position = 0)] $Prompt)
-        if ([string]$Prompt -match 'Enter\] para continuar') { $smk72.Pauses++; return '' }
+        # #136: la pausa del guiado despues de un paso cuenta tambien como pausa.
+        if ([string]$Prompt -match 'Enter\] para (continuar|volver a la lista)') { $smk72.Pauses++; return '' }
         if ($smk72.Queue.Count -eq 0) { throw 'smoke72: el menu pidio otra opcion con la cola vacia (no termino)' }
         return $smk72.Queue.Dequeue()
     }
@@ -3988,6 +3991,10 @@ function Invoke-Smoke72MainMenuRun {
     function Get-ServiceState { return $null }
     function Write-DispatchCrash { param($ErrorRecord, $Choice, $MenuLabel) $smk72.Crashes.Add(('[{0}] {1}' -f $Choice, $ErrorRecord.Exception.Message)) }
     function Add-Smoke72Call { param([string] $Name, $MachineProfile, [string] $Phase = '') $smk72.Calls.Add([PSCustomObject]@{ Name = $Name; Phase = $Phase; Profile = $MachineProfile }) }
+    if (-not $RealGuiado) {
+        function Invoke-ServiceGuiado      { param($MachineProfile) Add-Smoke72Call 'Invoke-ServiceGuiado' $MachineProfile; return [bool] $smk72.CloseResult }
+    }
+    $script:PctkGuiadoMem = $null
     function Invoke-ApplyAutoProfile       { param($MachineProfile) Add-Smoke72Call 'Invoke-ApplyAutoProfile' $MachineProfile }
     function Invoke-NamedProfileMenu       { param($MachineProfile) Add-Smoke72Call 'Invoke-NamedProfileMenu' $MachineProfile }
     function Invoke-DiagnosticSnapshot     { param($Phase, $MachineProfile) Add-Smoke72Call 'Invoke-DiagnosticSnapshot' $MachineProfile ([string]$Phase) }
@@ -4035,7 +4042,7 @@ function Assert-Smoke72OneCall {
 
 Test-SmokeFunction 'Router' '#72 despacho por el handler: cada tecla del menu principal llama a su handler una vez con el perfil recibido' {
     $expect = @{
-        '1' = 'Invoke-ApplyAutoProfile'; '2' = 'Invoke-NamedProfileMenu'
+        '1' = 'Invoke-ServiceGuiado'; '2' = 'Invoke-NamedProfileMenu'
         '3' = 'Invoke-DiagnosticSnapshot:Pre'; '4' = 'Invoke-DiagnosticSnapshot:Post'
         '5' = 'Invoke-DiagnosticCompare'; '6' = 'Invoke-DiagnosticBsod'; '7' = 'Invoke-DiagnosticDiskHealth'
         '8' = 'Invoke-ClientReport'; 'R' = 'Invoke-ResearchPrompt'; 'F' = 'Invoke-FpsMeasurement'
@@ -4061,9 +4068,9 @@ Test-SmokeFunction 'Router' '#72 despacho por el handler: cada tecla del menu pr
     }
 }
 
-Test-SmokeFunction 'Router' '#72 despacho por el handler: [U] y [L] con $true terminan el menu con U; con $false pausan y siguen' {
-    foreach ($k in @('U', 'L')) {
-        [string] $h = if ($k -eq 'U') { 'Invoke-UninstallToolkit' } else { 'Invoke-ServiceClose' }
+Test-SmokeFunction 'Router' '#72 despacho por el handler: [U], [L] y [1] (#136) con $true terminan el menu con U; con $false pausan y siguen' {
+    foreach ($k in @('U', 'L', '1')) {
+        [string] $h = switch ($k) { 'U' { 'Invoke-UninstallToolkit' } 'L' { 'Invoke-ServiceClose' } default { 'Invoke-ServiceGuiado' } }
         $run = Invoke-Smoke72MainMenuRun -Choices @($k, 'X') -CloseResult $true -UninstallResult $true
         Assert-Smoke72OneCall -Run $run -Ctx ("[{0}] con `$true" -f $k) -Expected $h
         if ($run.Result -ne 'U') { throw ("[{0}] con `$true: el menu devolvio '{1}'; esperado 'U'" -f $k, $run.Result) }
@@ -4093,6 +4100,271 @@ Test-SmokeFunction 'Router' '#72 despacho por el handler: tecla invalida -> Opci
         [string] $h = if ($k -eq 'u') { 'Invoke-UninstallToolkit' } else { 'Invoke-ServiceClose' }
         Assert-Smoke72OneCall -Run $run -Ctx ("despacho directo '{0}'" -f $k) -Expected $h
         if ($run.DirectOut.Count -ne 0) { throw ("el despacho directo de [{0}] dejo {1} objeto(s) en el pipeline: '{2}'" -f $k, $run.DirectOut.Count, ($run.DirectOut -join ', ')) }
+    }
+}
+
+# ─── #136: el [1] como service guiado ─────────────────────────────────────────
+# Los tests corren el HANDLER entero (Invoke-ServiceGuiado) bajo StrictMode y
+# EAP=Stop, con los 10 handlers de paso sombreados (anotan la llamada) y las
+# teclas guionadas por Read-Host. La pausa despues de un paso ('[Enter] para
+# volver a la lista') se cuenta aparte; si el guiado pide otra tecla con la cola
+# vacia, tira (no termino). Cada Clear-Host abre un frame nuevo: el ultimo es la
+# lista que quedo en pantalla.
+function Invoke-Smoke136Run {
+    param(
+        [string[]] $Keys = @(),
+        [object] $State = $null,
+        [string] $StateDir = '',
+        [string[]] $ThrowOn = @(),
+        [bool] $CloseResult = $false,
+        [switch] $KeepMemory,
+        [switch] $Vt
+    )
+    if (-not $KeepMemory) { $script:PctkGuiadoMem = $null }
+    if ([string]::IsNullOrEmpty($StateDir)) {
+        $StateDir = Join-Path ([System.IO.Path]::GetTempPath()) ('pctk136-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    }
+    $smk136 = @{
+        Queue = [System.Collections.Generic.Queue[string]]::new(); Calls = [System.Collections.Generic.List[string]]::new()
+        Crashes = [System.Collections.Generic.List[string]]::new(); Frames = [System.Collections.Generic.List[object]]::new()
+        Cur = ''; Pauses = 0; State = $State; Dir = $StateDir; ThrowOn = $ThrowOn; CloseResult = $CloseResult; Preselect = $null
+    }
+    $smk136.Frames.Add([System.Collections.Generic.List[string]]::new())
+    foreach ($k in $Keys) { $smk136.Queue.Enqueue($k) }
+    function Write-Host {
+        param([Parameter(Position = 0)] $Object = '', $ForegroundColor, $BackgroundColor, [switch] $NoNewline)
+        $smk136.Cur += [string]$Object
+        if (-not $NoNewline) { $smk136.Frames[$smk136.Frames.Count - 1].Add($smk136.Cur); $smk136.Cur = '' }
+    }
+    function Clear-Host { $smk136.Cur = ''; $smk136.Frames.Add([System.Collections.Generic.List[string]]::new()) }
+    function Read-Host {
+        param([Parameter(Position = 0)] $Prompt)
+        if ([string]$Prompt -match 'volver a la lista') { $smk136.Pauses++; return '' }
+        if ($smk136.Queue.Count -eq 0) { throw 'smoke136: el guiado pidio otra tecla con la cola vacia (no termino)' }
+        return $smk136.Queue.Dequeue()
+    }
+    function Get-ServiceState { return $smk136.State }
+    function Test-ServiceStateStale { return $false }
+    function Get-ServiceGuiadoStatePath { return (Join-Path $smk136.Dir 'guiado.json') }
+    function Write-DispatchCrash { param($ErrorRecord, $Choice, $MenuLabel) $smk136.Crashes.Add(('[{0}] {1}' -f $Choice, $ErrorRecord.Exception.Message)) }
+    function Add-Smoke136Call {
+        param([string] $Name)
+        $smk136.Calls.Add($Name)
+        if ($smk136.ThrowOn -contains $Name) { throw ('smoke136: {0} revento' -f $Name) }
+    }
+    function Invoke-DiagnosticSnapshot   { param($Phase, $MachineProfile) Add-Smoke136Call ('Invoke-DiagnosticSnapshot:' + [string]$Phase) }
+    function Invoke-DiagnosticBsod       { param($MachineProfile) Add-Smoke136Call 'Invoke-DiagnosticBsod' }
+    function Invoke-DiagnosticDiskHealth { param($MachineProfile) Add-Smoke136Call 'Invoke-DiagnosticDiskHealth' }
+    function Show-ToolsMenu              { param($MachineProfile, [string[]] $Preselect) $smk136.Preselect = $Preselect; Add-Smoke136Call 'Show-ToolsMenu' }
+    function Invoke-ActionOosuGui        { param($MachineProfile) Add-Smoke136Call 'Invoke-ActionOosuGui' }
+    function Invoke-ServiceGuiadoApps    { param($MachineProfile) Add-Smoke136Call 'Invoke-ServiceGuiadoApps' }
+    function Invoke-ActionStartup        { param($MachineProfile) Add-Smoke136Call 'Invoke-ActionStartup' }
+    function Invoke-ApplyAutoProfile     { param($MachineProfile) Add-Smoke136Call 'Invoke-ApplyAutoProfile' }
+    function Invoke-FpsMeasurement       { param($MachineProfile) Add-Smoke136Call 'Invoke-FpsMeasurement' }
+    function Invoke-ServiceClose         { Add-Smoke136Call 'Invoke-ServiceClose'; return [bool] $smk136.CloseResult }
+
+    [bool] $vtBefore = $script:PctkVT
+    if ($Vt) { $script:PctkVT = $true }
+    [object[]] $out = @()
+    try {
+        $out = @(Invoke-ServiceGuiado -MachineProfile (New-SmokeMenuFixture).Profile)
+    } finally { $script:PctkVT = $vtBefore }
+
+    # La lista que quedo en pantalla: el ultimo frame que tiene la fila del paso 10.
+    [string[]] $last = @()
+    foreach ($f in $smk136.Frames) {
+        [string[]] $plain = @($f | ForEach-Object { ([string]$_) -replace '\x1b\[[0-9;?]*[A-Za-z]', '' })
+        if (@($plain | Where-Object { $_ -match '^ [> ] \[.\] 10 ' }).Count -gt 0) { $last = $plain }
+    }
+    return [PSCustomObject]@{
+        Result = $out; Calls = [string[]] $smk136.Calls.ToArray(); Crashes = [string[]] $smk136.Crashes.ToArray()
+        Pauses = $smk136.Pauses; Left = $smk136.Queue.Count; Screen = $last; Preselect = $smk136.Preselect; StateDir = $StateDir
+    }
+}
+
+function Get-Smoke136Rows {
+    # Las filas de pasos de la pantalla: Paso -> @{ Mark ('x','-',' '); Marked (bool); Line }.
+    param([string[]] $Screen)
+    $rows = @{}
+    foreach ($l in $Screen) {
+        $m = [regex]::Match($l, '^ ([> ]) \[([x\- ])\] (\d+) ')
+        if ($m.Success) { $rows[[int]$m.Groups[3].Value] = [PSCustomObject]@{ Mark = $m.Groups[2].Value; Marked = ($m.Groups[1].Value -eq '>'); Line = $l } }
+    }
+    if ($rows.Count -ne 10) { throw ("la pantalla del guiado tiene {0} filas de paso; esperadas 10" -f $rows.Count) }
+    return $rows
+}
+
+function Get-Smoke136Marked {
+    param([string[]] $Screen)
+    $rows = Get-Smoke136Rows -Screen $Screen
+    [int[]] $m = @($rows.Keys | Where-Object { $rows[$_].Marked })
+    if ($m.Count -gt 1) { throw ("hay {0} pasos marcados con '>'" -f $m.Count) }
+    if ($m.Count -eq 0) { return 0 }
+    return $m[0]
+}
+
+function New-Smoke136State {
+    param([string] $OpenedAt = '2026-11-19T15:40:00-03:00', [object] $PreTakenAt = $null)
+    return [PSCustomObject]@{ schema_version = '1.0'; hostname = $env:COMPUTERNAME; opened_at = $OpenedAt; pre_taken_at = $PreTakenAt; open = $true }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (a) Enter corre el paso marcado (1) y la marca queda en el 2, sin correr el 2 solo' {
+    $r = Invoke-Smoke136Run -Keys @('', 'B')
+    if ($r.Crashes.Count -gt 0) { throw ('crash: {0}' -f ($r.Crashes -join ' | ')) }
+    if (($r.Calls -join ',') -ne 'Invoke-DiagnosticSnapshot:Pre') { throw ("Enter llamo a [{0}]; esperado solo Invoke-DiagnosticSnapshot:Pre" -f ($r.Calls -join ',')) }
+    if ($r.Pauses -ne 1) { throw ("{0} pausas despues del paso; esperada 1" -f $r.Pauses) }
+    if ($r.Left -ne 0) { throw ('quedaron {0} teclas sin leer' -f $r.Left) }
+    $rows = Get-Smoke136Rows -Screen $r.Screen
+    if ($rows[1].Mark -ne 'x') { throw ("el paso 1 no quedo hecho: '{0}'" -f $rows[1].Line) }
+    if ((Get-Smoke136Marked -Screen $r.Screen) -ne 2) { throw ("la marca quedo en el paso {0}; esperado 2" -f (Get-Smoke136Marked -Screen $r.Screen)) }
+    if (@($r.Result | Where-Object { $_ -eq $true }).Count -gt 0) { throw 'el guiado devolvio $true sin cerrar el service' }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (b) S saltea el paso marcado y la marca avanza, sin correr nada' {
+    $r = Invoke-Smoke136Run -Keys @('S', 's', 'B')
+    if ($r.Calls.Count -ne 0) { throw ('S corrio [{0}]' -f ($r.Calls -join ',')) }
+    $rows = Get-Smoke136Rows -Screen $r.Screen
+    if ($rows[1].Mark -ne '-' -or $rows[2].Mark -ne '-') { throw ("los pasos 1 y 2 no quedaron salteados: '{0}' / '{1}'" -f $rows[1].Line, $rows[2].Line) }
+    if ($rows[1].Line -notmatch 'salteado') { throw ("el salteado no dice salteado: '{0}'" -f $rows[1].Line) }
+    if ((Get-Smoke136Marked -Screen $r.Screen) -ne 3) { throw ("la marca quedo en el paso {0}; esperado 3" -f (Get-Smoke136Marked -Screen $r.Screen)) }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (c) un numero corre ese paso aunque este salteado; 4 premarca el paquete de campo' {
+    $r = Invoke-Smoke136Run -Keys @('S', '1', '4', 'B')
+    if (($r.Calls -join ',') -ne 'Invoke-DiagnosticSnapshot:Pre,Show-ToolsMenu') { throw ("llamo a [{0}]" -f ($r.Calls -join ',')) }
+    $rows = Get-Smoke136Rows -Screen $r.Screen
+    if ($rows[1].Mark -ne 'x') { throw ("el salteado corrido por numero no quedo hecho: '{0}'" -f $rows[1].Line) }
+    if ($rows[4].Mark -ne 'x') { throw ("el paso 4 no quedo hecho: '{0}'" -f $rows[4].Line) }
+    if ((Get-Smoke136Marked -Screen $r.Screen) -ne 2) { throw ("la marca quedo en el paso {0}; esperado 2 (primer pendiente)" -f (Get-Smoke136Marked -Screen $r.Screen)) }
+    [string[]] $paq = @((Get-Content -LiteralPath (Join-Path $repoRoot 'data\paquete-campo.json') -Raw | ConvertFrom-Json).tools | ForEach-Object { [string]$_.id })
+    if ((@($r.Preselect) -join ',') -ne ($paq -join ',')) { throw ("el paso 4 premarco [{0}]; el paquete es [{1}]" -f (@($r.Preselect) -join ','), ($paq -join ',')) }
+    # 10 tambien es un numero valido; 11 y 0 no corren nada.
+    $r = Invoke-Smoke136Run -Keys @('11', '0', 'B')
+    if ($r.Calls.Count -ne 0) { throw ('11/0 corrieron [{0}]' -f ($r.Calls -join ',')) }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (d) el estado sobrevive: relanzar con el mismo service muestra hechos/salteados; PRE en disco -> paso 1 [x]; service nuevo -> lista limpia' {
+    $st = New-Smoke136State
+    $r1 = Invoke-Smoke136Run -State $st -Keys @('2', 'S', 'B')
+    try {
+        if (-not (Test-Path -LiteralPath (Join-Path $r1.StateDir 'guiado.json'))) { throw 'con service abierto no se escribio guiado.json' }
+        # Relanzar SIN la memoria del proceso: lo que se ve sale del disco.
+        $r2 = Invoke-Smoke136Run -State $st -StateDir $r1.StateDir -Keys @('B')
+        $rows = Get-Smoke136Rows -Screen $r2.Screen
+        if ($rows[1].Mark -ne '-') { throw ("relanzado: el paso 1 salteado no persistio: '{0}'" -f $rows[1].Line) }
+        if ($rows[2].Mark -ne 'x') { throw ("relanzado: el paso 2 hecho no persistio: '{0}'" -f $rows[2].Line) }
+        if ((Get-Smoke136Marked -Screen $r2.Screen) -ne 3) { throw ("relanzado: la marca esta en {0}; esperado 3" -f (Get-Smoke136Marked -Screen $r2.Screen)) }
+        if ($r2.Calls.Count -ne 0) { throw ('relanzar corrio [{0}]' -f ($r2.Calls -join ',')) }
+        # Service nuevo (otro opened_at) con el mismo archivo: lista limpia.
+        $r3 = Invoke-Smoke136Run -State (New-Smoke136State -OpenedAt '2026-11-20T09:00:00-03:00') -StateDir $r1.StateDir -Keys @('B')
+        $rows = Get-Smoke136Rows -Screen $r3.Screen
+        foreach ($p in 1..10) { if ($rows[$p].Mark -ne ' ') { throw ("service nuevo: el paso {0} no arranco limpio: '{1}'" -f $p, $rows[$p].Line) } }
+    } finally { Remove-Item -LiteralPath $r1.StateDir -Recurse -Force -ErrorAction SilentlyContinue }
+    # PRE tomado (aunque haya sido por el [3] suelto): paso 1 [x] sin guiado.json.
+    $r4 = Invoke-Smoke136Run -State (New-Smoke136State -PreTakenAt '2026-11-19T15:42:00-03:00') -Keys @('B')
+    try {
+        $rows = Get-Smoke136Rows -Screen $r4.Screen
+        if ($rows[1].Mark -ne 'x') { throw ("con PRE en el service el paso 1 sale '{0}'" -f $rows[1].Line) }
+        if ((Get-Smoke136Marked -Screen $r4.Screen) -ne 2) { throw ("con PRE la marca esta en {0}; esperado 2" -f (Get-Smoke136Marked -Screen $r4.Screen)) }
+        if (($r4.Screen -join "`n") -notmatch 'service abierto 19/11 15:40') { throw 'la cabecera no dice service abierto 19/11 15:40' }
+    } finally { Remove-Item -LiteralPath $r4.StateDir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (e) paso 10 con $true -> el guiado devuelve $true y el menu principal termina con U; con $false sigue' {
+    $r = Invoke-Smoke136Run -Keys @('10') -CloseResult $true
+    if (($r.Calls -join ',') -ne 'Invoke-ServiceClose') { throw ("10 llamo a [{0}]" -f ($r.Calls -join ',')) }
+    if (@($r.Result).Count -ne 1 -or $r.Result[0] -ne $true) { throw ("el guiado devolvio '{0}'; esperado `$true" -f (@($r.Result) -join ',')) }
+    if ($r.Pauses -ne 0) { throw 'con $true el guiado pauso antes de terminar' }
+    $r = Invoke-Smoke136Run -Keys @('10', 'B') -CloseResult $false
+    if (@($r.Result | Where-Object { $_ -eq $true }).Count -gt 0) { throw 'con $false el guiado devolvio $true' }
+    if ($r.Left -ne 0) { throw 'con $false el guiado no siguio hasta la B' }
+    # Por el menu principal REAL: [1] -> guiado real -> 10 -> Invoke-ServiceClose ($true) -> 'U'.
+    $run = Invoke-Smoke72MainMenuRun -Choices @('1', '10', 'X') -CloseResult $true -RealGuiado
+    if ($run.Crashes.Count -gt 0) { throw ('crash: {0}' -f ($run.Crashes -join ' | ')) }
+    if ($run.Result -ne 'U') { throw ("el menu principal devolvio '{0}'; esperado 'U'" -f $run.Result) }
+    if ($run.Left -ne 1 -or $run.Pauses -ne 0) { throw ("el menu no termino al toque ({0} pausas, quedaron {1})" -f $run.Pauses, $run.Left) }
+    $run = Invoke-Smoke72MainMenuRun -Choices @('1', '10', 'B', 'X') -CloseResult $false -RealGuiado
+    # 2 pausas: la del guiado despues del paso 10 y la del menu principal despues del [1].
+    if ($run.Result -ne 'X' -or $run.Left -ne 0 -or $run.Pauses -ne 2) { throw ("con `$false el menu devolvio '{0}' ({1} pausas, quedaron {2})" -f $run.Result, $run.Pauses, $run.Left) }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (f) un paso que revienta queda auditado y pendiente, y el guiado sigue' {
+    $r = Invoke-Smoke136Run -Keys @('2', '3', 'B') -ThrowOn @('Invoke-DiagnosticBsod')
+    if ($r.Crashes.Count -ne 1 -or $r.Crashes[0] -notmatch '^\[2\] smoke136: Invoke-DiagnosticBsod revento') { throw ("crashes: [{0}]" -f ($r.Crashes -join ' | ')) }
+    if (($r.Calls -join ',') -ne 'Invoke-DiagnosticBsod,Invoke-DiagnosticDiskHealth') { throw ("despues del crash no siguio: [{0}]" -f ($r.Calls -join ',')) }
+    $rows = Get-Smoke136Rows -Screen $r.Screen
+    if ($rows[2].Mark -ne ' ') { throw ("el paso que revento no quedo pendiente: '{0}'" -f $rows[2].Line) }
+    if ($rows[3].Mark -ne 'x') { throw ("el paso siguiente no quedo hecho: '{0}'" -f $rows[3].Line) }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (g) sin service abierto no revienta: cabecera sin service, estado en memoria, sin archivo' {
+    $r = Invoke-Smoke136Run -Keys @('3', 'B')
+    try {
+        if ($r.Crashes.Count -gt 0) { throw ('crash: {0}' -f ($r.Crashes -join ' | ')) }
+        if (($r.Screen -join "`n") -notmatch 'sin service abierto') { throw 'la cabecera no dice sin service abierto' }
+        if (Test-Path -LiteralPath (Join-Path $r.StateDir 'guiado.json')) { throw 'sin service se escribio guiado.json' }
+        # Volver a entrar en el mismo proceso: la memoria conserva el paso 3.
+        $r2 = Invoke-Smoke136Run -Keys @('B') -StateDir $r.StateDir -KeepMemory
+        if ((Get-Smoke136Rows -Screen $r2.Screen)[3].Mark -ne 'x') { throw 'sin service el estado no quedo en memoria' }
+    } finally { Remove-Item -LiteralPath $r.StateDir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (h) Show-ToolsMenu con -Preselect marca exactamente el paquete de campo; sin el, nada (como hoy)' {
+    [string[]] $paq = @((Get-Content -LiteralPath (Join-Path $repoRoot 'data\paquete-campo.json') -Raw | ConvertFrom-Json).tools | ForEach-Object { [string]$_.id })
+    if ($paq.Count -ne 6) { throw ("el paquete de campo tiene {0} ids; esperados 6" -f $paq.Count) }
+    [string[]] $man = @((Get-Content -LiteralPath (Join-Path $repoRoot 'tools\manifest.json') -Raw | ConvertFrom-Json).tools | ForEach-Object { [string]$_.name })
+    foreach ($id in $paq) { if ($man -notcontains $id) { throw ("el id '{0}' del paquete no esta en tools\manifest.json" -f $id) } }
+    $smk136h = @{ Checked = $null; Names = $null }
+    function Test-PctkInteractiveConsole { return $true }
+    function Read-PctkMultiChoice {
+        param($Items, $RenderHeader, $Checked, $InitialHighlight, $LegendLine, $ActionKeys)
+        $smk136h.Checked = @($Checked)
+        return [PSCustomObject]@{ Action = 'cancel'; Checked = $Checked; HiIdx = 0 }
+    }
+    function Invoke-Smoke136hMarked {
+        [string[]] $n = @()
+        for ([int] $i = 0; $i -lt $smk136h.Checked.Count; $i++) { if ($smk136h.Checked[$i]) { $n += $man[$i] } }
+        return , $n
+    }
+    Show-ToolsMenu -MachineProfile ([PSCustomObject]@{}) -Preselect $paq
+    [string[]] $got = Invoke-Smoke136hMarked
+    if ((($got | Sort-Object) -join ',') -ne (($paq | Sort-Object) -join ',')) { throw ("con -Preselect quedaron marcadas [{0}]; esperado [{1}]" -f ($got -join ','), ($paq -join ',')) }
+    Show-ToolsMenu -MachineProfile ([PSCustomObject]@{})
+    $got = Invoke-Smoke136hMarked
+    if ($got.Count -ne 0) { throw ("sin -Preselect quedaron marcadas [{0}]" -f ($got -join ',')) }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 (i) la pantalla del guiado entra en 120x30 sin paginar, <= 118 columnas, los 10 pasos' {
+    $r = Invoke-Smoke136Run -State (New-Smoke136State -PreTakenAt '2026-11-19T15:42:00-03:00') -Keys @('S', 'B') -Vt
+    try {
+        [string[]] $s = $r.Screen
+        $null = Get-Smoke136Rows -Screen $s
+        # +1: la linea del prompt de Read-Host, que va debajo de lo dibujado.
+        if (($s.Count + 1) -gt 29) { throw ("la pantalla ocupa {0} lineas + prompt; a 30 filas tiene que dejar libre la ultima" -f $s.Count) }
+        foreach ($l in $s) { if ($l.TrimEnd().Length -gt 118) { throw ("una linea mide {0} columnas (max 118): '{1}'" -f $l.TrimEnd().Length, $l.TrimEnd()) } }
+        if (($s -join "`n") -notmatch '\[Enter\] hacer el marcado') { throw 'falta la linea de ayuda' }
+        if (($s -join "`n") -match 'mostrando') { throw 'la pantalla quedo paginada' }
+    } finally { Remove-Item -LiteralPath $r.StateDir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-SmokeFunction 'Guiado136' '#136 guard: ningun .ps1 de core/modules/utils/raiz lee auto_disable_known_bloat (AST) y ninguna receta auto la tiene' {
+    [System.Collections.Generic.List[string]] $hits = [System.Collections.Generic.List[string]]::new()
+    [object[]] $files = @()
+    foreach ($d in @('core', 'modules', 'utils')) { $files += @(Get-ChildItem -LiteralPath (Join-Path $repoRoot $d) -Filter '*.ps1' -File) }
+    $files += @(Get-ChildItem -LiteralPath $repoRoot -Filter '*.ps1' -File)
+    if ($files.Count -lt 20) { throw ("el barrido encontro solo {0} .ps1: el guard se vacio" -f $files.Count) }
+    foreach ($f in $files) {
+        $tk = $null; $pe = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref] $tk, [ref] $pe)
+        $found = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -and ([string]$n.Value).Contains('auto_disable_known_bloat') }, $true)
+        if (@($found).Count -gt 0) { $hits.Add($f.Name) }
+    }
+    if ($hits.Count -gt 0) { throw ("leen auto_disable_known_bloat: {0}" -f ($hits -join ', ')) }
+    [object[]] $recetas = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'data\profiles\auto') -Filter '*.json' -File)
+    if ($recetas.Count -ne 3) { throw ("recetas auto: {0}; esperadas 3" -f $recetas.Count) }
+    foreach ($j in $recetas) {
+        $o = Get-Content -LiteralPath $j.FullName -Raw | ConvertFrom-Json
+        if ($null -ne $o.PSObject.Properties['startup'] -and $null -ne $o.startup.PSObject.Properties['auto_disable_known_bloat']) { throw ("{0} todavia tiene startup.auto_disable_known_bloat" -f $j.Name) }
     }
 }
 
