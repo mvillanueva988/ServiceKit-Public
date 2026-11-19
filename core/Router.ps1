@@ -206,7 +206,11 @@ function Show-MachineBanner {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [PSCustomObject] $MachineProfile
+        [PSCustomObject] $MachineProfile,
+        # #72 paso 4: sin PRE, la fila PRE suma '-> tomar PRE [3] antes de trabajar'
+        # (reemplaza la linea suelta que dibujaba el menu principal). Lo pasa solo el
+        # menu principal: es donde estaba el aviso y donde esta el [3].
+        [switch] $PreAviso
     )
 
     # #46: NO consultar CIM aca -- ver Get-PctkBannerCim (1122 ms medidos por
@@ -322,6 +326,7 @@ function Show-MachineBanner {
             [string] $preLabel = if ($rawPre.Length -ge 16) { $rawPre.Substring(0, 16).Replace('T', ' ') } else { $rawPre }
         }
     }
+    if ($PreAviso -and $preLabel -eq 'sin PRE') { $preLabel = 'sin PRE  -> tomar PRE [3] antes de trabajar' }
     $rows += [PSCustomObject]@{ Label = 'PRE'; Value = $preLabel }
 
     [string] $vmLine = ''
@@ -483,15 +488,16 @@ function Show-MainMenu {
     $script:PctkBannerProfile = $MachineProfile
     [scriptblock] $renderHeader = {
         Clear-Host
-        Show-MachineBanner -MachineProfile $script:PctkBannerProfile
+        Show-MachineBanner -MachineProfile $script:PctkBannerProfile -PreAviso
 
         # Pieza B (recolector): evaluacion del estado del service al redibujar el menu.
         # Muestra UNA linea debajo del banner con el estado actual, sin bloquear el flujo.
+        # Sin state no hay linea: el aviso de tomar PRE va en la fila PRE del banner
+        # (-PreAviso, #72 paso 4), asi el menu en dos columnas entra a 120x30.
         if (Get-Command -Name 'Get-ServiceState' -CommandType Function -ErrorAction SilentlyContinue) {
             $pctkSvcState = Get-ServiceState
             if ($null -eq $pctkSvcState) {
-                # Sin state: recomendar tomar PRE antes de trabajar
-                Write-PctkWarn '  Sin PRE para esta PC. Recomendado: tomar PRE [3] antes de trabajar.'
+                # Sin state: nada (el aviso esta en el banner)
             } elseif (Get-Command -Name 'Test-ServiceStateStale' -CommandType Function -ErrorAction SilentlyContinue) {
                 if (Test-ServiceStateStale) {
                     # State de otra PC: cerrar el stale y avisar
