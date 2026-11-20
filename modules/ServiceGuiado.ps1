@@ -5,8 +5,9 @@
 # teclas que ya existen. Cero tweaks propios: cada paso es una entrada de
 # Get-ServiceGuiadoSpec (utils\ConsoleMenu.ps1) que invoca un handler existente.
 #
-# Sin auto-avance: cada paso corre solo por tecla, y al terminar se vuelve a la
-# lista con la marca '>' en el primer paso pendiente.
+# Sin auto-avance: cada paso corre solo por tecla; al terminar el operador dice
+# como quedo (hecho / salteado / no lo hice, #139) y se vuelve a la lista con la
+# marca '>' en el primer paso pendiente.
 #
 # DONDE VIVE EL ESTADO. El service no tiene carpeta propia: es
 # output\state\current-run.json (modules\ServiceState.ps1), que abre el PRE ([3]
@@ -134,16 +135,18 @@ function Resolve-ServiceGuiadoEstado {
 }
 
 function Set-ServiceGuiadoPaso {
-    # Marca un paso (hecho/salteado) y lo persiste si hay service abierto. Si el
-    # paso cerro el service (paso 10 / [L]), la lista vuelve a arrancar limpia.
-    param([Parameter(Mandatory)] [string] $Paso, [Parameter(Mandatory)] [string] $Valor, [object] $Antes)
+    # Marca un paso (hecho/salteado) y lo persiste si hay service abierto. Valor ''
+    # borra la marca (#139: re-correr un paso y contestar "no lo hice" lo deja
+    # pendiente). Si el paso cerro el service (paso 10 / [L]), la lista vuelve a
+    # arrancar limpia.
+    param([Parameter(Mandatory)] [string] $Paso, [Parameter(Mandatory)] [AllowEmptyString()] [string] $Valor, [object] $Antes)
     $svc = Get-ServiceGuiadoService
     if ($null -ne $Antes -and ($null -eq $svc -or [string]$svc.Id -ne [string]$Antes.Id)) {
         $script:PctkGuiadoMem = @{ Service = ''; Estado = @{} }
         return
     }
     [hashtable] $estado = Resolve-ServiceGuiadoEstado -Service $svc
-    $estado[$Paso] = $Valor
+    if ([string]::IsNullOrEmpty($Valor)) { $estado.Remove($Paso) } else { $estado[$Paso] = $Valor }
     if ($null -ne $svc) { Save-ServiceGuiadoFile -Service $svc -Estado $estado }
 }
 
@@ -209,8 +212,11 @@ function Invoke-ServiceGuiado {
     .DESCRIPTION
         Teclas: Enter corre el paso marcado; S lo saltea; un numero corre ese paso
         (aunque este hecho o salteado); B o X vuelven al menu principal.
-        Un paso que revienta queda auditado (Write-DispatchCrash, #52) y pendiente;
-        el guiado sigue.
+        Al terminar un paso el guiado pregunta como quedo (#139): [H] hecho,
+        [S] salteado, [N] o Enter no lo hice (queda pendiente; si tenia marca,
+        se borra). Volver de un handler sin excepcion no lo marca hecho solo.
+        Un paso que revienta queda auditado (Write-DispatchCrash, #52) y pendiente,
+        sin preguntar; el guiado sigue.
     .OUTPUTS
         [bool] $true si el paso 10 lanzo la desinstalacion y PCTk tiene que
         cerrarse (el menu principal devuelve 'U', igual que con [L]); si no, $false.
@@ -261,9 +267,29 @@ function Invoke-ServiceGuiado {
         if ($ok -and [string]$paso.Salida -eq 'TerminaSiTrue' -and $res.Count -gt 0 -and $res[$res.Count - 1] -is [bool] -and $res[$res.Count - 1]) {
             return $true
         }
-        if ($ok) { Set-ServiceGuiadoPaso -Paso ([string]$n) -Valor 'hecho' -Antes $svc }
-        Write-Host ''
-        Read-Host '  [Enter] para volver a la lista' | Out-Null
+        if (-not $ok) {
+            Write-Host ''
+            Read-Host '  [Enter] para volver a la lista' | Out-Null
+            continue
+        }
+        # #139: el estado lo dice el operador, no la ausencia de excepcion.
+        [string] $valor = Read-ServiceGuiadoResultado -Paso $n
+        Set-ServiceGuiadoPaso -Paso ([string]$n) -Valor $valor -Antes $svc
+    }
+}
+
+function Read-ServiceGuiadoResultado {
+    # #139: como quedo el paso que se acaba de correr. 'hecho' | 'salteado' | ''
+    # (no lo hice: queda pendiente). Enter sin nada = no lo hice; otra tecla repregunta.
+    param([int] $Paso)
+    Write-Host ''
+    Write-PctkHint ('  Como quedo el paso {0}?' -f $Paso)
+    while ($true) {
+        [string] $r = ([string](Read-Host '  [H] hecho   [S] salteado   [N] no lo hice (Enter = no lo hice)')).Trim().ToUpperInvariant()
+        if ($r -eq 'H') { return 'hecho' }
+        if ($r -eq 'S') { return 'salteado' }
+        if ($r -eq '' -or $r -eq 'N') { return '' }
+        Write-PctkWarn ('  Opcion invalida: {0}. Elegi H, S o N.' -f $r)
     }
 }
 
