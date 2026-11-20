@@ -2,6 +2,25 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.14.0] - 2026-11-20
+
+Release: **el `[1]` es el service guiado**. El `[1]` del menú principal deja de ser la receta automática y pasa a ser una lista paso a paso en el orden en que se trabaja en campo; cada paso corre cuando el técnico lo pide y queda marcado como hecho, salteado o pendiente. Los menús principal y `[A]` se dibujan en dos columnas y entran enteros en una consola de 30 filas.
+
+### Added
+
+- **Service guiado en el `[1]` (`modules/ServiceGuiado.ps1`)**: 10 pasos en el orden de campo (foto PRE, diagnóstico, paquete de herramientas, OOSU10, apps, inicio, receta rápida opcional, FPS, cierre) que llaman a las opciones que ya existían. Ningún paso avanza solo, todos se pueden saltear, y la lista marca el primer paso pendiente. El avance queda guardado junto al service abierto: si se cierra PCTk y se vuelve a abrir, la lista sigue donde quedó. La receta automática de antes es el paso de receta rápida.
+- **Cada paso queda con su estado real**: al volver de un paso, PCTk pregunta cómo quedó (`[H]` hecho, `[S]` salteado, `[N]` no lo hice) y `[N]` borra la marca. La foto PRE sale como hecha si ya se tomó, aunque haya sido desde el `[3]`.
+- **Paquete de campo (`data/paquete-campo.json`)**: las herramientas que el paso del paquete deja premarcadas en `[T]` (OOSU10, BCUninstaller, CrystalDiskInfo, HWiNFO64, WizTree, WinUtil).
+
+### Changed
+
+- **Menú principal y `[A]` en dos columnas (`utils/ConsoleMenu.ps1`)**: con la consola de 100 columnas o más, las opciones se reparten en dos columnas y los menús entran enteros a 120x30 sin paginar. Las flechas izquierda y derecha saltan de columna, y la aclaración de la opción resaltada se muestra arriba de la ayuda.
+- **El aviso "Sin PRE para esta PC" pasa al banner**, en la fila PRE.
+
+### Fixed
+
+- **La opción `[19]` de `[A]` entra entera en la columna derecha.**
+
 ## [2.13.0] - 2026-11-18
 
 Release: **Defender: medir qué rutas le cuestan y excluir sólo esas**. En `[A][19]`, la opción `[G]` graba la actividad de Defender, muestra las carpetas que más tiempo de escaneo consumen y ofrece excluir las que elijas, con confirmación y undo.
