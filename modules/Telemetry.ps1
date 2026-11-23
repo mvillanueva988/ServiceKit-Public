@@ -524,6 +524,363 @@ function Get-EnergyTuningState {
     }
 }
 
+# ─── Eventos del sistema (#98) ────────────────────────────────────────────────
+# Helpers internos (T-N1): DEBEN vivir en Telemetry.ps1 porque el runspace del job
+# de telemetria solo dot-sourcea este archivo (trampa #24). Lector ACOTADO: IDs y
+# proveedores fijos, ventana de 30 dias, tope por consulta y timeout por consulta.
+# Por categoria se guarda conteo + ultimo + mensaje recortado, NUNCA el log crudo
+# (una version vieja guardaba 7 dias de log: exceso de datos).
+
+function Get-UnexpectedShutdownEventId {
+    <#
+    .SYNOPSIS
+        IDs del System log que significan "se apago sin apagado limpio": 41 Kernel-Power
+        (reinicio sin apagado limpio: crash, corte de luz) y 6008 EventLog (apagado
+        inesperado detectado al volver a arrancar). Definicion UNICA: la usan
+        Get-BsodHistory ([6]) y el lector de eventos del snapshot.
+    #>
+    [CmdletBinding()]
+    [OutputType([int[]])]
+    param()
+    return [int[]] @(41, 6008)
+}
+
+function New-SystemEventRule {
+    param([string[]] $Providers = @(), [int[]] $Ids = @(), [int[]] $Levels = @())
+    return [PSCustomObject]@{ Providers = [string[]] $Providers; Ids = [int[]] $Ids; Levels = [int[]] $Levels }
+}
+
+function Get-SystemEventCategorySpec {
+    <#
+    .SYNOPSIS
+        Las categorias del lector: log, reglas (proveedor + ID + nivel; vacio = cualquiera)
+        y los textos tecnicos. El texto para el cliente NO vive aca: lo pone el [8].
+    #>
+    [CmdletBinding()]
+    param()
+
+    [object[]] $specs = @(
+        [PSCustomObject]@{
+            Key = 'Whea'; IsError = $true; LogName = 'System'; DataMatch = @()
+            Label  = 'Errores de hardware (WHEA)'
+            Source = 'System: Microsoft-Windows-WHEA-Logger 17/18/19'
+            Rules  = @(New-SystemEventRule -Providers @('Microsoft-Windows-WHEA-Logger') -Ids @(17, 18, 19))
+        }
+        [PSCustomObject]@{
+            # Proveedores del driver: solo nivel critico/error/advertencia. Un evento
+            # informativo de igfx en cada arranque no es un cuelgue.
+            Key = 'Video'; IsError = $true; LogName = 'System'; DataMatch = @()
+            Label  = 'Cuelgues del driver de video (TDR)'
+            Source = 'System: Display 4101 + nvlddmkm / amdkmdag / amdwddmg / igfx / igfxn (nivel 1-3)'
+            Rules  = @(
+                (New-SystemEventRule -Providers @('Display') -Ids @(4101))
+                (New-SystemEventRule -Providers @('nvlddmkm', 'amdkmdag', 'amdwddmg', 'igfx', 'igfxn') -Levels @(1, 2, 3))
+            )
+        }
+        [PSCustomObject]@{
+            # El filtro fino (nombre del evento y codigo) va por Properties, no por el
+            # texto del mensaje (que viene localizado): ver Test-LiveKernelGpuEvent.
+            Key = 'LiveKernel'; IsError = $true; LogName = 'Application'; DataMatch = @('LiveKernelEvent', '141|117')
+            Label  = 'LiveKernelEvent 141/117 (GPU colgada y recuperada)'
+            Source = 'Application: Windows Error Reporting 1001, LiveKernelEvent con codigo 141 o 117'
+            Rules  = @(New-SystemEventRule -Providers @('Windows Error Reporting') -Ids @(1001))
+        }
+        [PSCustomObject]@{
+            Key = 'Disk'; IsError = $true; LogName = 'System'; DataMatch = @()
+            Label  = 'Disco y sistema de archivos'
+            Source = 'System: disk 7/51/153, Ntfs 55/137/140, storahci/stornvme 129/11'
+            Rules  = @(
+                (New-SystemEventRule -Providers @('disk') -Ids @(7, 51, 153))
+                (New-SystemEventRule -Providers @('Ntfs', 'Microsoft-Windows-Ntfs') -Ids @(55, 137, 140))
+                (New-SystemEventRule -Providers @('storahci', 'stornvme') -Ids @(129, 11))
+            )
+        }
+        [PSCustomObject]@{
+            # Mismo filtro que Get-BsodHistory: IDs sin proveedor.
+            Key = 'ShutdownUnexpected'; IsError = $true; LogName = 'System'; DataMatch = @()
+            Label  = 'Apagados inesperados (Kernel-Power 41 / EventLog 6008)'
+            Source = 'System: 41 / 6008'
+            Rules  = @(New-SystemEventRule -Ids (Get-UnexpectedShutdownEventId))
+        }
+        [PSCustomObject]@{
+            Key = 'ShutdownRequested'; IsError = $false; LogName = 'System'; DataMatch = @()
+            Label  = 'Apagados / reinicios pedidos (User32 1074)'
+            Source = 'System: User32 1074'
+            Rules  = @(New-SystemEventRule -Providers @('User32') -Ids @(1074))
+        }
+        [PSCustomObject]@{
+            Key = 'AppCrash'; IsError = $true; LogName = 'Application'; DataMatch = @()
+            Label  = 'Programas que se cierran solos (Application Error 1000 / Application Hang 1002)'
+            Source = 'Application: Application Error 1000, Application Hang 1002'
+            Rules  = @(
+                (New-SystemEventRule -Providers @('Application Error') -Ids @(1000))
+                (New-SystemEventRule -Providers @('Application Hang') -Ids @(1002))
+            )
+        }
+    )
+    return $specs
+}
+
+function ConvertTo-SystemEventXPath {
+    <#
+    .SYNOPSIS
+        Arma el XPath de Get-WinEvent para una categoria. Se usa XPath y no
+        FilterHashtable porque ProviderName en el hashtable resuelve el proveedor
+        contra el registro: en una PC sin NVIDIA 'nvlddmkm' no existe y la consulta
+        entera falla. El XPath compara texto y da 0 eventos.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [object] $Spec, [Parameter(Mandatory)] [int] $Days)
+
+    [System.Collections.Generic.List[string]] $ruleParts = [System.Collections.Generic.List[string]]::new()
+    foreach ($r in @($Spec.Rules)) {
+        [System.Collections.Generic.List[string]] $conds = [System.Collections.Generic.List[string]]::new()
+        if (@($r.Providers).Count -gt 0) { $conds.Add('(' + ((@($r.Providers) | ForEach-Object { "Provider[@Name='$_']" }) -join ' or ') + ')') }
+        if (@($r.Ids).Count -gt 0)       { $conds.Add('(' + ((@($r.Ids)       | ForEach-Object { "EventID=$_" }) -join ' or ') + ')') }
+        if (@($r.Levels).Count -gt 0)    { $conds.Add('(' + ((@($r.Levels)    | ForEach-Object { "Level=$_" }) -join ' or ') + ')') }
+        if ($conds.Count -gt 0) { $ruleParts.Add('(' + ($conds -join ' and ') + ')') }
+    }
+    [long] $ms = [long] $Days * 86400000
+    [string] $sys = 'System[(' + ($ruleParts -join ' or ') + (') and TimeCreated[timediff(@SystemTime) <= {0}]]' -f $ms)
+    [string] $data = ''
+    # DataMatch: cada entrada es un EventData[...] (AND entre entradas); 'a|b' = OR
+    # entre valores. Va al XPath para que el tope de MaxEvents cuente lo que importa
+    # (en esta PC: 291 LiveKernelEvent 141 en 30 dias, mezclados con 1a8/1b8).
+    foreach ($dm in @($Spec.DataMatch)) {
+        if ([string]::IsNullOrWhiteSpace([string] $dm)) { continue }
+        $data += ' and EventData[' + ((([string] $dm).Split('|') | ForEach-Object { "Data='$_'" }) -join ' or ') + ']'
+    }
+    return ('*[{0}{1}]' -f $sys, $data)
+}
+
+function Test-SystemEventRule {
+    # Re-filtro en PowerShell con las MISMAS reglas del XPath: defensa ante un XPath
+    # que matchee de mas, y lo que hace contar bien a un Get-WinEvent sombreado.
+    param([Parameter(Mandatory)] [object] $Record, [Parameter(Mandatory)] [object[]] $Rules)
+    foreach ($r in $Rules) {
+        if (@($r.Providers).Count -gt 0 -and ([string] $Record.ProviderName) -notin @($r.Providers)) { continue }
+        if (@($r.Ids).Count -gt 0 -and [int] $Record.Id -notin @($r.Ids)) { continue }
+        if (@($r.Levels).Count -gt 0) {
+            if ($null -eq $Record.Level -or [int] $Record.Level -notin @($r.Levels)) { continue }
+        }
+        return $true
+    }
+    return $false
+}
+
+function Test-LiveKernelGpuEvent {
+    # WER 1001: Properties[2] = nombre del evento (dato, no se localiza) y
+    # Properties[5] = P1 (codigo en hex, sin 0x). 141 = VIDEO_ENGINE_TIMEOUT_DETECTED,
+    # 117 = VIDEO_TDR_TIMEOUT_DETECTED.
+    param([Parameter(Mandatory)] [object] $Record)
+    [object[]] $p = @()
+    try { $p = @($Record.Properties) } catch { return $false }
+    if ($p.Count -lt 6) { return $false }
+    if ([string] $p[2].Value -ne 'LiveKernelEvent') { return $false }
+    [string] $code = ([string] $p[5].Value).Trim().ToLowerInvariant() -replace '^0x', '' -replace '^0+(?=.)', ''
+    return ($code -in @('141', '117'))
+}
+
+function Get-GpuBrandFromDriverName {
+    param([string] $Name)
+    [string] $n = ([string] $Name).ToLowerInvariant()
+    if ($n -like 'nvlddmkm*') { return 'NVIDIA' }
+    if ($n -like 'amdkmdag*' -or $n -like 'amdwddmg*' -or $n -like 'atikm*') { return 'AMD' }
+    if ($n -like 'igfx*') { return 'Intel' }
+    return ''
+}
+
+function Get-SystemEventShortText {
+    <#
+    .SYNOPSIS
+        Mensaje del evento recortado a ~200 caracteres, en una linea. Si el mensaje no
+        se puede formatear (proveedor sin recursos), cae a los primeros datos.
+    #>
+    param([Parameter(Mandatory)] [object] $Record, [string] $Key = '', [int] $Max = 200)
+    [string] $text = ''
+    [object[]] $props = @()
+    try { $props = @($Record.Properties) } catch { $props = @() }
+    if ($Key -eq 'ShutdownRequested' -and $props.Count -ge 5) {
+        # 1074: [0] proceso, [2] motivo, [4] tipo. El motivo es lo que sirve.
+        $text = 'motivo: {0}; tipo: {1}; proceso: {2}' -f $props[2].Value, $props[4].Value, $props[0].Value
+    } else {
+        try { $text = [string] $Record.Message } catch { $text = '' }
+        if ([string]::IsNullOrWhiteSpace($text) -and $props.Count -gt 0) {
+            $text = (@($props | Select-Object -First 6 | ForEach-Object { [string] $_.Value }) -join ' | ')
+        }
+    }
+    $text = ($text -replace '\s+', ' ').Trim()
+    if ($text.Length -gt $Max) { $text = $text.Substring(0, $Max) + '...' }
+    return $text
+}
+
+function Invoke-SystemEventQuery {
+    <#
+    .SYNOPSIS
+        Una consulta a Get-WinEvent con tope y timeout. Devuelve @{ Events; Error; Raw }.
+        "No events were found" = 0 eventos, NO es error (Get-WinEvent lo tira con
+        -ErrorAction Stop). Un fallo real queda en Error para no disfrazarlo de "0".
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $LogName,
+        [Parameter(Mandatory)] [string] $XPath,
+        [int] $MaxEvents = 200,
+        [int] $TimeoutSeconds = 8
+    )
+
+    # Autocontenido (T-N3): corre en el runspace de Invoke-WithTimeout.
+    [scriptblock] $query = {
+        param([string] $Log, [string] $Xp, [int] $Max)
+        try {
+            Get-WinEvent -LogName $Log -FilterXPath $Xp -MaxEvents $Max -ErrorAction Stop
+        } catch {
+            # FullyQualifiedErrorId no se localiza; el texto en ingles cubre el caso sin id.
+            [string] $fq  = [string] $_.FullyQualifiedErrorId
+            [string] $msg = [string] $_.Exception.Message
+            if ($fq -notlike 'NoMatchingEventsFound*' -and $msg -notmatch 'No events were found') {
+                [PSCustomObject]@{ PctkEventQueryError = $msg }
+            }
+        }
+    }
+
+    [object[]] $out = @()
+    [string] $err = ''
+    if (Get-Command -Name 'Get-WinEvent' -CommandType Function -ErrorAction SilentlyContinue) {
+        # Get-WinEvent sombreada (tests): el runspace aparte no la veria. Mismo
+        # scriptblock, en este scope. En produccion Get-WinEvent es siempre el cmdlet.
+        # .Invoke() y no "& $query": la red de tests/job-closure.ps1 trata "& $var"
+        # como despacho dinamico y deja de resolver el job de telemetria entero.
+        try { $out = @($query.Invoke($LogName, $XPath, $MaxEvents)) } catch { $err = $_.Exception.Message }
+    } else {
+        [object] $envl = Invoke-WithTimeout -TimeoutSeconds $TimeoutSeconds -Default $null `
+            -ScriptBlock $query -ArgumentList @($LogName, $XPath, $MaxEvents)
+        if ($envl.TimedOut) {
+            $err = 'timeout ({0} s)' -f $TimeoutSeconds
+        } elseif (-not $envl.Ok) {
+            $err = 'la consulta fallo'
+        } else {
+            $out = @($envl.Value)
+        }
+    }
+
+    [System.Collections.Generic.List[object]] $events = [System.Collections.Generic.List[object]]::new()
+    foreach ($o in $out) {
+        if ($null -eq $o) { continue }
+        if ($null -ne $o.PSObject.Properties['PctkEventQueryError']) { $err = [string] $o.PctkEventQueryError; continue }
+        $events.Add($o)
+    }
+    return [PSCustomObject]@{ Events = $events.ToArray(); Error = $err; Raw = $events.Count }
+}
+
+function Get-SystemEventSummary {
+    <#
+    .SYNOPSIS
+        Resumen ACOTADO de los logs System/Application: por categoria, conteo + ultimo +
+        mensaje del ultimo recortado (+ marca de GPU o top 3 de programas). Nunca tira.
+    #>
+    [CmdletBinding()]
+    param(
+        [int] $Days = 30,
+        [int] $MaxEvents = 200,
+        [int] $TimeoutSeconds = 8
+    )
+
+    [System.Diagnostics.Stopwatch] $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    [datetime] $since = (Get-Date).AddDays(-$Days)
+    [System.Collections.Generic.List[object]] $cats = [System.Collections.Generic.List[object]]::new()
+    [System.Collections.Generic.List[string]] $errors = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($spec in @(Get-SystemEventCategorySpec)) {
+        [string] $catErr = ''
+        [int] $raw = 0
+        [System.Collections.Generic.List[object]] $matched = [System.Collections.Generic.List[object]]::new()
+        try {
+            [string] $xp = ConvertTo-SystemEventXPath -Spec $spec -Days $Days
+            [object] $q = Invoke-SystemEventQuery -LogName $spec.LogName -XPath $xp -MaxEvents $MaxEvents -TimeoutSeconds $TimeoutSeconds
+            $catErr = [string] $q.Error
+            $raw = [int] $q.Raw
+            foreach ($ev in @($q.Events)) {
+                if ($null -eq $ev) { continue }
+                if ($null -eq $ev.TimeCreated -or [datetime] $ev.TimeCreated -lt $since) { continue }
+                if (-not (Test-SystemEventRule -Record $ev -Rules @($spec.Rules))) { continue }
+                if ($spec.Key -eq 'LiveKernel' -and -not (Test-LiveKernelGpuEvent -Record $ev)) { continue }
+                $matched.Add($ev)
+            }
+        } catch {
+            $catErr = $_.Exception.Message
+        }
+        if (-not [string]::IsNullOrEmpty($catErr)) { $errors.Add(('{0}: {1}' -f $spec.Key, $catErr)) }
+
+        [object[]] $sorted = @($matched | Sort-Object -Property TimeCreated -Descending)
+        [string] $lastTime = ''; [int] $lastId = 0; [string] $lastProv = ''; [string] $lastMsg = ''
+        if ($sorted.Count -gt 0) {
+            $lastTime = ([datetime] $sorted[0].TimeCreated).ToString('yyyy-MM-dd HH:mm')
+            $lastId   = [int] $sorted[0].Id
+            $lastProv = [string] $sorted[0].ProviderName
+            $lastMsg  = Get-SystemEventShortText -Record $sorted[0] -Key $spec.Key
+        }
+
+        [string[]] $brands = @()
+        if ($spec.Key -eq 'Video') {
+            [System.Collections.Generic.HashSet[string]] $bset = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($ev in $sorted) {
+                [string] $drv = [string] $ev.ProviderName
+                if ($drv -eq 'Display') {
+                    # 4101: Properties[0] = nombre del driver que se colgo.
+                    try { $drv = [string] @($ev.Properties)[0].Value } catch { $drv = '' }
+                }
+                [string] $b = Get-GpuBrandFromDriverName -Name $drv
+                if ($b) { $null = $bset.Add($b) }
+            }
+            $brands = @($bset | Sort-Object)
+        }
+
+        [object[]] $topApps = @()
+        if ($spec.Key -eq 'AppCrash' -and $sorted.Count -gt 0) {
+            [hashtable] $byApp = @{}
+            foreach ($ev in $sorted) {
+                [string] $app = ''
+                try { $app = [string] @($ev.Properties)[0].Value } catch { $app = '' }
+                if ([string]::IsNullOrWhiteSpace($app)) { $app = '(desconocido)' }
+                $app = $app.Trim()
+                if ($byApp.ContainsKey($app)) { $byApp[$app]++ } else { $byApp[$app] = 1 }
+            }
+            $topApps = @($byApp.GetEnumerator() |
+                Sort-Object -Property @{ Expression = { $_.Value }; Descending = $true }, @{ Expression = { $_.Key } } |
+                Select-Object -First 3 |
+                ForEach-Object { [PSCustomObject]@{ Name = [string] $_.Key; Count = [int] $_.Value } })
+        }
+
+        $cats.Add([PSCustomObject]@{
+            Key          = [string] $spec.Key
+            Label        = [string] $spec.Label
+            Source       = [string] $spec.Source
+            IsError      = [bool]   $spec.IsError
+            Count        = [int]    $matched.Count
+            Capped       = [bool]   ($raw -ge $MaxEvents)
+            LastTime     = $lastTime
+            LastId       = $lastId
+            LastProvider = $lastProv
+            LastMessage  = $lastMsg
+            Brands       = [string[]] $brands
+            TopApps      = [object[]] $topApps
+            Error        = $catErr
+        })
+    }
+
+    $sw.Stop()
+    return [PSCustomObject]@{
+        WindowDays        = [int] $Days
+        MaxEventsPerQuery = [int] $MaxEvents
+        Since             = $since.ToString('yyyy-MM-dd')
+        Categories        = $cats.ToArray()
+        Errors            = [string[]] $errors.ToArray()
+        ElapsedMs         = [int] $sw.ElapsedMilliseconds
+    }
+}
+
 # ─── Get-SystemSnapshot ───────────────────────────────────────────────────────
 function Get-SystemSnapshot {
     <#
@@ -1137,6 +1494,12 @@ function Get-SystemSnapshot {
     try { $energy = Get-EnergyTuningState } catch { $energy = $null }
     $qt['energy'] = [int] $sw.ElapsedMilliseconds
 
+    # ── Eventos del sistema (#98): resumen acotado de 30 dias, falla a $null ──
+    $sw.Restart()
+    $events = $null
+    try { $events = Get-SystemEventSummary } catch { $events = $null }
+    $qt['events'] = [int] $sw.ElapsedMilliseconds
+
     # ── Retorno garantizado (§3c: partial-snapshot invariant) ─────────────────
     # T-N2: shape invariante — NUNCA renombrar ni remover campos existentes.
     # Campos nuevos agregados al final.
@@ -1181,6 +1544,8 @@ function Get-SystemSnapshot {
         QueryTimings      = [hashtable] $qt
         # ── #78: energia / MMAgent / SysMain (al final: shape invariante) ─────
         Energy            = $energy
+        # ── #98: eventos del sistema (conteos por categoria, nunca el log crudo) ─
+        Events            = $events
     }
 }
 

@@ -221,6 +221,30 @@ function New-RawAuditReport {
         }
     }
 
+    # ── System events (#98) ───────────────────────────────────────────────────
+    # Detalle tecnico del resumen de eventos del snapshot. Un snapshot anterior a
+    # #98 no trae Events: se lee por PSObject.Properties (StrictMode).
+    [object] $evProp = $Snapshot.PSObject.Properties['Events']
+    if ($null -ne $evProp -and $null -ne $evProp.Value -and $null -ne $evProp.Value.PSObject.Properties['Categories']) {
+        [object] $evs = $evProp.Value
+        [string] $evDays = if ($null -ne $evs.PSObject.Properties['WindowDays']) { [string] $evs.WindowDays } else { '30' }
+        _Section ('SYSTEM EVENTS (last {0} days)' -f $evDays)
+        foreach ($c in @($evs.Categories)) {
+            if ($null -eq $c) { continue }
+            [string] $capMark = if ($null -ne $c.PSObject.Properties['Capped'] -and [bool] $c.Capped) { '+' } else { '' }
+            [string] $lastT   = if (-not [string]::IsNullOrEmpty([string] $c.LastTime)) { [string] $c.LastTime } else { '-' }
+            [string] $lastSrc = if ([int] $c.Count -gt 0) { ('  id={0}  provider={1}' -f $c.LastId, $c.LastProvider) } else { '' }
+            $lines.Add(('  [{0}] {1}  count={2}{3}  last={4}{5}' -f $c.Key, $c.Label, $c.Count, $capMark, $lastT, $lastSrc))
+            $lines.Add(('      source: {0}' -f $c.Source))
+            if (-not [string]::IsNullOrWhiteSpace([string] $c.LastMessage)) { $lines.Add(('      msg: {0}' -f $c.LastMessage)) }
+            [string[]] $brands = @(@($c.Brands) | Where-Object { -not [string]::IsNullOrWhiteSpace([string] $_) })
+            if ($brands.Count -gt 0) { $lines.Add(('      brands: {0}' -f ($brands -join ', '))) }
+            [string[]] $apps = @(@($c.TopApps) | Where-Object { $null -ne $_ } | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Count })
+            if ($apps.Count -gt 0) { $lines.Add(('      top apps: {0}' -f ($apps -join ', '))) }
+            if (-not [string]::IsNullOrWhiteSpace([string] $c.Error)) { $lines.Add(('      READ ERROR: {0}' -f $c.Error)) }
+        }
+    }
+
     # ── Footer ────────────────────────────────────────────────────────────────
     $lines.Add('')
     $lines.Add('--- end of report ---')

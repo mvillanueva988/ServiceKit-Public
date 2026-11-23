@@ -183,8 +183,17 @@ Test-SmokeFunction 'Eventos' '#98 handler [8]: seccion en llano, sin jerga (WHEA
     if ($html -notmatch 'Errores registrados') { throw 'el [8] no tiene la seccion de errores registrados' }
     if ($html -notmatch 'Cuelgues del driver de video: 3 en 30 d') { throw 'el [8] no dice "Cuelgues del driver de video: 3 en 30 dias"' }
     if ($html -notmatch 'Apagados inesperados[^<]*: 2 en 30 d') { throw 'el [8] no dice los apagados inesperados (2)' }
-    foreach ($jerga in @('WHEA', 'nvlddmkm', '4101', 'LiveKernel', 'amdkmdag', 'Kernel-Power', '6008')) {
+    foreach ($jerga in @('WHEA', 'nvlddmkm', '4101', 'LiveKernel', 'amdkmdag', 'Kernel-Power', '6008',
+                         'Microsoft-Windows', 'Windows Error Reporting', 'Application Error', 'Application Hang', 'User32', 'EventLog', 'Ntfs')) {
         if ($html -match [regex]::Escape($jerga)) { throw ('el [8] (para el cliente) muestra jerga: {0}' -f $jerga) }
+    }
+    # Un ID suelto (13, 18, 1001...) no lo caza la lista de arriba. En cada renglon,
+    # sacando "N en 30 dias" y "(el ultimo, dd/MM)", no puede quedar ningun numero.
+    [object[]] $lis = @([regex]::Matches($html, '<li>([^<]*)</li>') | ForEach-Object { $_.Groups[1].Value })
+    if ($lis.Count -lt 6) { throw ('el [8] tiene {0} renglones de errores; esperaba 6 (todas las categorias de error de la fixture)' -f $lis.Count) }
+    foreach ($li in $lis) {
+        [string] $rest = $li -replace ': \d+( o m.s)? en \d+ d.as', '' -replace '\(el .ltimo, \d\d/\d\d\)', ''
+        if ($rest -match '\d') { throw ('el [8] muestra un numero tecnico en: {0}' -f $li) }
     }
     if ($html -match 'Sin errores graves') { throw 'con errores el [8] dice "sin errores graves"' }
 }
@@ -274,4 +283,15 @@ Test-SmokeFunction 'Eventos' '#98 Compare-Snapshot: la clave Events no cambia el
     } finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+Test-SmokeFunction 'Eventos' '#98 Start-BsodHistoryJob en un job REAL: el filtro compartido 41/6008 viaja con Get-BsodHistory (sin CommandNotFound)' {
+    $ErrorActionPreference = 'Stop'
+    $j = Start-BsodHistoryJob -Days 1
+    try {
+        if (-not (Wait-Job $j -Timeout 120)) { throw 'el job de BSOD no termino en 120 s' }
+        $d = Receive-Job $j -ErrorAction Stop
+    } finally { Remove-Job $j -Force -ErrorAction SilentlyContinue }
+    if ($null -eq $d) { throw 'el job de BSOD no devolvio resultado' }
+    if ($null -eq $d.PSObject.Properties['DaysScanned'] -or [int] $d.DaysScanned -ne 1) { throw 'el job de BSOD devolvio otra cosa' }
 }
