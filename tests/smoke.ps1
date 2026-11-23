@@ -9482,6 +9482,9 @@ Test-SmokeFunction 'Stamp' 'MedicionFps Get-FpsBatches: lotes con dir viejo (yyy
     } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# ─── #98: lector de eventos del sistema (tests en tests/eventos.ps1) ──────────
+. (Join-Path $PSScriptRoot 'eventos.ps1')
+
 # ─── Reporte ──────────────────────────────────────────────────────────────────
 Write-Host ''
 Write-Host '────────────────────────────────────────────────────────────────────'
