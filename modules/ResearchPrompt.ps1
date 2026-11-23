@@ -354,6 +354,32 @@ function New-ResearchPrompt {
     # El LLM puede pedir contexto adicional si la pregunta lo requiere.
     $L.Add('')
 
+    # Eventos del sistema (#98): una linea por categoria con > 0. Snapshot viejo sin
+    # Events, o todo en 0: no se agrega nada.
+    $evProp = $Snapshot.PSObject.Properties['Events']
+    if ($null -ne $evProp -and $null -ne $evProp.Value -and $null -ne $evProp.Value.PSObject.Properties['Categories']) {
+        [System.Collections.Generic.List[string]] $evLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($c in @($evProp.Value.Categories)) {
+            if ($null -eq $c -or [int] (_Rp_Prop $c 'Count' 0) -le 0) { continue }
+            [string] $cap  = if ([bool] (_Rp_Prop $c 'Capped' $false)) { '+' } else { '' }
+            [string] $line = '- {0}: {1}{2} (último {3}; id {4} de {5})' -f (_Rp_Prop $c 'Label' '?'), $c.Count, $cap,
+                (_Rp_Prop $c 'LastTime' '?'), (_Rp_Prop $c 'LastId' '?'), (_Rp_Prop $c 'LastProvider' '?')
+            [string[]] $brands = @(@(_Rp_Prop $c 'Brands' @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string] $_) })
+            if ($brands.Count -gt 0) { $line += ('; marca: {0}' -f ($brands -join ', ')) }
+            [string[]] $apps = @(@(_Rp_Prop $c 'TopApps' @()) | Where-Object { $null -ne $_ } | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Count })
+            if ($apps.Count -gt 0) { $line += ('; top: {0}' -f ($apps -join ', ')) }
+            $evLines.Add($line)
+        }
+        if ($evLines.Count -gt 0) {
+            [string] $evDays = [string] (_Rp_Prop $evProp.Value 'WindowDays' 30)
+            $L.Add(('## Eventos del sistema (últimos {0} días)' -f $evDays))
+            # OJO: no usar $l como variable del foreach: PowerShell no distingue
+            # mayusculas y pisaria $L (la lista del prompt).
+            foreach ($evLine in $evLines) { $L.Add($evLine) }
+            $L.Add('')
+        }
+    }
+
     # Steam / CS2
     $steamProp = $Snapshot.PSObject.Properties['Steam']
     if ($null -ne $steamProp -and $null -ne $steamProp.Value) {

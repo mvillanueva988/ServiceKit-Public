@@ -44,6 +44,75 @@ function _CR_DeltaRow {
     _CR_H '        </tr>'
 }
 
+# ─── Errores registrados (#98): el resumen de eventos del snapshot, en llano ───
+# El cliente lee esto: nada de WHEA, IDs ni nombres de driver. Los textos tecnicos
+# (Label/Source/LastProvider) quedan para el [I]. Una categoria que no esta en este
+# mapa NO se muestra (los apagados pedidos con 1074 no son un error).
+function Get-ClientReportEventPlainLabel {
+    param([string] $Key)
+    [hashtable] $map = @{
+        Whea               = 'Errores de hardware detectados por Windows'
+        Video              = 'Cuelgues del driver de video'
+        LiveKernel         = 'Bloqueos de la placa de video que Windows tuvo que recuperar'
+        Disk               = 'Errores del disco o del sistema de archivos'
+        ShutdownUnexpected = 'Apagados inesperados (corte de luz, cuelgue o botón de encendido)'
+        AppCrash           = 'Programas que se cerraron o colgaron solos'
+    }
+    if ($map.ContainsKey($Key)) { return [string] $map[$Key] }
+    return ''
+}
+
+function Get-ClientReportEventLines {
+    <#
+    .SYNOPSIS
+        Las lineas en llano de la seccion "Errores registrados" a partir del bloque
+        Events de un snapshot. Devuelve $null si el bloque no existe (snapshot viejo):
+        en ese caso la seccion no se dibuja.
+    #>
+    param([object] $Events)
+    if ($null -eq $Events -or $null -eq $Events.PSObject.Properties['Categories']) { return $null }
+
+    [int] $days = 30
+    if ($null -ne $Events.PSObject.Properties['WindowDays'] -and [int] $Events.WindowDays -gt 0) { $days = [int] $Events.WindowDays }
+
+    [System.Collections.Generic.List[string]] $lines  = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]] $unread = [System.Collections.Generic.List[string]]::new()
+    foreach ($cat in @($Events.Categories)) {
+        if ($null -eq $cat -or $null -eq $cat.PSObject.Properties['Key']) { continue }
+        [string] $plain = Get-ClientReportEventPlainLabel -Key ([string] $cat.Key)
+        if ([string]::IsNullOrEmpty($plain)) { continue }
+        if ($null -ne $cat.PSObject.Properties['Error'] -and -not [string]::IsNullOrWhiteSpace([string] $cat.Error)) {
+            $unread.Add($plain)
+            continue
+        }
+        [int] $n = 0
+        if ($null -ne $cat.PSObject.Properties['Count']) { $n = [int] $cat.Count }
+        if ($n -le 0) { continue }
+
+        [string] $cnt = [string] $n
+        if ($null -ne $cat.PSObject.Properties['Capped'] -and [bool] $cat.Capped) { $cnt = '{0} o más' -f $n }
+        [string] $line = '{0}: {1} en {2} días' -f $plain, $cnt, $days
+
+        [datetime] $lastDt = [datetime]::MinValue
+        if ($null -ne $cat.PSObject.Properties['LastTime'] -and
+            [datetime]::TryParseExact([string] $cat.LastTime, 'yyyy-MM-dd HH:mm', [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::None, [ref] $lastDt)) {
+            $line += ' (el último, {0})' -f $lastDt.ToString('dd/MM')
+        }
+        if ($null -ne $cat.PSObject.Properties['Brands']) {
+            [string[]] $brands = @(@($cat.Brands) | Where-Object { -not [string]::IsNullOrWhiteSpace([string] $_) })
+            if ($brands.Count -gt 0) { $line += ' - placa {0}' -f ($brands -join ' / ') }
+        }
+        if ($null -ne $cat.PSObject.Properties['TopApps']) {
+            [string[]] $apps = @(@($cat.TopApps) | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties['Name'] } | ForEach-Object { [string] $_.Name })
+            if ($apps.Count -gt 0) { $line += ' - los que más: {0}' -f ($apps -join ', ') }
+        }
+        $lines.Add($line)
+    }
+
+    return [PSCustomObject]@{ Days = $days; Lines = $lines.ToArray(); Unread = $unread.ToArray() }
+}
+
 # ─── New-ClientReport ─────────────────────────────────────────────────────────
 function New-ClientReport {
     <#
@@ -489,6 +558,25 @@ function New-ClientReport {
             _CR_H '      <table class="info-table">'
             _CR_Row 'Plan activo' $planStr
             _CR_H '      </table>'
+        }
+
+        # ── Errores registrados (#98) ─────────────────────────────────────────
+        # Snapshot anterior a #98 (sin Events): la seccion no se dibuja.
+        [object] $evObj = $PostSnapshot.PSObject.Properties['Events']
+        [object] $evInfo = $null
+        if ($null -ne $evObj) { $evInfo = Get-ClientReportEventLines -Events $evObj.Value }
+        if ($null -ne $evInfo) {
+            _CR_H ('      <div class="sub-title">Errores registrados (últimos {0} días)</div>' -f $evInfo.Days)
+            if (@($evInfo.Lines).Count -gt 0) {
+                _CR_H '      <ul>'
+                foreach ($evLine in @($evInfo.Lines)) { _CR_H ('        <li>{0}</li>' -f (_CR_Esc $evLine)) }
+                _CR_H '      </ul>'
+            } elseif (@($evInfo.Unread).Count -eq 0) {
+                _CR_H ('      <p>Sin errores graves registrados en los últimos {0} días.</p>' -f $evInfo.Days)
+            }
+            if (@($evInfo.Unread).Count -gt 0) {
+                _CR_H ('      <p class="soft-note">No se pudo revisar: {0}.</p>' -f (_CR_Esc ((@($evInfo.Unread) -join ', ').ToLowerInvariant())))
+            }
         }
 
         _CR_H '    </div>'

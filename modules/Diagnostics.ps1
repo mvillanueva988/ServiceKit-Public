@@ -23,6 +23,9 @@ function Get-BsodHistory {
     # 41   Kernel-Power     : reinicio sin apagado limpio (crash, corte de luz)
     # 1001 BugCheck         : BSOD confirmado (Stop Code presente)
     # 6008 EventLog         : apagado inesperado detectado al volver a arrancar
+    # 41/6008 salen de Get-UnexpectedShutdownEventId (Telemetry.ps1): misma definicion
+    # que el lector de eventos del snapshot (#98).
+    [int[]] $unexpectedIds = Get-UnexpectedShutdownEventId
 
     [System.Collections.Generic.List[PSCustomObject]] $events = `
         [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -34,7 +37,7 @@ function Get-BsodHistory {
     try {
         $raw = Get-WinEvent -FilterHashtable @{
             LogName   = 'System'
-            Id        = @(41, 1001, 6008)
+            Id        = @(@(1001) + $unexpectedIds)
             StartTime = $since
         } -ErrorAction SilentlyContinue
 
@@ -107,7 +110,7 @@ function Get-BsodHistory {
     # "11 BSOD" cuando eran 1 BSOD + 5 apagones. Son problemas DISTINTOS: uno apunta
     # a driver/RAM, el otro a la instalacion electrica o a la fuente.
     [int] $bsodCount  = @($sortedEvents | Where-Object { $_.EventId -eq 1001 }).Count
-    [int] $powerCount = @($sortedEvents | Where-Object { $_.EventId -eq 41 -or $_.EventId -eq 6008 }).Count
+    [int] $powerCount = @($sortedEvents | Where-Object { $_.EventId -in $unexpectedIds }).Count
 
     return [PSCustomObject]@{
         DaysScanned  = $Days
@@ -284,9 +287,15 @@ function Start-BsodHistoryJob {
     )
 
     [string]  $fnBody   = ${Function:Get-BsodHistory}.ToString()
+    # #98: Get-BsodHistory llama a Get-UnexpectedShutdownEventId (Telemetry.ps1):
+    # el job es un runspace fresco, se embebe tambien (cierre transitivo completo).
+    [string]  $idsBody  = ${Function:Get-UnexpectedShutdownEventId}.ToString()
     [int]     $daysVal  = $Days
 
     [scriptblock] $jobBlock = [scriptblock]::Create(@"
+function Get-UnexpectedShutdownEventId {
+$idsBody
+}
 function Get-BsodHistory {
 $fnBody
 }
