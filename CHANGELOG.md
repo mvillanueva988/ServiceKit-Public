@@ -2,6 +2,20 @@
 
 Registro de cambios de PCTk. Formato: Keep a Changelog + SemVer.
 
+## [2.15.0] - 2026-11-23
+
+Release: **PCTk lee los eventos de Windows**. El snapshot junta un resumen de los errores que Windows registró en los últimos 30 días (hardware, placa de video, disco, apagados, programas que se cierran solos) y lo muestra en el reporte para el cliente, en el informe técnico y en el prompt de research.
+
+### Added
+
+- **Resumen de eventos del sistema en el snapshot (`modules/Telemetry.ps1`)**: siete categorías leídas de los registros System y Application: errores de hardware (WHEA), cuelgues del driver de video de cualquier marca, bloqueos de la placa de video que Windows tuvo que recuperar (LiveKernelEvent 141/117), errores del disco y del sistema de archivos, apagados inesperados, apagados y reinicios pedidos, y programas que se cierran o se cuelgan solos. Por categoría guarda cuántos hubo, cuándo fue el último, el mensaje recortado, la marca de la placa de video y los tres programas que más se cierran; nunca el registro completo. Cada consulta tiene tope de eventos y de tiempo, y un registro que no se pudo leer queda dicho, no aparece como cero.
+- **Errores registrados en el `[8]`**: el reporte para el cliente suma la sección "Errores registrados (últimos 30 días)", en lenguaje llano, sin códigos ni nombres de driver. Si no hay errores, lo dice en una línea. Con un snapshot de una versión anterior, la sección no aparece.
+- **Eventos en el `[I]` y en el `[R]`**: el informe técnico trae el detalle por categoría (ID, proveedor, último mensaje, programas) y el prompt de research suma una línea por cada categoría con eventos.
+
+### Changed
+
+- **Los apagados inesperados se cuentan igual en todos lados**: el historial del `[6]` y el snapshot usan la misma definición (eventos 41 y 6008).
+
 ## [2.14.0] - 2026-11-20
 
 Release: **el `[1]` es el service guiado**. El `[1]` del menú principal deja de ser la receta automática y pasa a ser una lista paso a paso en el orden en que se trabaja en campo; cada paso corre cuando el técnico lo pide y queda marcado como hecho, salteado o pendiente. Los menús principal y `[A]` se dibujan en dos columnas y entran enteros en una consola de 30 filas.
